@@ -3,6 +3,17 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
+// 禁用GPU加速，解决GPU进程崩溃问题
+app.disableHardwareAcceleration()
+
+// 禁用沙箱，解决沙箱初始化失败问题
+app.commandLine.appendSwitch('no-sandbox')
+app.commandLine.appendSwitch('disable-gpu-sandbox')
+
+// 禁用缓存，解决缓存创建失败问题
+app.commandLine.appendSwitch('disable-disk-cache')
+app.commandLine.appendSwitch('disable-gpu-cache')
+
 function createWindow(): void {
   // Create the browser window.
   const mainWindow = new BrowserWindow({

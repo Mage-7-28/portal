@@ -1,0 +1,11 @@
+/* 自定义字体定义 */
+@font-face {
+  font-family: 'AlimamaDongFangDaKai';
+  src:
+    url('../assets/font/AlimamaDongFangDaKai/Alimama_DongFangDaKai_Regular.woff2') format('woff2'),
+    url('../assets/font/AlimamaDongFangDaKai/Alimama_DongFangDaKai_Regular.woff') format('woff'),
+    url('../assets/font/AlimamaDongFangDaKai/Alimama_DongFangDaKai_Regular.ttf') format('truetype'),
+    url('../assets/font/AlimamaDongFangDaKai/Alimama_DongFangDaKai_Regular.otf') format('opentype');
+  font-weight: normal;
+  font-style: normal;
+}
