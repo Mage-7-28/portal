@@ -15,3 +15,5 @@ out
 *.local
 
 package-lock.json
+license-report.json
+license-report-full.json

@@ -21,13 +21,25 @@
     "build:linux": "electron-vite build && electron-builder --linux"
   },
   "dependencies": {
+    "@ant-design/happy-work-theme": "^2.0.0",
+    "@ant-design/icons": "^6.1.0",
     "@electron-toolkit/preload": "^3.0.2",
-    "@electron-toolkit/utils": "^4.0.0"
+    "@electron-toolkit/utils": "^4.0.0",
+    "antd": "^6.2.1",
+    "dayjs": "^1.11.19",
+    "decimal.js": "^10.6.0",
+    "file-saver": "^2.0.5",
+    "highlight.js": "^11.11.1",
+    "lodash-es": "^4.17.22",
+    "prop-types": "^15.8.1",
+    "react-hot-toast": "^2.6.0",
+    "valtio": "^2.3.0"
   },
   "devDependencies": {
     "@electron-toolkit/eslint-config-prettier": "^3.0.0",
     "@electron-toolkit/eslint-config-ts": "^3.1.0",
     "@electron-toolkit/tsconfig": "^2.0.0",
+    "@types/file-saver": "^2.0.7",
     "@types/node": "^22.18.6",
     "@types/react": "^19.1.13",
     "@types/react-dom": "^19.1.9",
@@ -39,9 +51,12 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^5.2.0",
     "eslint-plugin-react-refresh": "^0.4.20",
+    "less": "^4.5.1",
+    "less-loader": "^12.3.0",
     "prettier": "^3.6.2",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sass": "^1.97.2",
     "typescript": "^5.9.2",
     "vite": "^7.1.6"
   }
