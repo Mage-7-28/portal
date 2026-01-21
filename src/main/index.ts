@@ -196,13 +196,14 @@ app.whenReady().then(() => {
   ipcMain.on('ping', () => console.log('pong'))
 
   // 读取文件目录的IPC方法
-  ipcMain.handle('read-directory', async (_, path: string) => {
+  ipcMain.on('read-directory', async (_, path: string) => {
     try {
       console.log('path:', path);
       const files = readdirSync(path)
       console.log('files:', files);
       const fileInfos = files.map((file) => {
         const filePath = join(path, file)
+        console.log('filePath:', filePath)
         const stats = statSync(filePath)
         return {
           name: file,
