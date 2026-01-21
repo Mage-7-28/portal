@@ -207,10 +207,69 @@ function App(): React.JSX.Element {
 
               {/* 主内容区域 */}
               <Panel>
-                {/* 本机文件传输面板 */}
-                <Portal />
-                {/* 目标服务器文件传输面板 */}
-                <Portal />
+                <Group orientation="horizontal" style={{ height: '100%', width: '100%' }}>
+                  {/* 左边：本机文件传输面板 */}
+                  <Panel defaultSize={50} minSize={20} maxSize={80}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: '100%',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div
+                        style={{
+                          borderBottom: '1px solid #1E1E1E',
+                          height: 30,
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0 10px',
+                          backgroundColor: '#2B2D30'
+                        }}
+                      >
+                        本机文件
+                      </div>
+                      <div style={{ flex: 1, overflow: 'auto' }}>
+                        <Portal type="local" />
+                      </div>
+                    </div>
+                  </Panel>
+                  <Separator
+                    style={{
+                      width: '1px',
+                      backgroundColor: '#1E1E1E',
+                      cursor: 'col-resize'
+                    }}
+                  />
+                  {/* 右边：服务器文件传输面板 */}
+                  <Panel defaultSize={50} minSize={20} maxSize={80}>
+                    <div
+                      style={{
+                        height: '100%',
+                        width: '100%',
+                        display: 'flex',
+                        flexDirection: 'column'
+                      }}
+                    >
+                      <div
+                        style={{
+                          borderBottom: '1px solid #1E1E1E',
+                          height: 30,
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0 10px',
+                          backgroundColor: '#2B2D30'
+                        }}
+                      >
+                        服务器文件
+                      </div>
+                      <div style={{ flex: 1, overflow: 'auto' }}>
+                        <Portal type="server" />
+                      </div>
+                    </div>
+                  </Panel>
+                </Group>
               </Panel>
             </Group>
           </Content>
