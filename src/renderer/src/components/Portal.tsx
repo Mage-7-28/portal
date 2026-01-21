@@ -1,17 +1,17 @@
 import { ReactElement, useEffect, useState } from 'react'
-import { Tree } from 'antd'
-import { FileOutlined, FolderOutlined } from '@ant-design/icons'
+import { List, Typography } from 'antd'
+import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 
 interface PortalProps {
   type: 'local' | 'server'
 }
 
-interface FileItem {
-  key: string
-  title: string
-  isLeaf?: boolean
-  children?: FileItem[]
+interface FileInfo {
+  name: string
   path: string
+  isDirectory: boolean
+  size: number
+  mtime: number
 }
 
 /**
@@ -19,103 +19,129 @@ interface FileItem {
  * @return {ReactElement}
  */
 const Portal = ({ type }: PortalProps): ReactElement => {
-  const [fileTree, setFileTree] = useState<FileItem[]>([])
+  const [currentPath, setCurrentPath] = useState<string>('/')
+  const [files, setFiles] = useState<FileInfo[]>([])
+  const [loading, setLoading] = useState<boolean>(false)
 
-  // 模拟获取本机文件列表
-  const fetchLocalFiles = async (): Promise<void> => {
+  // 获取当前目录的上一级目录
+  const getParentPath = (path: string): string => {
+    if (path === '/') return '/'
+    return '/'
+  }
+
+  // 读取当前目录的文件
+  const readDirectory = async (path: string): Promise<void> => {
+    setLoading(true)
     try {
-      // 这里应该调用electron的ipcRenderer来获取本机文件
-      // 暂时模拟数据
-      const mockFiles: FileItem[] = [
-        {
-          key: '/',
-          title: '/',
-          path: '/',
-          children: [
-            {
-              key: '/Users',
-              title: 'Users',
-              path: '/Users',
-              children: [
-                {
-                  key: '/Users/cherry',
-                  title: 'cherry',
-                  path: '/Users/cherry',
-                  children: [
-                    {
-                      key: '/Users/cherry/Documents',
-                      title: 'Documents',
-                      path: '/Users/cherry/Documents',
-                      isLeaf: false
-                    },
-                    {
-                      key: '/Users/cherry/Desktop',
-                      title: 'Desktop',
-                      path: '/Users/cherry/Desktop',
-                      isLeaf: false
-                    },
-                    {
-                      key: '/Users/cherry/Downloads',
-                      title: 'Downloads',
-                      path: '/Users/cherry/Downloads',
-                      isLeaf: false
-                    },
-                    {
-                      key: '/Users/cherry/test.txt',
-                      title: 'test.txt',
-                      path: '/Users/cherry/test.txt',
-                      isLeaf: true
-                    }
-                  ]
-                }
-              ]
-            },
-            {
-              key: '/Applications',
-              title: 'Applications',
-              path: '/Applications',
-              isLeaf: false
-            },
-            {
-              key: '/System',
-              title: 'System',
-              path: '/System',
-              isLeaf: false
-            }
-          ]
-        }
-      ]
-      setFileTree(mockFiles)
+      const result = await window.api.readDirectory(path)
+      if (result.success && result.data) {
+        setFiles(result.data)
+        setCurrentPath(path)
+      } else {
+        console.error('读取目录失败:', result.error)
+      }
     } catch (error) {
-      console.error('获取文件列表失败:', error)
+      console.error('读取目录失败:', error)
+    } finally {
+      setLoading(false)
     }
   }
 
+  // 返回上一级目录
+  const goToParentDirectory = (): void => {
+    const parentPath = getParentPath(currentPath)
+    readDirectory(parentPath)
+  }
+
+  // 进入子目录
+  const goToChildDirectory = (file: FileInfo): void => {
+    if (file.isDirectory) {
+      readDirectory(file.path)
+    }
+  }
+
+  // 双击事件处理
+  const handleDoubleClick = (file: FileInfo): void => {
+    if (file.name === '..') {
+      goToParentDirectory()
+    } else {
+      goToChildDirectory(file)
+    }
+  }
+
+  // 初始加载
   useEffect(() => {
     if (type === 'local') {
-      fetchLocalFiles()
+      // 只在组件挂载或类型变化时初始化，使用固定的初始路径
+      readDirectory('/')
     }
   }, [type])
 
-  const renderTreeNodes = (data: FileItem[]): React.ReactNode => {
-    return data.map((item) => {
-      return (
-        <Tree.TreeNode
-          title={item.title}
-          key={item.key}
-          icon={item.isLeaf ? <FileOutlined /> : <FolderOutlined />}
-        >
-          {item.children && item.children.length > 0 ? renderTreeNodes(item.children) : null}
-        </Tree.TreeNode>
-      )
-    })
-  }
+  // 准备文件列表数据
+  const fileList = [
+    {
+      name: '..',
+      path: getParentPath(currentPath),
+      isDirectory: true,
+      size: 0,
+      mtime: Date.now()
+    },
+    ...files
+  ]
 
   return (
-    <div style={{ height: '100%', width: '100%' }}>
-      <Tree defaultExpandAll showLine style={{ height: '100%', overflow: 'auto' }}>
-        {renderTreeNodes(fileTree)}
-      </Tree>
+    <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* 当前路径显示 */}
+      <div
+        style={{
+          padding: '8px 16px',
+          backgroundColor: '#2B2D30',
+          borderBottom: '1px solid #1E1E1E',
+          fontSize: '12px'
+        }}
+      >
+        {currentPath}
+      </div>
+
+      {/* 文件列表 */}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        <List
+          loading={loading}
+          dataSource={fileList}
+          renderItem={(file) => (
+            <List.Item
+              key={file.path}
+              onClick={() => goToChildDirectory(file)}
+              onDoubleClick={() => handleDoubleClick(file)}
+              style={{
+                cursor: file.isDirectory ? 'pointer' : 'default',
+                padding: '8px 16px',
+                borderBottom: '1px solid #1E1E1E'
+              }}
+            >
+              <List.Item.Meta
+                avatar={file.isDirectory ? <FolderOpenOutlined /> : <FileOutlined />}
+                title={
+                  <Typography.Text style={{ color: file.isDirectory ? '#4E9CEF' : '#DFE1E5' }}>
+                    {file.name}
+                  </Typography.Text>
+                }
+                description={
+                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
+                    <span style={{ fontSize: '12px', color: '#888' }}>
+                      {file.isDirectory ? '文件夹' : `${(file.size / 1024).toFixed(2)} KB`}
+                    </span>
+                    <span style={{ fontSize: '12px', color: '#888' }}>
+                      {new Date(file.mtime).toLocaleString()}
+                    </span>
+                  </div>
+                }
+              />
+            </List.Item>
+          )}
+          style={{ height: '100%' }}
+        />
+      </div>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import { join } from 'path'
-import { existsSync, mkdirSync } from 'fs'
+import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
@@ -82,6 +82,7 @@ function createWindow(): void {
   // Load the remote URL for development or the local html file for production.
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL'])
+    mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
   }
@@ -193,6 +194,37 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  // 读取文件目录的IPC方法
+  ipcMain.handle('read-directory', async (_, path: string) => {
+    try {
+      console.log('path:', path);
+      const files = readdirSync(path)
+      console.log('files:', files);
+      const fileInfos = files.map((file) => {
+        const filePath = join(path, file)
+        const stats = statSync(filePath)
+        return {
+          name: file,
+          path: filePath,
+          isDirectory: stats.isDirectory(),
+          size: stats.size,
+          mtime: stats.mtimeMs
+        }
+      })
+      return {
+        success: true,
+        data: fileInfos,
+        currentPath: path
+      }
+    } catch (error) {
+      console.error('读取目录失败:', error)
+      return {
+        success: false,
+        error: (error as Error).message
+      }
+    }
+  })
 
   createWindow()
 
