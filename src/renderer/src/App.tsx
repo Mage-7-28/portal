@@ -9,12 +9,16 @@ import { HddFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import routes from './router/routes'
 import { useNavigate, useRoutes } from 'react-router-dom'
+import { Group, Panel, Separator } from 'react-resizable-panels'
+import { useStore, store } from './store/store'
 
 function App(): React.JSX.Element {
   const navigate = useNavigate()
   const elements = useRoutes(routes)
   const [current, setCurrent] = useState('/home')
   const [showMask, setShowMask] = useState(false)
+  // 使用store中的状态
+  const storeState = useStore()
 
   useEffect(() => {
     navigate(current)
@@ -78,7 +82,11 @@ function App(): React.JSX.Element {
                   danger={current === '/home'}
                   icon={<HddFilled />}
                   type={'primary'}
-                  onClick={() => setCurrent('/home')}
+                  onClick={() => {
+                    setCurrent('/home')
+                    // 点击服务器按钮时，切换红色div的显示/隐藏状态
+                    store.layout.showPanel = !storeState.layout.showPanel
+                  }}
                 />
               </Tooltip>
             </div>
@@ -89,12 +97,47 @@ function App(): React.JSX.Element {
               background: 'rgb(30, 31, 34)',
               maxHeight: '100vh',
               height: '100vh',
-              overflow: 'auto',
-              display: 'flex',
-              justifyContent: 'center'
+              overflow: 'auto'
             }}
           >
-            {elements}
+            <Group
+              orientation="horizontal"
+              style={{ height: '100%', width: '100%' }}
+              // 面板布局变化时更新store中的宽度
+              onLayoutChanged={(layout) => {
+                // 获取红色面板的宽度
+                const panelWidth = layout[Object.keys(layout)[0]] || 200
+                store.layout.panelWidth = panelWidth
+              }}
+            >
+              {/* 如果显示红色div，则添加可调整大小的面板和调整手柄 */}
+              {storeState.layout.showPanel && (
+                <>
+                  <Panel defaultSize={storeState.layout.panelWidth} minSize={200} maxSize={400}>
+                    <div
+                      style={{
+                        backgroundColor: 'red',
+                        height: '100%',
+                        width: '100%',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: 'white',
+                        fontSize: '24px'
+                      }}
+                    >
+                      12
+                    </div>
+                  </Panel>
+                  <Separator
+                    style={{ width: '5px', backgroundColor: '#444', cursor: 'col-resize' }}
+                  />
+                </>
+              )}
+
+              {/* 主内容区域 */}
+              <Panel>{elements}</Panel>
+            </Group>
           </Content>
         </Layout>
         {showMask && <div className="mask"></div>}
