@@ -37,29 +37,43 @@ function createWindow(): void {
 
   // 添加窗口关闭事件监听
   mainWindow.on('close', (e) => {
-    // 阻止默认关闭行为
-    e.preventDefault()
+    try {
+      // 阻止默认关闭行为
+      e.preventDefault()
 
-    // 显示确认弹窗
-    dialog
-      .showMessageBox({
-        type: 'question',
-        buttons: ['关闭', '取消'],
-        title: '确认关闭',
-        message: '确定要关闭应用程序吗？',
-        defaultId: 1, // 默认选中取消按钮
-        cancelId: 1 // 取消按钮的索引
-      })
-      .then((result) => {
-        // 如果用户选择关闭（按钮索引0），则关闭窗口并退出应用
-        if (result.response === 0) {
-          // 关闭当前窗口
+      // 显示确认弹窗
+      dialog
+        .showMessageBox(mainWindow, {
+          type: 'question',
+          buttons: ['关闭', '取消'],
+          title: '确认关闭',
+          message: '确定要关闭应用程序吗？',
+          icon: icon,
+          defaultId: 1, // 默认选中取消按钮
+          cancelId: 1 // 取消按钮的索引
+        })
+        .then((result) => {
+          // 如果用户选择关闭（按钮索引0），则关闭窗口并退出应用
+          if (result.response === 0) {
+            // 关闭当前窗口
+            mainWindow.destroy()
+            // 退出应用
+            app.quit()
+          }
+          // 否则，保持窗口打开
+        })
+        .catch((error) => {
+          console.error('关闭确认对话框错误:', error)
+          // 如果对话框出错，直接退出应用
           mainWindow.destroy()
-          // 退出应用
           app.quit()
-        }
-        // 否则，保持窗口打开
-      })
+        })
+    } catch (error) {
+      console.error('窗口关闭事件处理错误:', error)
+      // 如果发生错误，直接退出应用
+      mainWindow.destroy()
+      app.quit()
+    }
   })
 
   // HMR for renderer base on electron-vite cli.
