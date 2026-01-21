@@ -5,7 +5,7 @@ import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
-import { HddFilled } from '@ant-design/icons'
+import { HddFilled, PlusCircleOutlined } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import routes from './router/routes'
 import { useNavigate, useRoutes } from 'react-router-dom'
@@ -56,7 +56,6 @@ function App(): React.JSX.Element {
         componentSize={'middle'}
       >
         <Layout>
-
           <Sider
             width={38}
             className={'hide-scrollbar'}
@@ -120,15 +119,45 @@ function App(): React.JSX.Element {
                       style={{
                         backgroundColor: '#2B2D30',
                         height: '100%',
-                        width: '100%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: 'white',
-                        fontSize: '24px'
+                        width: '100%'
                       }}
                     >
-                      12
+                      <div
+                        style={{
+                          borderBottom: '1px solid #1E1E1E',
+                          height: 30,
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0 10px'
+                        }}
+                      >
+                        标题
+                      </div>
+                      <div
+                        className={'hide-scrollbar'}
+                        style={{
+                          height: 30,
+                          whiteSpace: 'nowrap',
+                          overflow: 'auto',
+                          borderBottom: '1px solid #1E1E1E',
+                          display: 'flex',
+                          alignItems: 'center',
+                          padding: '0 10px',
+                          gap: 3
+                        }}
+                      >
+                        <div><PlusCircleOutlined /></div>
+                        <div><PlusCircleOutlined /></div>
+                      </div>
+                      <div
+                        style={{
+                          height: 'calc(100% - 30px)',
+                          padding: 10,
+                          overflow: 'auto'
+                        }}
+                      >
+                        内容
+                      </div>
                     </div>
                   </Panel>
                   <Separator
