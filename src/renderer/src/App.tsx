@@ -13,6 +13,14 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore, store } from './store/store'
 import './app.css'
 
+// 定义服务器连接表单的值类型
+interface ServerConnectionValues {
+  host: string
+  username: string
+  password: string
+  port: number
+}
+
 function App(): React.JSX.Element {
   const navigate = useNavigate()
   const elements = useRoutes(routes)
@@ -24,7 +32,7 @@ function App(): React.JSX.Element {
   // 新建服务器链接模态框状态
   const [isModalVisible, setIsModalVisible] = useState(false)
   // 表单实例
-  const [form] = Form.useForm()
+  const [form] = Form.useForm<ServerConnectionValues>()
 
   useEffect(() => {
     navigate(current)
@@ -39,18 +47,18 @@ function App(): React.JSX.Element {
   }, [])
 
   // 显示新建服务器链接模态框
-  const showModal = () => {
+  const showModal = (): void => {
     setIsModalVisible(true)
   }
 
   // 关闭新建服务器链接模态框
-  const handleCancel = () => {
+  const handleCancel = (): void => {
     setIsModalVisible(false)
     form.resetFields()
   }
 
   // 提交新建服务器链接表单
-  const handleSubmit = (values: any) => {
+  const handleSubmit = (values: ServerConnectionValues): void => {
     console.log('提交服务器连接信息:', values)
     // 这里可以添加连接服务器的逻辑
     setIsModalVisible(false)
