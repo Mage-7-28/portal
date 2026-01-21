@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -60,6 +60,33 @@ function createWindow(): void {
   mainWindow.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
     return { action: 'deny' }
+  })
+
+  // 添加窗口关闭事件监听
+  mainWindow.on('close', (e) => {
+    // 阻止默认关闭行为
+    e.preventDefault()
+
+    // 显示确认弹窗
+    dialog
+      .showMessageBox({
+        type: 'question',
+        buttons: ['关闭', '取消'],
+        title: '确认关闭',
+        message: '确定要关闭应用程序吗？',
+        defaultId: 1, // 默认选中取消按钮
+        cancelId: 1 // 取消按钮的索引
+      })
+      .then((result) => {
+        // 如果用户选择关闭（按钮索引0），则关闭窗口并退出应用
+        if (result.response === 0) {
+          // 关闭当前窗口
+          mainWindow.destroy()
+          // 退出应用
+          app.quit()
+        }
+        // 否则，保持窗口打开
+      })
   })
 
   // HMR for renderer base on electron-vite cli.
