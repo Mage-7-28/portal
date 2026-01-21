@@ -7,11 +7,11 @@ import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
 import { HddFilled, PlusCircleFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
-import routes from './router/routes'
-import { useNavigate, useRoutes } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore, store } from './store/store'
 import './app.css'
+import Portal from '@renderer/components/Portal'
 
 // 定义服务器连接表单的值类型
 interface ServerConnectionValues {
@@ -23,7 +23,6 @@ interface ServerConnectionValues {
 
 function App(): React.JSX.Element {
   const navigate = useNavigate()
-  const elements = useRoutes(routes)
   const [current, setCurrent] = useState('/home')
   const [showMask, setShowMask] = useState(false)
   // 使用store中的状态
@@ -187,7 +186,7 @@ function App(): React.JSX.Element {
                       </div>
                       <div
                         style={{
-                          height: 'calc(100% - 30px)',
+                          height: 'calc(100% - 60px)',
                           padding: 10,
                           overflow: 'auto'
                         }}
@@ -207,7 +206,12 @@ function App(): React.JSX.Element {
               )}
 
               {/* 主内容区域 */}
-              <Panel>{elements}</Panel>
+              <Panel>
+                {/* 本机文件传输面板 */}
+                <Portal />
+                {/* 目标服务器文件传输面板 */}
+                <Portal />
+              </Panel>
             </Group>
           </Content>
         </Layout>
