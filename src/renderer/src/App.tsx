@@ -143,6 +143,7 @@ function App(): React.JSX.Element {
                           borderBottom: '1px solid #1E1E1E',
                           display: 'flex',
                           alignItems: 'center',
+                          padding: '0 5px',
                           gap: 3
                         }}
                       >
