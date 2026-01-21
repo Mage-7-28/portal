@@ -3,7 +3,7 @@ import { electronAPI } from '@electron-toolkit/preload'
 
 // Custom APIs for renderer
 const api = {
-  readDirectory: (path: string) => ipcRenderer.send('read-directory', path)
+  readDirectory: (path: string) => ipcRenderer.invoke('read-directory', path)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to
