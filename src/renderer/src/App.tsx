@@ -1,5 +1,5 @@
 import zhCN from 'antd/locale/zh_CN'
-import { Button, ConfigProvider, Layout, theme, Tooltip } from 'antd'
+import { Button, ConfigProvider, Form, Input, Layout, Modal, theme, Tooltip } from 'antd'
 import { GlobalFontFamily, PubSubTopic } from './util/GlobalEnum'
 import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
@@ -21,6 +21,11 @@ function App(): React.JSX.Element {
   // 使用store中的状态
   const storeState = useStore()
 
+  // 新建服务器链接模态框状态
+  const [isModalVisible, setIsModalVisible] = useState(false)
+  // 表单实例
+  const [form] = Form.useForm()
+
   useEffect(() => {
     navigate(current)
   }, [current, navigate])
@@ -32,6 +37,25 @@ function App(): React.JSX.Element {
       PubSub.unsubscribe(mask)
     }
   }, [])
+
+  // 显示新建服务器链接模态框
+  const showModal = () => {
+    setIsModalVisible(true)
+  }
+
+  // 关闭新建服务器链接模态框
+  const handleCancel = () => {
+    setIsModalVisible(false)
+    form.resetFields()
+  }
+
+  // 提交新建服务器链接表单
+  const handleSubmit = (values: any) => {
+    console.log('提交服务器连接信息:', values)
+    // 这里可以添加连接服务器的逻辑
+    setIsModalVisible(false)
+    form.resetFields()
+  }
 
   return (
     <>
@@ -148,7 +172,7 @@ function App(): React.JSX.Element {
                         }}
                       >
                         <Tooltip placement="bottom" title={'新建服务器链接'}>
-                          <div className="panel-button">
+                          <div className="panel-button" onClick={showModal}>
                             <PlusCircleFilled />
                           </div>
                         </Tooltip>
@@ -181,6 +205,55 @@ function App(): React.JSX.Element {
         </Layout>
         {showMask && <div className="mask"></div>}
         <Toaster />
+
+        {/* 新建服务器链接模态框 */}
+        <Modal
+          title="新建服务器链接"
+          open={isModalVisible}
+          width={350}
+          onCancel={handleCancel}
+          footer={null}
+        >
+          <Form form={form} layout="vertical" onFinish={handleSubmit}>
+            <Form.Item
+              name="host"
+              label="服务器IP"
+              rules={[{ required: true, message: '请输入服务器IP' }]}
+            >
+              <Input placeholder="请输入服务器IP" />
+            </Form.Item>
+            <Form.Item
+              name="username"
+              label="用户名"
+              rules={[{ required: true, message: '请输入用户名' }]}
+            >
+              <Input placeholder="请输入用户名" />
+            </Form.Item>
+            <Form.Item
+              name="password"
+              label="密码"
+              rules={[{ required: true, message: '请输入密码' }]}
+            >
+              <Input.Password placeholder="请输入密码" />
+            </Form.Item>
+            <Form.Item
+              name="port"
+              label="端口"
+              initialValue={22}
+              rules={[{ required: true, message: '请输入端口' }]}
+            >
+              <Input placeholder="请输入端口" />
+            </Form.Item>
+            <Form.Item style={{ textAlign: 'right' }}>
+              <Button onClick={handleCancel} style={{ marginRight: 8 }}>
+                取消
+              </Button>
+              <Button type="primary" htmlType="submit">
+                连接
+              </Button>
+            </Form.Item>
+          </Form>
+        </Modal>
       </ConfigProvider>
     </>
   )
