@@ -5,12 +5,13 @@ import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
-import { HddFilled, PlusCircleOutlined } from '@ant-design/icons'
+import { HddFilled, PlusCircleFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import routes from './router/routes'
 import { useNavigate, useRoutes } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore, store } from './store/store'
+import './app.css'
 
 function App(): React.JSX.Element {
   const navigate = useNavigate()
@@ -131,7 +132,7 @@ function App(): React.JSX.Element {
                           padding: '0 10px'
                         }}
                       >
-                        标题
+                        服务器
                       </div>
                       <div
                         className={'hide-scrollbar'}
@@ -142,12 +143,14 @@ function App(): React.JSX.Element {
                           borderBottom: '1px solid #1E1E1E',
                           display: 'flex',
                           alignItems: 'center',
-                          padding: '0 10px',
                           gap: 3
                         }}
                       >
-                        <div><PlusCircleOutlined /></div>
-                        <div><PlusCircleOutlined /></div>
+                        <Tooltip placement="bottom" title={'新建服务器链接'}>
+                          <div className="panel-button">
+                            <PlusCircleFilled />
+                          </div>
+                        </Tooltip>
                       </div>
                       <div
                         style={{
