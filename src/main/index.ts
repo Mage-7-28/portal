@@ -11,6 +11,7 @@ if (!existsSync(userDataDir)) {
   mkdirSync(userDataDir, { recursive: true })
 }
 app.setPath('userData', userDataDir)
+app.setName('传送门')
 
 function createWindow(): void {
   // Create the browser window.

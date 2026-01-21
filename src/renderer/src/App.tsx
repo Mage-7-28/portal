@@ -5,7 +5,7 @@ import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
-import { HomeOutlined } from '@ant-design/icons'
+import { HddFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import routes from './router/routes'
 import { useNavigate, useRoutes } from 'react-router-dom'
@@ -72,11 +72,11 @@ function App(): React.JSX.Element {
                 justifyContent: 'center'
               }}
             >
-              <Tooltip placement="right" title={'首页'}>
+              <Tooltip placement="right" title={'服务器'}>
                 <Button
                   style={{ marginBottom: 5 }}
                   danger={current === '/home'}
-                  icon={<HomeOutlined />}
+                  icon={<HddFilled />}
                   type={'primary'}
                   onClick={() => setCurrent('/home')}
                 />
