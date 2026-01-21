@@ -1,18 +1,43 @@
 import { app, shell, BrowserWindow, ipcMain } from 'electron'
 import { join } from 'path'
+import { existsSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
-// 禁用GPU加速，解决GPU进程崩溃问题
-app.disableHardwareAcceleration()
+// 设置自定义应用数据目录
+const appDataDir = join(__dirname, '../appData')
+if (!existsSync(appDataDir)) {
+  mkdirSync(appDataDir, { recursive: true })
+}
+app.setPath('appData', appDataDir)
 
-// 禁用沙箱，解决沙箱初始化失败问题
-app.commandLine.appendSwitch('no-sandbox')
-app.commandLine.appendSwitch('disable-gpu-sandbox')
+// 设置自定义用户数据目录
+const userDataDir = join(__dirname, '../userData')
+if (!existsSync(userDataDir)) {
+  mkdirSync(userDataDir, { recursive: true })
+}
+app.setPath('userData', userDataDir)
 
-// 禁用缓存，解决缓存创建失败问题
-app.commandLine.appendSwitch('disable-disk-cache')
-app.commandLine.appendSwitch('disable-gpu-cache')
+// 设置自定义日志目录
+const logsDir = join(__dirname, '../logs')
+if (!existsSync(logsDir)) {
+  mkdirSync(logsDir, { recursive: true })
+}
+app.setPath('logs', logsDir)
+
+// 设置自定义临时文件目录
+const tempDir = join(__dirname, '../temp')
+if (!existsSync(tempDir)) {
+  mkdirSync(tempDir, { recursive: true })
+}
+app.setPath('temp', tempDir)
+
+// 设置自定义缓存目录
+const cacheDir = join(__dirname, '../cache')
+if (!existsSync(cacheDir)) {
+  mkdirSync(cacheDir, { recursive: true })
+}
+app.setPath('cache', cacheDir)
 
 function createWindow(): void {
   // Create the browser window.
