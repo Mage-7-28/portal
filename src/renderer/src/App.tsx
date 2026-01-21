@@ -56,6 +56,7 @@ function App(): React.JSX.Element {
         componentSize={'middle'}
       >
         <Layout>
+
           <Sider
             width={38}
             className={'hide-scrollbar'}
@@ -63,7 +64,8 @@ function App(): React.JSX.Element {
               overflow: 'visible',
               background: 'rgb(43, 45, 48)',
               maxHeight: '100vh',
-              height: '100vh'
+              height: '100vh',
+              borderRight: '1px solid #1E1E1E'
             }}
           >
             <div
@@ -116,7 +118,7 @@ function App(): React.JSX.Element {
                   <Panel defaultSize={storeState.layout.panelWidth} minSize={200} maxSize={400}>
                     <div
                       style={{
-                        backgroundColor: 'red',
+                        backgroundColor: '#2B2D30',
                         height: '100%',
                         width: '100%',
                         display: 'flex',
@@ -130,7 +132,11 @@ function App(): React.JSX.Element {
                     </div>
                   </Panel>
                   <Separator
-                    style={{ width: '5px', backgroundColor: '#444', cursor: 'col-resize' }}
+                    style={{
+                      width: '1px',
+                      backgroundColor: 'transparent',
+                      cursor: 'col-resize'
+                    }}
                   />
                 </>
               )}
