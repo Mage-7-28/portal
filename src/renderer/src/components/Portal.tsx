@@ -34,6 +34,7 @@ const Portal = ({ type }: PortalProps): ReactElement => {
     setLoading(true)
     try {
       const result = await window.api.readDirectory(path)
+      console.log('读取目录结果:', result)
       if (result.success && result.data) {
         setFiles(result.data)
         setCurrentPath(path)
