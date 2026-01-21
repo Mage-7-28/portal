@@ -18,6 +18,7 @@ function createWindow(): void {
     width: 900,
     height: 670,
     show: false,
+    title: '传送门',
     autoHideMenuBar: true,
     ...(process.platform === 'linux' ? { icon } : {}),
     webPreferences: {
@@ -90,27 +91,27 @@ function createWindow(): void {
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(() => {
   // Set app user model id for windows
-  electronApp.setAppUserModelId('com.electron')
+  electronApp.setAppUserModelId('com.portal')
+
+  // 设置macOS系统信息
+  if (process.platform === 'darwin') {
+    // 设置应用关于面板选项
+    app.setAboutPanelOptions({
+      applicationName: '传送门',
+      applicationVersion: app.getVersion(),
+      credits: '电脑和服务器之间传输文件的传送门',
+      iconPath: icon
+    })
+  }
 
   // 创建菜单模板
   const menuTemplate: Electron.MenuItemConstructorOptions[] = [
     {
-      label: app.name,
+      label: '文件'
+    },
+    {
+      label: '传送门',
       submenu: [
-        {
-          label: '关于',
-          click: () => {
-            dialog.showMessageBox({
-              title: '关于 ' + app.name,
-              message: '版本 ' + app.getVersion(),
-              detail: '电脑和服务器之间传输文件的工具',
-              icon: icon,
-              buttons: ['确定']
-            })
-          },
-          role: 'about'
-        },
-        { type: 'separator' },
         {
           label: '退出',
           accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
@@ -157,25 +158,20 @@ app.whenReady().then(() => {
       ]
     },
     {
-      label: '窗口',
+      label: '更多',
       submenu: [
         {
-          label: '最小化',
-          accelerator: process.platform === 'darwin' ? 'Cmd+M' : 'Ctrl+M',
-          role: 'minimize'
-        },
-        {
-          label: '关闭',
-          accelerator: process.platform === 'darwin' ? 'Cmd+W' : 'Ctrl+W',
-          role: 'close'
-        },
-        { type: 'separator' },
-        {
-          label: '重新打开窗口',
-          accelerator: process.platform === 'darwin' ? 'Cmd+Shift+W' : 'Ctrl+Shift+W',
+          label: '关于',
           click: () => {
-            createWindow()
-          }
+            dialog.showMessageBox({
+              title: '关于 传送门',
+              message: '传送门',
+              detail: '版本 ' + app.getVersion() + '\n电脑和服务器之间传输文件的工具',
+              icon: icon,
+              buttons: ['确定']
+            })
+          },
+          role: 'about'
         }
       ]
     }
