@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
 import { join } from 'path'
 import { existsSync, mkdirSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -77,6 +77,101 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
+
+  // 创建菜单模板
+  const menuTemplate: Electron.MenuItemConstructorOptions[] = [
+    {
+      label: app.name,
+      submenu: [
+        {
+          label: '关于',
+          click: () => {
+            dialog.showMessageBox({
+              title: '关于 ' + app.name,
+              message: '版本 ' + app.getVersion(),
+              detail: '电脑和服务器之间传输文件的工具',
+              icon: icon,
+              buttons: ['确定']
+            })
+          },
+          role: 'about'
+        },
+        { type: 'separator' },
+        {
+          label: '退出',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Q' : 'Ctrl+Q',
+          click: () => {
+            app.quit()
+          }
+        }
+      ]
+    },
+    {
+      label: '编辑',
+      submenu: [
+        {
+          label: '撤销',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Z' : 'Ctrl+Z',
+          role: 'undo'
+        },
+        {
+          label: '重做',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Shift+Z' : 'Ctrl+Shift+Z',
+          role: 'redo'
+        },
+        { type: 'separator' },
+        {
+          label: '剪切',
+          accelerator: process.platform === 'darwin' ? 'Cmd+X' : 'Ctrl+X',
+          role: 'cut'
+        },
+        {
+          label: '复制',
+          accelerator: process.platform === 'darwin' ? 'Cmd+C' : 'Ctrl+C',
+          role: 'copy'
+        },
+        {
+          label: '粘贴',
+          accelerator: process.platform === 'darwin' ? 'Cmd+V' : 'Ctrl+V',
+          role: 'paste'
+        },
+        {
+          label: '全选',
+          accelerator: process.platform === 'darwin' ? 'Cmd+A' : 'Ctrl+A',
+          role: 'selectAll'
+        }
+      ]
+    },
+    {
+      label: '窗口',
+      submenu: [
+        {
+          label: '最小化',
+          accelerator: process.platform === 'darwin' ? 'Cmd+M' : 'Ctrl+M',
+          role: 'minimize'
+        },
+        {
+          label: '关闭',
+          accelerator: process.platform === 'darwin' ? 'Cmd+W' : 'Ctrl+W',
+          role: 'close'
+        },
+        { type: 'separator' },
+        {
+          label: '重新打开窗口',
+          accelerator: process.platform === 'darwin' ? 'Cmd+Shift+W' : 'Ctrl+Shift+W',
+          click: () => {
+            createWindow()
+          }
+        }
+      ]
+    }
+  ]
+
+  // 构建菜单
+  const menu = Menu.buildFromTemplate(menuTemplate)
+
+  // 设置应用菜单
+  Menu.setApplicationMenu(menu)
 
   // Default open or close DevTools by F12 in development
   // and ignore CommandOrControl + R in production.
