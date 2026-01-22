@@ -100,11 +100,12 @@ const Portal = ({ type }: PortalProps): ReactElement => {
 
   // 初始加载
   useEffect(() => {
+    console.log(type)
     if (type === 'local') {
       // 只在组件挂载或类型变化时初始化，使用固定的初始路径
       readDirectory('/')
     }
-  }, [type])
+  }, [])
 
   // 准备文件列表数据
   const fileList = [
