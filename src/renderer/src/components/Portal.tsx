@@ -1,4 +1,4 @@
-import { ReactElement, useEffect, useState } from 'react'
+import { ReactElement, useEffect, useState, useCallback, useRef } from 'react'
 import { List, Typography } from 'antd'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 
@@ -22,9 +22,11 @@ const Portal = ({ type }: PortalProps): ReactElement => {
   const [currentPath, setCurrentPath] = useState<string>('/')
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState<boolean>(false)
+  // 跟踪组件是否已经初始化
+  const initializedRef = useRef(false)
 
   // 获取当前目录的上一级目录
-  const getParentPath = (path: string): string => {
+  const getParentPath = useCallback((path: string): string => {
     // 处理Windows根目录，如 C:\ 或 C:/
     if (/^[a-zA-Z]:[/\\]?$/.test(path)) {
       return path
@@ -55,10 +57,10 @@ const Portal = ({ type }: PortalProps): ReactElement => {
     // 如果原路径包含\，则返回带有\的路径
     // 否则返回带有/的路径
     return path.includes('\\') ? parentPath.replace(/\//g, '\\') : parentPath
-  }
+  }, [])
 
   // 读取当前目录的文件
-  const readDirectory = async (path: string): Promise<void> => {
+  const readDirectory = useCallback(async (path: string): Promise<void> => {
     setLoading(true)
     try {
       const result = await window.api.readDirectory(path)
@@ -74,38 +76,45 @@ const Portal = ({ type }: PortalProps): ReactElement => {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   // 返回上一级目录
-  const goToParentDirectory = (): void => {
+  const goToParentDirectory = useCallback((): void => {
     const parentPath = getParentPath(currentPath)
     readDirectory(parentPath)
-  }
+  }, [currentPath, readDirectory, getParentPath])
 
   // 进入子目录
-  const goToChildDirectory = (file: FileInfo): void => {
-    if (file.isDirectory) {
-      readDirectory(file.path)
-    }
-  }
+  const goToChildDirectory = useCallback(
+    (file: FileInfo): void => {
+      if (file.isDirectory) {
+        readDirectory(file.path)
+      }
+    },
+    [readDirectory]
+  )
 
   // 双击事件处理
-  const handleDoubleClick = (file: FileInfo): void => {
-    if (file.name === '..') {
-      goToParentDirectory()
-    } else {
-      goToChildDirectory(file)
-    }
-  }
+  const handleDoubleClick = useCallback(
+    (file: FileInfo): void => {
+      if (file.name === '..') {
+        goToParentDirectory()
+      } else {
+        goToChildDirectory(file)
+      }
+    },
+    [goToParentDirectory, goToChildDirectory]
+  )
 
   // 初始加载
   useEffect(() => {
-    console.log(type)
-    if (type === 'local') {
-      // 只在组件挂载或类型变化时初始化，使用固定的初始路径
+    // 使用ref确保初始化只运行一次，避免React.StrictMode导致的重复渲染
+    if (type === 'local' && !initializedRef.current) {
+      // 只在组件挂载时初始化，使用固定的初始路径
       readDirectory('/')
+      initializedRef.current = true
     }
-  }, [])
+  }, [type, readDirectory])
 
   // 准备文件列表数据
   const fileList = [
