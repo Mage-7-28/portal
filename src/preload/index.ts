@@ -1,9 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
+import { ServerConnectionValues } from '../renderer/src/interface'
+import Client from 'ssh2-sftp-client'
 
 // Custom APIs for renderer
 const api = {
-  readDirectory: (path: string) => ipcRenderer.invoke('read-directory', path)
+  readDirectory: (path: string) => ipcRenderer.invoke('read-directory', path),
+  sshReadDirectory: (server: ServerConnectionValues, path: string): Promise<Client.FileInfo[]> =>
+    ipcRenderer.invoke('ssh-read-directory', server, path)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

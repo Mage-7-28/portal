@@ -4,6 +4,10 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
+import Client from 'ssh2-sftp-client'
+import { ServerConnectionValues } from '../renderer/src/interface'
+const sftp = new Client()
+
 // 设置自定义用户数据目录
 // 其他目录（如cache、logs等）会默认作为userData的子目录
 const userDataDir = join(__dirname, '../userData')
@@ -194,6 +198,31 @@ app.whenReady().then(() => {
 
   // IPC test
   ipcMain.on('ping', () => console.log('pong'))
+
+  ipcMain.handle(
+    'ssh-read-directory',
+    (_, server: ServerConnectionValues, path): Client.FileInfo[] => {
+      const result: Client.FileInfo[] = []
+
+      sftp
+        .connect({
+          ...server
+        })
+        .then(() => {
+          return sftp.list('/')
+        })
+        .then((data) => {
+          result.push(...data)
+          console.log(data, 'the data info')
+        })
+        .catch((err) => {
+          console.log(err, 'catch error')
+        })
+
+      console.log(result)
+      return result
+    }
+  )
 
   // 读取文件目录的IPC方法
   ipcMain.handle('read-directory', (_, path: string) => {

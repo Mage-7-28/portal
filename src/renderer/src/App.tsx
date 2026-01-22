@@ -12,14 +12,7 @@ import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore, store } from './store/store'
 import './app.css'
 import Portal from '@renderer/components/Portal'
-
-// 定义服务器连接表单的值类型
-interface ServerConnectionValues {
-  host: string
-  username: string
-  password: string
-  port: number
-}
+import { ServerConnectionValues } from '@renderer/interface'
 
 function App(): React.JSX.Element {
   const navigate = useNavigate()
@@ -59,6 +52,8 @@ function App(): React.JSX.Element {
   // 提交新建服务器链接表单
   const handleSubmit = (values: ServerConnectionValues): void => {
     console.log('提交服务器连接信息:', values)
+    const result = window.api.sshReadDirectory(values, '/')
+    console.log('连接结果:', result)
     // 这里可以添加连接服务器的逻辑
     setIsModalVisible(false)
     form.resetFields()

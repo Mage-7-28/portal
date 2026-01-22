@@ -1,4 +1,5 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
+import Client from "ssh2-sftp-client";
 
 // 定义文件信息接口
 export interface FileInfo {
@@ -20,6 +21,7 @@ export interface ReadDirectoryResult {
 // 定义API接口
 export interface API {
   readDirectory: (path: string) => Promise<ReadDirectoryResult>
+  sshReadDirectory: (server: ServerConnectionValues, path: string) => Promise<Client.FileInfo[]>
 }
 
 declare global {
