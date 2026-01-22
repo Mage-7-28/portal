@@ -25,8 +25,36 @@ const Portal = ({ type }: PortalProps): ReactElement => {
 
   // 获取当前目录的上一级目录
   const getParentPath = (path: string): string => {
+    // 处理Windows根目录，如 C:\ 或 C:/
+    if (/^[a-zA-Z]:[/\\]?$/.test(path)) {
+      return path
+    }
+
+    // 处理Unix根目录
     if (path === '/') return '/'
-    return '/'
+
+    // 标准化路径分隔符，将\替换为/
+    const normalizedPath = path.replace(/\\/g, '/')
+
+    // 移除末尾的/（如果有）
+    const trimmedPath = normalizedPath.endsWith('/') ? normalizedPath.slice(0, -1) : normalizedPath
+
+    // 找到最后一个/的位置
+    const lastSlashIndex = trimmedPath.lastIndexOf('/')
+
+    // 如果没有找到/或/在开头，说明是根目录下的直接子目录
+    if (lastSlashIndex <= 0) {
+      // 处理根目录下的直接子目录，返回根目录
+      return '/'
+    }
+
+    // 截取到最后一个/之前的位置，确保不以/结尾
+    const parentPath = trimmedPath.slice(0, lastSlashIndex)
+
+    // 保持原始路径的分隔符类型
+    // 如果原路径包含\，则返回带有\的路径
+    // 否则返回带有/的路径
+    return path.includes('\\') ? parentPath.replace(/\//g, '\\') : parentPath
   }
 
   // 读取当前目录的文件
