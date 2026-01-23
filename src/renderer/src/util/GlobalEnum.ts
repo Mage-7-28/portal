@@ -3,6 +3,8 @@ import { ServerConnectionValues } from '@renderer/interface'
 
 export const GlobalFontFamily = 'AlimamaDongFangDaKai, sans-serif'
 
+export const GlobalTostId = 'msgBoxGlobal'
+
 export enum PubSubTopic {
   /* 全局遮罩 */
   MASK = 'mask',

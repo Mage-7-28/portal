@@ -1,9 +1,11 @@
 import { ReactElement, useCallback, useEffect, useState } from 'react'
 import PubSub from 'pubsub-js'
-import { PubSubTopic } from '@renderer/util/GlobalEnum'
+import { GlobalTostId, PubSubTopic } from "@renderer/util/GlobalEnum";
 import Client from 'ssh2-sftp-client'
 import { store } from '../store/store'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
+import toast from "react-hot-toast";
+import { msgBoxStyle } from "@renderer/style/LayoutStyle";
 
 /**
  * @description: 文件传输组件
@@ -101,7 +103,41 @@ const PortalServer = (): ReactElement => {
   const handleDragStart = (e: React.DragEvent, file: Client.FileInfo): void => {
     const filePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`
     e.dataTransfer.setData('text/plain', filePath)
+    e.dataTransfer.setData('type', 'server')
     e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  // 处理拖拽经过事件
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  // 处理拖拽放置事件
+  const handleDrop = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    const filePath = e.dataTransfer.getData('text/plain')
+    const fileType = e.dataTransfer.getData('type')
+
+    // 从本地上传文件到服务器
+    if (fileType === 'local' && filePath) {
+      try {
+        setLoading(true)
+        console.log('上传文件路径:', filePath, currentPath)
+        const result = await window.api.uploadFileToServer(filePath, currentPath)
+        if (result.success) {
+          // 上传成功后刷新目录
+          readDirectory(currentPath)
+        } else {
+          toast.error('上传失败！', { id: GlobalTostId, style: msgBoxStyle })
+        }
+      } catch (err) {
+        console.error(err)
+        toast.error('上传失败！', { id: GlobalTostId, style: msgBoxStyle })
+      } finally {
+        setLoading(false)
+      }
+    }
   }
 
   return (
@@ -120,7 +156,11 @@ const PortalServer = (): ReactElement => {
       </div>
 
       {/* 文件列表 */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div
+        style={{ flex: 1, overflow: 'auto' }}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {loading ? (
           <div
             style={{

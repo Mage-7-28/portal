@@ -1,6 +1,9 @@
 import { ReactElement, useEffect, useState, useCallback, useRef } from 'react'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 import { FileInfo } from '../interface/index'
+import toast from 'react-hot-toast'
+import { GlobalTostId } from '@renderer/util/GlobalEnum'
+import { msgBoxStyle } from '@renderer/style/LayoutStyle'
 
 /**
  * @description: 文件传输组件
@@ -100,7 +103,41 @@ const PortalLocal = (): ReactElement => {
   // 处理拖拽开始事件
   const handleDragStart = (e: React.DragEvent, file: FileInfo): void => {
     e.dataTransfer.setData('text/plain', file.path)
+    e.dataTransfer.setData('type', 'local')
     e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  // 处理拖拽经过事件
+  const handleDragOver = (e: React.DragEvent): void => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }
+
+  // 处理拖拽放置事件
+  const handleDrop = async (e: React.DragEvent): Promise<void> => {
+    e.preventDefault()
+    const filePath = e.dataTransfer.getData('text/plain')
+    const fileType = e.dataTransfer.getData('type')
+
+    // 从服务器下载文件到本地
+    if (fileType === 'server' && filePath) {
+      try {
+        setLoading(true)
+        console.log('下载文件路径:', filePath, currentPath)
+        const result = await window.api.downloadFileFromServer(filePath, currentPath)
+        if (result.success) {
+          // 下载成功后刷新目录
+          readDirectory(currentPath)
+        } else {
+          toast.error('下载失败！', { id: GlobalTostId, style: msgBoxStyle })
+        }
+      } catch (error) {
+        console.error('下载文件失败:', error)
+        toast.error('下载失败！', { id: GlobalTostId, style: msgBoxStyle })
+      } finally {
+        setLoading(false)
+      }
+    }
   }
 
   return (
@@ -119,7 +156,11 @@ const PortalLocal = (): ReactElement => {
       </div>
 
       {/* 文件列表 */}
-      <div style={{ flex: 1, overflow: 'auto' }}>
+      <div
+        style={{ flex: 1, overflow: 'auto' }}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
         {loading ? (
           <div
             style={{

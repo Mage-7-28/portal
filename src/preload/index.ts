@@ -7,7 +7,11 @@ import Client from 'ssh2-sftp-client'
 const api = {
   readDirectory: (path: string) => ipcRenderer.invoke('read-directory', path),
   sshReadDirectory: (server: ServerConnectionValues, path: string): Promise<Client.FileInfo[]> =>
-    ipcRenderer.invoke('ssh-read-directory', server, path)
+    ipcRenderer.invoke('ssh-read-directory', server, path),
+  uploadFileToServer: (localFilePath: string, remoteDirectory: string) =>
+    ipcRenderer.invoke('upload-file-to-server', localFilePath, remoteDirectory),
+  downloadFileFromServer: (remoteFilePath: string, localDirectory: string) =>
+    ipcRenderer.invoke('download-file-from-server', remoteFilePath, localDirectory)
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

@@ -1,5 +1,5 @@
 import { app, shell, BrowserWindow, ipcMain, dialog, Menu } from 'electron'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { existsSync, mkdirSync, readdirSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -201,12 +201,10 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     'ssh-read-directory',
-    async (
-      _,
-      server: ServerConnectionValues,
-      path: string
-    ): Promise<Client.FileInfo[]> => {
+    async (_, server: ServerConnectionValues, path: string): Promise<Client.FileInfo[]> => {
       const result: Client.FileInfo[] = []
+
+      currentServer = server
 
       await sftp
         .connect({
@@ -261,6 +259,95 @@ app.whenReady().then(() => {
       }
     }
   })
+
+  // 存储当前连接的服务器信息
+  let currentServer: ServerConnectionValues | undefined
+
+  // 上传文件到服务器的IPC方法
+  ipcMain.handle(
+    'upload-file-to-server',
+    async (_, localFilePath: string, remoteDirectory: string) => {
+      const sftpClient = new Client()
+      try {
+        if (!currentServer) {
+          throw new Error('未连接到服务器')
+        }
+
+        const remoteFilePath = join(remoteDirectory, basename(localFilePath))
+
+        // 连接服务器
+        await sftpClient.connect(currentServer)
+        // 上传文件
+        await sftpClient.put(localFilePath, remoteFilePath)
+        // 关闭连接
+        await sftpClient.end()
+
+        console.log('文件上传成功:', remoteFilePath)
+
+        return {
+          success: true,
+          message: '文件上传成功'
+        }
+      } catch (error) {
+        console.error('文件上传失败:', error)
+        // 确保连接被关闭
+        if (sftpClient) {
+          try {
+            await sftpClient.end()
+          } catch (err) {
+            console.error('关闭连接失败:', err)
+          }
+        }
+        return {
+          success: false,
+          error: (error as Error).message
+        }
+      }
+    }
+  )
+
+  // 从服务器下载文件的IPC方法
+  ipcMain.handle(
+    'download-file-from-server',
+    async (_, remoteFilePath: string, localDirectory: string) => {
+      const sftpClient = new Client()
+      try {
+        if (!currentServer) {
+          throw new Error('未连接到服务器')
+        }
+
+        const localFilePath = join(localDirectory, basename(remoteFilePath))
+
+        // 连接服务器
+        await sftpClient.connect(currentServer)
+        // 下载文件
+        await sftpClient.get(remoteFilePath, localFilePath)
+        // 关闭连接
+        await sftpClient.end()
+
+        console.log('文件下载成功:', localFilePath)
+
+        return {
+          success: true,
+          message: '文件下载成功'
+        }
+      } catch (error) {
+        console.error('文件下载失败:', error)
+        // 确保连接被关闭
+        if (sftpClient) {
+          try {
+            await sftpClient.end()
+          } catch (err) {
+            console.error('关闭连接失败:', err)
+          }
+        }
+        return {
+          success: false,
+          error: (error as Error).message
+        }
+      }
+    }
+  )
 
   createWindow()
 

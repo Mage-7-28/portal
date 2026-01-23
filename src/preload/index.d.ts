@@ -23,6 +23,8 @@ export interface ReadDirectoryResult {
 export interface API {
   readDirectory: (path: string) => Promise<ReadDirectoryResult>
   sshReadDirectory: (server: ServerConnectionValues, path: string) => Promise<Client.FileInfo[]>
+  uploadFileToServer: (localFilePath: string, remoteDirectory: string) => Promise<{ success: boolean; message?: string; error?: string }>
+  downloadFileFromServer: (remoteFilePath: string, localDirectory: string) => Promise<{ success: boolean; message?: string; error?: string }>
 }
 
 declare global {
