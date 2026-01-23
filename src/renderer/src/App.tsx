@@ -342,13 +342,7 @@ function App(): React.JSX.Element {
                       </div>
                     </div>
                   </Panel>
-                  <Separator
-                    style={{
-                      width: '1px',
-                      backgroundColor: '#1E1E1E',
-                      cursor: 'col-resize'
-                    }}
-                  />
+
                   {/* 右边：服务器文件传输面板 */}
                   <Panel defaultSize={50} minSize={20} maxSize={80}>
                     <div
