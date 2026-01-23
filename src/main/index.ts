@@ -5,7 +5,6 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
 import Client from 'ssh2-sftp-client'
-import { ServerConnectionValues } from '../renderer/src/interface'
 const sftp = new Client()
 
 // 设置自定义用户数据目录
@@ -201,25 +200,32 @@ app.whenReady().then(() => {
 
   ipcMain.handle(
     'ssh-read-directory',
-    (_, server: ServerConnectionValues, path): Client.FileInfo[] => {
+    async (
+      _,
+      server: {
+        host: string
+        username: string
+        password: string
+        port: number
+      },
+      path
+    ): Promise<Client.FileInfo[]> => {
       const result: Client.FileInfo[] = []
 
-      sftp
+      await sftp
         .connect({
           ...server
         })
         .then(() => {
-          return sftp.list('/')
+          return sftp.list(path)
         })
         .then((data) => {
           result.push(...data)
-          console.log(data, 'the data info')
         })
         .catch((err) => {
           console.log(err, 'catch error')
         })
 
-      console.log(result)
       return result
     }
   )
