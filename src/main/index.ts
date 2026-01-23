@@ -217,6 +217,7 @@ app.whenReady().then(() => {
         })
         .then((data) => {
           result.push(...data)
+          sftp.end()
         })
         .catch((err) => {
           console.log(err, 'catch error')
