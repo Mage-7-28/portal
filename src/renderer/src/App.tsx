@@ -5,7 +5,7 @@ import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
-import { DeleteFilled, HddFilled, PlusSquareFilled } from '@ant-design/icons'
+import { ApiFilled, DeleteFilled, HddFilled, PlusSquareFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
@@ -197,6 +197,17 @@ function App(): React.JSX.Element {
                             }}
                           >
                             <DeleteFilled />
+                          </div>
+                        </Tooltip>
+                        <Tooltip placement="bottom" title={'连接服务器'}>
+                          <div
+                            className="panel-button"
+                            style={{
+                              opacity: selectedServerIndex !== null ? 1 : 0.5,
+                              cursor: selectedServerIndex !== null ? 'pointer' : 'not-allowed'
+                            }}
+                          >
+                            <ApiFilled />
                           </div>
                         </Tooltip>
                       </div>
