@@ -1,13 +1,6 @@
 import { ReactElement, useEffect, useState, useCallback, useRef } from 'react'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
-
-interface FileInfo {
-  name: string
-  path: string
-  isDirectory: boolean
-  size: number
-  mtime: number
-}
+import { FileInfo } from '../interface/index'
 
 /**
  * @description: 文件传输组件
@@ -123,7 +116,7 @@ const PortalLocal = (): ReactElement => {
   ]
 
   // 处理拖拽开始事件
-  const handleDragStart = (e: React.DragEvent, file: FileInfo) => {
+  const handleDragStart = (e: React.DragEvent, file: FileInfo): void => {
     e.dataTransfer.setData('text/plain', file.path)
     e.dataTransfer.effectAllowed = 'copy'
   }
@@ -176,10 +169,10 @@ const PortalLocal = (): ReactElement => {
                 <div style={{ marginRight: '12px', fontSize: '16px', color: file.isDirectory ? '#4E9CEF' : '#DFE1E5', flexShrink: 0 }}>
                   {file.isDirectory ? <FolderOpenOutlined /> : <FileOutlined />}
                 </div>
-                <div 
-                  style={{ 
-                    flex: 1, 
-                    color: file.isDirectory ? '#4E9CEF' : '#DFE1E5', 
+                <div
+                  style={{
+                    flex: 1,
+                    color: file.isDirectory ? '#4E9CEF' : '#DFE1E5',
                     fontSize: '14px',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
