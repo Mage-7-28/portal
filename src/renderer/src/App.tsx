@@ -55,6 +55,7 @@ function App(): React.JSX.Element {
     window.api.sshReadDirectory(values, '/').then((o) => {
       console.log('读取目录结果:', o)
     })
+    storeState.server.shift(values)
     // 这里可以添加连接服务器的逻辑
     setIsModalVisible(false)
     form.resetFields()
@@ -316,7 +317,7 @@ function App(): React.JSX.Element {
                 取消
               </Button>
               <Button type="primary" htmlType="submit">
-                连接
+                添加
               </Button>
             </Form.Item>
           </Form>

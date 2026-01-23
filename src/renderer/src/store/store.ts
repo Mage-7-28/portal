@@ -5,7 +5,8 @@ export const defaultData = {
   layout: {
     showPanel: false,
     panelWidth: 200
-  }
+  },
+  server: []
 }
 
 const state = cloneDeep(defaultData)
