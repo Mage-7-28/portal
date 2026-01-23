@@ -16,6 +16,7 @@ import { ServerConnectionValues } from '@renderer/interface'
 
 function App(): React.JSX.Element {
   const navigate = useNavigate()
+  const [modal, contextHolder] = Modal.useModal()
   const [current, setCurrent] = useState('/home')
   const [showMask, setShowMask] = useState(false)
   // 使用store中的状态
@@ -187,8 +188,19 @@ function App(): React.JSX.Element {
                             className="panel-button"
                             onClick={() => {
                               if (selectedServerIndex !== null) {
-                                store.server.splice(selectedServerIndex, 1)
-                                setSelectedServerIndex(null)
+                                modal.confirm({
+                                  title: '提示',
+                                  width: 200,
+                                  content: <div>是否确定删除？</div>,
+                                  centered: true,
+                                  maskClosable: true,
+                                  okText: '确定',
+                                  cancelText: '取消',
+                                  onOk() {
+                                    store.server.splice(selectedServerIndex, 1)
+                                    setSelectedServerIndex(null)
+                                  }
+                                })
                               }
                             }}
                             style={{
@@ -420,6 +432,7 @@ function App(): React.JSX.Element {
             </Form.Item>
           </Form>
         </Modal>
+        {contextHolder}
       </ConfigProvider>
     </>
   )
