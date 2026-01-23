@@ -7,7 +7,7 @@ export interface ServerConnectionValues {
 
 export interface Store {
   layout: {
-    showPanel: boolean,
+    showPanel: boolean
     panelWidth: number
   }
   server: ServerConnectionValues[]

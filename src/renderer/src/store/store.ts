@@ -1,13 +1,14 @@
 import { proxy, subscribe, useSnapshot } from 'valtio'
 import { cloneDeep, debounce } from 'lodash-es'
-import { Store } from '@renderer/interface'
+import { Store, ServerConnectionValues } from '@renderer/interface'
 
 export const defaultData: Store = {
   layout: {
     showPanel: false,
     panelWidth: 200
   },
-  server: []
+  server: [],
+  connect: new ServerConnectionValues()
 }
 
 const state = cloneDeep(defaultData)

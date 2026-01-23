@@ -1,6 +1,6 @@
 import zhCN from 'antd/locale/zh_CN'
 import { Button, ConfigProvider, Form, Input, Layout, Modal, theme, Tooltip } from 'antd'
-import { GlobalFontFamily, PubSubTopic } from './util/GlobalEnum'
+import { GlobalFontFamily, pubSubService, PubSubTopic } from './util/GlobalEnum'
 import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
@@ -55,10 +55,6 @@ function App(): React.JSX.Element {
 
   // 提交新建服务器链接表单
   const handleSubmit = (values: ServerConnectionValues): void => {
-    console.log('提交服务器连接信息:', values)
-    window.api.sshReadDirectory(values, '/').then((o) => {
-      console.log('读取目录结果:', o)
-    })
     store.server.unshift(values)
     // 这里可以添加连接服务器的逻辑
     setIsModalVisible(false)
@@ -218,6 +214,14 @@ function App(): React.JSX.Element {
                             style={{
                               opacity: selectedServerIndex !== null ? 1 : 0.5,
                               cursor: selectedServerIndex !== null ? 'pointer' : 'not-allowed'
+                            }}
+                            onClick={() => {
+                              if (selectedServerIndex !== null) {
+                                pubSubService.sendConnectServer(
+                                  storeState.server[selectedServerIndex]
+                                )
+                                store.connect = storeState.server[selectedServerIndex]
+                              }
                             }}
                           >
                             <ApiFilled />
