@@ -11,4 +11,5 @@ export interface Store {
     panelWidth: number
   }
   server: ServerConnectionValues[]
+  connect?: ServerConnectionValues
 }
