@@ -5,7 +5,7 @@ import PubSub from 'pubsub-js'
 import Sider from 'antd/es/layout/Sider'
 import { Toaster } from 'react-hot-toast'
 import { Content } from 'antd/es/layout/layout'
-import { HddFilled, PlusCircleFilled } from '@ant-design/icons'
+import { DeleteFilled, HddFilled, PlusSquareFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
@@ -20,6 +20,8 @@ function App(): React.JSX.Element {
   const [showMask, setShowMask] = useState(false)
   // 使用store中的状态
   const storeState = useStore()
+  // 选中的服务器索引
+  const [selectedServerIndex, setSelectedServerIndex] = useState<number | null>(null)
 
   // 新建服务器链接模态框状态
   const [isModalVisible, setIsModalVisible] = useState(false)
@@ -177,7 +179,24 @@ function App(): React.JSX.Element {
                       >
                         <Tooltip placement="bottom" title={'新建服务器链接'}>
                           <div className="panel-button" onClick={showModal}>
-                            <PlusCircleFilled />
+                            <PlusSquareFilled />
+                          </div>
+                        </Tooltip>
+                        <Tooltip placement="bottom" title={'删除选中服务器'}>
+                          <div
+                            className="panel-button"
+                            onClick={() => {
+                              if (selectedServerIndex !== null) {
+                                store.server.splice(selectedServerIndex, 1)
+                                setSelectedServerIndex(null)
+                              }
+                            }}
+                            style={{
+                              opacity: selectedServerIndex !== null ? 1 : 0.5,
+                              cursor: selectedServerIndex !== null ? 'pointer' : 'not-allowed'
+                            }}
+                          >
+                            <DeleteFilled />
                           </div>
                         </Tooltip>
                       </div>
@@ -198,26 +217,58 @@ function App(): React.JSX.Element {
                               <div
                                 key={index}
                                 style={{
-                                  backgroundColor: 'rgb(30, 31, 34)',
+                                  backgroundColor:
+                                    index === selectedServerIndex
+                                      ? 'rgb(36, 37, 41)'
+                                      : 'rgb(30, 31, 34)',
                                   padding: '12px',
                                   borderRadius: '6px',
-                                  border: '1px solid #1E1E1E',
+                                  border:
+                                    index === selectedServerIndex
+                                      ? '1px solid #595f65'
+                                      : '1px solid #1E1E1E',
+                                  boxShadow:
+                                    index === selectedServerIndex
+                                      ? '0 0 0 2px rgba(89, 95, 101, 0.3)'
+                                      : 'none',
                                   transition: 'all 0.2s',
                                   cursor: 'pointer'
                                 }}
+                                onClick={() =>
+                                  setSelectedServerIndex(
+                                    index === selectedServerIndex ? null : index
+                                  )
+                                }
                                 onMouseEnter={(e) => {
-                                  e.currentTarget.style.backgroundColor = 'rgb(36, 37, 41)'
-                                  e.currentTarget.style.borderColor = '#404040'
+                                  if (index !== selectedServerIndex) {
+                                    e.currentTarget.style.backgroundColor = 'rgb(36, 37, 41)'
+                                    e.currentTarget.style.borderColor = '#404040'
+                                  }
                                 }}
                                 onMouseLeave={(e) => {
-                                  e.currentTarget.style.backgroundColor = 'rgb(30, 31, 34)'
-                                  e.currentTarget.style.borderColor = '#1E1E1E'
+                                  if (index !== selectedServerIndex) {
+                                    e.currentTarget.style.backgroundColor = 'rgb(30, 31, 34)'
+                                    e.currentTarget.style.borderColor = '#1E1E1E'
+                                  }
                                 }}
                               >
-                                <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '6px' }}>
+                                <div
+                                  style={{
+                                    fontSize: '14px',
+                                    fontWeight: '500',
+                                    marginBottom: '6px'
+                                  }}
+                                >
                                   {server.host}
                                 </div>
-                                <div style={{ fontSize: '12px', color: '#888', display: 'flex', gap: '16px' }}>
+                                <div
+                                  style={{
+                                    fontSize: '12px',
+                                    color: '#888',
+                                    display: 'flex',
+                                    gap: '16px'
+                                  }}
+                                >
                                   <span>用户: {server.username}</span>
                                   <span>端口: {server.port}</span>
                                 </div>
