@@ -1,14 +1,14 @@
 import { ReactElement, useEffect, useState } from 'react'
 import PubSub from 'pubsub-js'
 import { PubSubTopic } from '@renderer/util/GlobalEnum'
-import { SshFileInfo } from '@renderer/interface'
+import Client from 'ssh2-sftp-client'
 
 /**
  * @description: 文件传输组件
  * @return {ReactElement}
  */
 const PortalServer = (): ReactElement => {
-  const [files, setFiles] = useState<SshFileInfo[]>([])
+  const [files, setFiles] = useState<Client.FileInfo[]>([])
 
   useEffect(() => {
     const connect = PubSub.subscribe(PubSubTopic.CONNECT_SERVER, (_, data) => {
