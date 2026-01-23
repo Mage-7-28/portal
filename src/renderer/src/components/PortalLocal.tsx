@@ -2,10 +2,6 @@ import { ReactElement, useEffect, useState, useCallback, useRef } from 'react'
 import { List, Typography } from 'antd'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 
-interface PortalProps {
-  type: 'local' | 'server'
-}
-
 interface FileInfo {
   name: string
   path: string
@@ -18,7 +14,7 @@ interface FileInfo {
  * @description: 文件传输组件
  * @return {ReactElement}
  */
-const Portal = ({ type }: PortalProps): ReactElement => {
+const PortalLocal = (): ReactElement => {
   const [currentPath, setCurrentPath] = useState<string>('/')
   const [files, setFiles] = useState<FileInfo[]>([])
   const [loading, setLoading] = useState<boolean>(false)
@@ -64,7 +60,6 @@ const Portal = ({ type }: PortalProps): ReactElement => {
     setLoading(true)
     try {
       const result = await window.api.readDirectory(path)
-      console.log('读取目录结果:', result)
       if (result.success && result.data) {
         setFiles(result.data)
         setCurrentPath(path)
@@ -109,12 +104,12 @@ const Portal = ({ type }: PortalProps): ReactElement => {
   // 初始加载
   useEffect(() => {
     // 使用ref确保初始化只运行一次，避免React.StrictMode导致的重复渲染
-    if (type === 'local' && !initializedRef.current) {
+    if (!initializedRef.current) {
       // 只在组件挂载时初始化，使用固定的初始路径
       readDirectory('/')
       initializedRef.current = true
     }
-  }, [type, readDirectory])
+  }, [readDirectory])
 
   // 准备文件列表数据
   const fileList = [
@@ -184,4 +179,4 @@ const Portal = ({ type }: PortalProps): ReactElement => {
     </div>
   )
 }
-export default Portal
+export default PortalLocal

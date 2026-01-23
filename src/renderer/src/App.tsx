@@ -11,7 +11,8 @@ import { useNavigate } from 'react-router-dom'
 import { Group, Panel, Separator } from 'react-resizable-panels'
 import { useStore, store } from './store/store'
 import './app.css'
-import Portal from '@renderer/components/Portal'
+import PortalLocal from '@renderer/components/PortalLocal'
+import PortalServer from '@renderer/components/PortalServer'
 import { ServerConnectionValues } from '@renderer/interface'
 
 function App(): React.JSX.Element {
@@ -338,7 +339,7 @@ function App(): React.JSX.Element {
                         本机文件
                       </div>
                       <div style={{ flex: 1, overflow: 'auto' }}>
-                        <Portal type="local" />
+                        <PortalLocal />
                       </div>
                     </div>
                   </Panel>
@@ -366,7 +367,7 @@ function App(): React.JSX.Element {
                         服务器文件
                       </div>
                       <div style={{ flex: 1, overflow: 'auto' }}>
-                        <Portal type="server" />
+                        <PortalServer />
                       </div>
                     </div>
                   </Panel>
