@@ -321,7 +321,7 @@ function App(): React.JSX.Element {
               <Panel>
                 <Group orientation="horizontal" style={{ height: '100%', width: '100%' }}>
                   {/* 左边：本机文件传输面板 */}
-                  <Panel defaultSize={50} minSize={20} maxSize={80}>
+                  <Panel defaultSize={50} minSize={20} maxSize={80} style={{ borderRight: '1px solid #1E1E1E' }}>
                     <div
                       style={{
                         height: '100%',

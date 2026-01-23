@@ -3,7 +3,6 @@ import PubSub from 'pubsub-js'
 import { PubSubTopic } from '@renderer/util/GlobalEnum'
 import Client from 'ssh2-sftp-client'
 import { store } from '../store/store'
-import { FileInfo } from '@renderer/interface'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 
 /**
@@ -20,6 +19,7 @@ const PortalServer = (): ReactElement => {
       window.api.sshReadDirectory(JSON.parse(JSON.stringify(data)), '/').then((o) => {
         console.log('读取目录结果:', o)
         setFiles(o)
+        setCurrentPath('/')
       })
     })
     return () => {
@@ -79,29 +79,17 @@ const PortalServer = (): ReactElement => {
 
   // 进入子目录
   const goToChildDirectory = useCallback(
-    (file: FileInfo): void => {
-      if (file.isDirectory) {
-        readDirectory(file.path)
+    (file: Client.FileInfo): void => {
+      if (file.type !== '-') {
+        readDirectory(currentPath + '/' + file.name)
       }
     },
-    [readDirectory]
+    [currentPath, readDirectory]
   )
 
-  // 准备文件列表数据
-  const fileList = [
-    {
-      name: '..',
-      path: getParentPath(currentPath),
-      isDirectory: true,
-      size: 0,
-      mtime: Date.now()
-    },
-    ...files
-  ]
-
   // 处理拖拽开始事件
-  const handleDragStart = (e: React.DragEvent, file: FileInfo): void => {
-    e.dataTransfer.setData('text/plain', file.path)
+  const handleDragStart = (e: React.DragEvent, file: Client.FileInfo): void => {
+    e.dataTransfer.setData('text/plain', currentPath + '/' + file.name)
     e.dataTransfer.effectAllowed = 'copy'
   }
 
@@ -122,14 +110,63 @@ const PortalServer = (): ReactElement => {
       {/* 文件列表 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100%',
+              color: '#888'
+            }}
+          >
             加载中...
           </div>
         ) : (
           <div>
-            {fileList.map((file) => (
+            <div
+              onDoubleClick={() => getParentPath(currentPath)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                padding: '8px 16px',
+                borderBottom: '1px solid #1E1E1E',
+                cursor: 'pointer',
+                transition: 'background-color 0.2s',
+                backgroundColor: '#303134'
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = '#36373A'
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = '#303134'
+              }}
+            >
               <div
-                key={file.path}
+                style={{
+                  marginRight: '12px',
+                  fontSize: '16px',
+                  color: '#4E9CEF',
+                  flexShrink: 0
+                }}
+              >
+                {<FolderOpenOutlined />}
+              </div>
+              <div
+                style={{
+                  flex: 1,
+                  color: '#4E9CEF',
+                  fontSize: '14px',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                ..
+              </div>
+            </div>
+            {files.map((file) => (
+              <div
+                key={currentPath + '/' + file.name}
                 draggable
                 onDragStart={(e) => handleDragStart(e, file)}
                 onDoubleClick={() => goToChildDirectory(file)}
@@ -138,7 +175,7 @@ const PortalServer = (): ReactElement => {
                   alignItems: 'center',
                   padding: '8px 16px',
                   borderBottom: '1px solid #1E1E1E',
-                  cursor: file.isDirectory ? 'pointer' : 'default',
+                  cursor: 'pointer',
                   transition: 'background-color 0.2s',
                   backgroundColor: '#303134'
                 }}
@@ -149,13 +186,20 @@ const PortalServer = (): ReactElement => {
                   e.currentTarget.style.backgroundColor = '#303134'
                 }}
               >
-                <div style={{ marginRight: '12px', fontSize: '16px', color: file.isDirectory ? '#4E9CEF' : '#DFE1E5', flexShrink: 0 }}>
-                  {file.isDirectory ? <FolderOpenOutlined /> : <FileOutlined />}
+                <div
+                  style={{
+                    marginRight: '12px',
+                    fontSize: '16px',
+                    color: file.type !== '-' ? '#4E9CEF' : '#DFE1E5',
+                    flexShrink: 0
+                  }}
+                >
+                  {file.type !== '-' ? <FolderOpenOutlined /> : <FileOutlined />}
                 </div>
                 <div
                   style={{
                     flex: 1,
-                    color: file.isDirectory ? '#4E9CEF' : '#DFE1E5',
+                    color: file.type !== '-' ? '#4E9CEF' : '#DFE1E5',
                     fontSize: '14px',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
