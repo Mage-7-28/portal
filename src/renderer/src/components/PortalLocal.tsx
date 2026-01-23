@@ -65,12 +65,6 @@ const PortalLocal = (): ReactElement => {
     }
   }, [])
 
-  // 返回上一级目录
-  const goToParentDirectory = useCallback((): void => {
-    const parentPath = getParentPath(currentPath)
-    readDirectory(parentPath)
-  }, [currentPath, readDirectory, getParentPath])
-
   // 进入子目录
   const goToChildDirectory = useCallback(
     (file: FileInfo): void => {
@@ -79,18 +73,6 @@ const PortalLocal = (): ReactElement => {
       }
     },
     [readDirectory]
-  )
-
-  // 双击事件处理
-  const handleDoubleClick = useCallback(
-    (file: FileInfo): void => {
-      if (file.name === '..') {
-        goToParentDirectory()
-      } else {
-        goToChildDirectory(file)
-      }
-    },
-    [goToParentDirectory, goToChildDirectory]
   )
 
   // 初始加载
@@ -148,8 +130,7 @@ const PortalLocal = (): ReactElement => {
                 key={file.path}
                 draggable
                 onDragStart={(e) => handleDragStart(e, file)}
-                onClick={() => goToChildDirectory(file)}
-                onDoubleClick={() => handleDoubleClick(file)}
+                onDoubleClick={() => goToChildDirectory(file)}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
