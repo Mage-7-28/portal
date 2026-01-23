@@ -134,7 +134,9 @@ const PortalServer = (): ReactElement => {
         ) : (
           <div>
             <div
-              onDoubleClick={() => getParentPath(currentPath)}
+              onDoubleClick={() => {
+                readDirectory(getParentPath(currentPath))
+              }}
               style={{
                 display: 'flex',
                 alignItems: 'center',
