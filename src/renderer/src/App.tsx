@@ -188,7 +188,43 @@ function App(): React.JSX.Element {
                           overflow: 'auto'
                         }}
                       >
-                        内容
+                        {storeState.server.length === 0 ? (
+                          <div style={{ textAlign: 'center', color: '#888', padding: '20px 0' }}>
+                            暂无服务器，请点击上方按钮添加
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {storeState.server.map((server, index) => (
+                              <div
+                                key={index}
+                                style={{
+                                  backgroundColor: 'rgb(30, 31, 34)',
+                                  padding: '12px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #1E1E1E',
+                                  transition: 'all 0.2s',
+                                  cursor: 'pointer'
+                                }}
+                                onMouseEnter={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgb(36, 37, 41)'
+                                  e.currentTarget.style.borderColor = '#404040'
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgb(30, 31, 34)'
+                                  e.currentTarget.style.borderColor = '#1E1E1E'
+                                }}
+                              >
+                                <div style={{ fontSize: '14px', fontWeight: '500', marginBottom: '6px' }}>
+                                  {server.host}
+                                </div>
+                                <div style={{ fontSize: '12px', color: '#888', display: 'flex', gap: '16px' }}>
+                                  <span>用户: {server.username}</span>
+                                  <span>端口: {server.port}</span>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </Panel>
