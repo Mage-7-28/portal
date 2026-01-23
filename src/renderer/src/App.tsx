@@ -390,6 +390,7 @@ function App(): React.JSX.Element {
           title="新建服务器链接"
           open={isModalVisible}
           width={350}
+          centered
           onCancel={handleCancel}
           footer={null}
         >

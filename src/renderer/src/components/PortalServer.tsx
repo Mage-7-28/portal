@@ -90,7 +90,8 @@ const PortalServer = (): ReactElement => {
   const goToChildDirectory = useCallback(
     (file: Client.FileInfo): void => {
       if (file.type !== '-') {
-        readDirectory(currentPath + '/' + file.name)
+        const newPath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`
+        readDirectory(newPath)
       }
     },
     [currentPath, readDirectory]
@@ -98,7 +99,8 @@ const PortalServer = (): ReactElement => {
 
   // 处理拖拽开始事件
   const handleDragStart = (e: React.DragEvent, file: Client.FileInfo): void => {
-    e.dataTransfer.setData('text/plain', currentPath + '/' + file.name)
+    const filePath = currentPath === '/' ? `/${file.name}` : `${currentPath}/${file.name}`
+    e.dataTransfer.setData('text/plain', filePath)
     e.dataTransfer.effectAllowed = 'copy'
   }
 
