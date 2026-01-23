@@ -8,8 +8,8 @@ import { Content } from 'antd/es/layout/layout'
 import { ApiFilled, DeleteFilled, HddFilled, PlusSquareFilled } from '@ant-design/icons'
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Group, Panel, Separator } from 'react-resizable-panels'
-import { useStore, store } from './store/store'
+import { Group, Panel } from 'react-resizable-panels'
+import { store, useStore } from './store/store'
 import './app.css'
 import PortalLocal from '@renderer/components/PortalLocal'
 import PortalServer from '@renderer/components/PortalServer'
@@ -136,14 +136,18 @@ function App(): React.JSX.Element {
               // 面板布局变化时更新store中的宽度
               onLayoutChanged={(layout) => {
                 // 获取红色面板的宽度
-                const panelWidth = layout[Object.keys(layout)[0]] || 200
-                store.layout.panelWidth = panelWidth
+                store.layout.panelWidth = layout[Object.keys(layout)[0]] || 200
               }}
             >
               {/* 如果显示红色div，则添加可调整大小的面板和调整手柄 */}
               {storeState.layout.showPanel && (
                 <>
-                  <Panel defaultSize={storeState.layout.panelWidth} minSize={200} maxSize={400}>
+                  <Panel
+                    defaultSize={storeState.layout.panelWidth}
+                    minSize={200}
+                    maxSize={400}
+                    style={{ borderRight: '1px solid #1E1E1E' }}
+                  >
                     <div
                       style={{
                         backgroundColor: '#2B2D30',
@@ -307,13 +311,6 @@ function App(): React.JSX.Element {
                       </div>
                     </div>
                   </Panel>
-                  <Separator
-                    style={{
-                      width: '1px',
-                      backgroundColor: 'transparent',
-                      cursor: 'col-resize'
-                    }}
-                  />
                 </>
               )}
 
@@ -321,7 +318,12 @@ function App(): React.JSX.Element {
               <Panel>
                 <Group orientation="horizontal" style={{ height: '100%', width: '100%' }}>
                   {/* 左边：本机文件传输面板 */}
-                  <Panel defaultSize={50} minSize={20} maxSize={80} style={{ borderRight: '1px solid #1E1E1E' }}>
+                  <Panel
+                    defaultSize={50}
+                    minSize={20}
+                    maxSize={80}
+                    style={{ borderRight: '1px solid #1E1E1E' }}
+                  >
                     <div
                       style={{
                         height: '100%',

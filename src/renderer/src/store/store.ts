@@ -4,7 +4,7 @@ import { Store } from '@renderer/interface'
 
 export const defaultData: Store = {
   layout: {
-    showPanel: false,
+    showPanel: true,
     panelWidth: 200
   },
   server: [],

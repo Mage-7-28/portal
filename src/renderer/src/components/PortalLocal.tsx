@@ -108,6 +108,7 @@ const PortalLocal = (): ReactElement => {
       {/* 当前路径显示 */}
       <div
         style={{
+          height: 30,
           padding: '8px 16px',
           backgroundColor: '#2B2D30',
           borderBottom: '1px solid #1E1E1E',
