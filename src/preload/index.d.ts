@@ -1,5 +1,6 @@
 import { ElectronAPI } from '@electron-toolkit/preload'
 import Client from "ssh2-sftp-client";
+import { ServerConnectionValues } from '../renderer/src/interface'
 
 // 定义文件信息接口
 export interface FileInfo {
