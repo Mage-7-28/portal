@@ -55,7 +55,7 @@ function App(): React.JSX.Element {
     window.api.sshReadDirectory(values, '/').then((o) => {
       console.log('读取目录结果:', o)
     })
-    storeState.server.shift(values)
+    store.server.unshift(values)
     // 这里可以添加连接服务器的逻辑
     setIsModalVisible(false)
     form.resetFields()

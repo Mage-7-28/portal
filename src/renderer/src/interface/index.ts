@@ -4,3 +4,11 @@ export interface ServerConnectionValues {
   password: string
   port: number
 }
+
+export interface Store {
+  layout: {
+    showPanel: boolean,
+    panelWidth: number
+  }
+  server: ServerConnectionValues[]
+}

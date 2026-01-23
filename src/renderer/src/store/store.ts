@@ -1,7 +1,8 @@
 import { proxy, subscribe, useSnapshot } from 'valtio'
 import { cloneDeep, debounce } from 'lodash-es'
+import { Store } from '@renderer/interface'
 
-export const defaultData = {
+export const defaultData: Store = {
   layout: {
     showPanel: false,
     panelWidth: 200
@@ -23,7 +24,7 @@ const restoreState = (): void => {
         // 使用更安全的方式检查属性是否存在
         if (Object.prototype.hasOwnProperty.call(parsedState, key)) {
           // 使用类型断言确保类型安全
-          store[key as keyof typeof store] = parsedState[key] as (typeof store)[keyof typeof store]
+          store[key] = parsedState[key]
         }
       })
     }
