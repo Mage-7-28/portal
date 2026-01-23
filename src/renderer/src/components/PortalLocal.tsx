@@ -1,5 +1,4 @@
 import { ReactElement, useEffect, useState, useCallback, useRef } from 'react'
-import { List, Typography } from 'antd'
 import { FileOutlined, FolderOpenOutlined } from '@ant-design/icons'
 
 interface FileInfo {
@@ -123,6 +122,12 @@ const PortalLocal = (): ReactElement => {
     ...files
   ]
 
+  // 处理拖拽开始事件
+  const handleDragStart = (e: React.DragEvent, file: FileInfo) => {
+    e.dataTransfer.setData('text/plain', file.path)
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
   return (
     <div style={{ height: '100%', width: '100%', display: 'flex', flexDirection: 'column' }}>
       {/* 当前路径显示 */}
@@ -139,42 +144,55 @@ const PortalLocal = (): ReactElement => {
 
       {/* 文件列表 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        <List
-          loading={loading}
-          dataSource={fileList}
-          renderItem={(file) => (
-            <List.Item
-              key={file.path}
-              onClick={() => goToChildDirectory(file)}
-              onDoubleClick={() => handleDoubleClick(file)}
-              style={{
-                cursor: file.isDirectory ? 'pointer' : 'default',
-                padding: '8px 16px',
-                borderBottom: '1px solid #1E1E1E'
-              }}
-            >
-              <List.Item.Meta
-                avatar={file.isDirectory ? <FolderOpenOutlined /> : <FileOutlined />}
-                title={
-                  <Typography.Text style={{ color: file.isDirectory ? '#4E9CEF' : '#DFE1E5' }}>
-                    {file.name}
-                  </Typography.Text>
-                }
-                description={
-                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                    <span style={{ fontSize: '12px', color: '#888' }}>
-                      {file.isDirectory ? '文件夹' : `${(file.size / 1024).toFixed(2)} KB`}
-                    </span>
-                    <span style={{ fontSize: '12px', color: '#888' }}>
-                      {new Date(file.mtime).toLocaleString()}
-                    </span>
-                  </div>
-                }
-              />
-            </List.Item>
-          )}
-          style={{ height: '100%' }}
-        />
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888' }}>
+            加载中...
+          </div>
+        ) : (
+          <div>
+            {fileList.map((file) => (
+              <div
+                key={file.path}
+                draggable
+                onDragStart={(e) => handleDragStart(e, file)}
+                onClick={() => goToChildDirectory(file)}
+                onDoubleClick={() => handleDoubleClick(file)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '8px 16px',
+                  borderBottom: '1px solid #1E1E1E',
+                  cursor: file.isDirectory ? 'pointer' : 'default',
+                  transition: 'background-color 0.2s',
+                  backgroundColor: '#303134'
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = '#36373A'
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = '#303134'
+                }}
+              >
+                <div style={{ marginRight: '12px', fontSize: '16px', color: file.isDirectory ? '#4E9CEF' : '#DFE1E5', flexShrink: 0 }}>
+                  {file.isDirectory ? <FolderOpenOutlined /> : <FileOutlined />}
+                </div>
+                <div 
+                  style={{ 
+                    flex: 1, 
+                    color: file.isDirectory ? '#4E9CEF' : '#DFE1E5', 
+                    fontSize: '14px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap'
+                  }}
+                  title={file.name}
+                >
+                  {file.name}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )
