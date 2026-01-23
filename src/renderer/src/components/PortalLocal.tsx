@@ -121,7 +121,15 @@ const PortalLocal = (): ReactElement => {
       {/* 文件列表 */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: '#888' }}>
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'center',
+              alignItems: 'center',
+              height: '100%',
+              color: '#888'
+            }}
+          >
             加载中...
           </div>
         ) : (
