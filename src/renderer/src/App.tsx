@@ -219,17 +219,17 @@ function App(): React.JSX.Element {
                                 style={{
                                   backgroundColor:
                                     index === selectedServerIndex
-                                      ? 'rgb(36, 37, 41)'
+                                      ? 'rgb(36, 41, 51)'
                                       : 'rgb(30, 31, 34)',
                                   padding: '12px',
                                   borderRadius: '6px',
                                   border:
                                     index === selectedServerIndex
-                                      ? '1px solid #595f65'
+                                      ? '1px solid #4E9CEF'
                                       : '1px solid #1E1E1E',
                                   boxShadow:
                                     index === selectedServerIndex
-                                      ? '0 0 0 2px rgba(89, 95, 101, 0.3)'
+                                      ? '0 0 0 2px rgba(78, 156, 239, 0.3)'
                                       : 'none',
                                   transition: 'all 0.2s',
                                   cursor: 'pointer'
