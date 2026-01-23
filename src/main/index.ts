@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 
 import Client from 'ssh2-sftp-client'
+import { ServerConnectionValues } from '../renderer/src/interface'
 const sftp = new Client()
 
 // 设置自定义用户数据目录
@@ -202,13 +203,8 @@ app.whenReady().then(() => {
     'ssh-read-directory',
     async (
       _,
-      server: {
-        host: string
-        username: string
-        password: string
-        port: number
-      },
-      path
+      server: ServerConnectionValues,
+      path: string
     ): Promise<Client.FileInfo[]> => {
       const result: Client.FileInfo[] = []
 
