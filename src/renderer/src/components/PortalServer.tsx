@@ -16,11 +16,17 @@ const PortalServer = (): ReactElement => {
 
   useEffect(() => {
     const connect = PubSub.subscribe(PubSubTopic.CONNECT_SERVER, (_, data) => {
-      window.api.sshReadDirectory(JSON.parse(JSON.stringify(data)), '/').then((o) => {
-        console.log('读取目录结果:', o)
-        setFiles(o)
-        setCurrentPath('/')
-      })
+      setLoading(true)
+      window.api
+        .sshReadDirectory(JSON.parse(JSON.stringify(data)), '/')
+        .then((o) => {
+          console.log('读取目录结果:', o)
+          setFiles(o)
+          setCurrentPath('/')
+        })
+        .finally(() => {
+          setLoading(false)
+        })
     })
     return () => {
       PubSub.unsubscribe(connect)
@@ -65,15 +71,18 @@ const PortalServer = (): ReactElement => {
   const readDirectory = useCallback(async (path: string): Promise<void> => {
     setLoading(true)
     try {
-      window.api.sshReadDirectory(JSON.parse(JSON.stringify(store.connect)), path).then((o) => {
-        console.log('读取目录结果:', o)
-        setFiles(o)
-        setCurrentPath(path)
-      })
+      window.api
+        .sshReadDirectory(JSON.parse(JSON.stringify(store.connect)), path)
+        .then((o) => {
+          console.log('读取目录结果:', o)
+          setFiles(o)
+          setCurrentPath(path)
+        })
+        .finally(() => {
+          setLoading(false)
+        })
     } catch (error) {
       console.error('读取目录失败:', error)
-    } finally {
-      setLoading(false)
     }
   }, [])
 
