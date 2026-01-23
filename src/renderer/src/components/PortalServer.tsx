@@ -10,7 +10,7 @@ const PortalServer = (): ReactElement => {
 
   useEffect(() => {
     const connect = PubSub.subscribe(PubSubTopic.CONNECT_SERVER, (_, data) => {
-      window.api.sshReadDirectory(data, '/').then((o) => {
+      window.api.sshReadDirectory(JSON.parse(JSON.stringify(data)), '/').then((o) => {
         console.log('读取目录结果:', o)
       })
     })
