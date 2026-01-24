@@ -6,6 +6,7 @@
   "author": "Cherry",
   "homepage": "https://electron-vite.org",
   "scripts": {
+    "electron:generate-icons": "electron-icon-builder --input=./resources/icon.png --output=build --flatten",
     "format": "prettier --write .",
     "lint": "eslint --cache .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
