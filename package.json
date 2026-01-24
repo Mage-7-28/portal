@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "电脑和服务器之间传输文件的传送门",
   "main": "./out/main/index.js",
-  "author": "example.com",
+  "author": "Cherry",
   "homepage": "https://electron-vite.org",
   "scripts": {
     "format": "prettier --write .",
