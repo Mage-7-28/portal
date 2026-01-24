@@ -43,7 +43,7 @@
 1. 克隆项目代码
 
 ```bash
-git clone https://github.com/yourusername/portal.git
+git clone https://github.com/Mage-7-28/portal.git
 cd portal
 ```
 
