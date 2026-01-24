@@ -112,9 +112,9 @@ app.whenReady().then(() => {
 
   // 创建菜单模板
   const menuTemplate: Electron.MenuItemConstructorOptions[] = [
-    {
-      label: '文件'
-    },
+    // {
+    //   label: '文件'
+    // },
     {
       label: '传送门',
       submenu: [
