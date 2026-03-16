@@ -17,14 +17,6 @@
 - 文件预览，编辑：支持常见文件格式的预览和简单编辑
 - 跨平台支持：目前仅支持MacOS，后续将考虑Windows平台
 
-🛠️ 技术栈
-- 前端框架：React + TypeScript + Ant Design
-- 运行环境：Node.js + Tauri
-- 文件传输：ssh2-sftp-client
-- 状态管理：Valtio
-- 事件通信：PubSub.js
-- 构建工具：Vite
-
 📦 安装和使用
 前置要求
 - Node.js 22.x 或更高版本
