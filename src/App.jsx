@@ -1,6 +1,6 @@
 import { ConfigProvider, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { GlobalFontFamily } from "./utils/GlobalEnum.js";
+import { GlobalFontFamily } from './utils/GlobalEnum.js'
 
 function App() {
 
@@ -22,7 +22,7 @@ function App() {
         }
       }
     } } locale={ zhCN } componentSize={ 'middle' }>
-111
+你是谁
     </ConfigProvider>
   )
 }
