@@ -1,8 +1,8 @@
-import { useState, useEffect } from 'react';
-import { invoke } from '@tauri-apps/api/core';
-import { Button, Input, List, Modal, Form, Select, message, Progress, Typography } from 'antd';
+import { useState, useEffect } from 'react'
+import { invoke } from '@tauri-apps/api/core'
+import { Button, Input, List, Modal, Form, Select, message, Progress, Typography } from 'antd'
 
-const { Text } = Typography;
+const { Text } = Typography
 
 const { Option } = Select
 
@@ -22,8 +22,8 @@ function SshManager() {
 
   const addLog = (message) => {
     const timestamp = new Date().toLocaleString()
-    setLogs(prev => [...prev, { timestamp, message }])
-    console.log(`${timestamp}: ${message}`)
+    setLogs(prev => [ ...prev, { timestamp, message }])
+    console.log(`${ timestamp }: ${ message }`)
   }
 
   useEffect(() => {
@@ -35,7 +35,7 @@ function SshManager() {
       addLog('Loading SSH connections...')
       const result = await invoke('list_ssh_connections')
       setConnections(result)
-      addLog(`Loaded ${result.length} SSH connections`)
+      addLog(`Loaded ${ result.length } SSH connections`)
     } catch (error) {
       message.error('Failed to load connections: ' + error)
       addLog('Failed to load connections: ' + error)
@@ -44,7 +44,7 @@ function SshManager() {
 
   const handleAddConnection = async (values) => {
     try {
-      addLog(`Adding SSH connection: ${values.host}:${values.port}`)
+      addLog(`Adding SSH connection: ${ values.host }:${ values.port }`)
       await invoke('add_ssh_connection', {
         host: values.host,
         port: values.port,
@@ -63,7 +63,7 @@ function SshManager() {
 
   const handleConnect = async (id) => {
     try {
-      addLog(`Connecting to SSH connection: ${id}`)
+      addLog(`Connecting to SSH connection: ${ id }`)
       await invoke('connect_ssh', { id })
       message.success('Connected successfully')
       addLog('Connected successfully')
@@ -76,7 +76,7 @@ function SshManager() {
 
   const handleDisconnect = async (id) => {
     try {
-      addLog(`Disconnecting from SSH connection: ${id}`)
+      addLog(`Disconnecting from SSH connection: ${ id }`)
       await invoke('disconnect_ssh', { id })
       message.success('Disconnected successfully')
       addLog('Disconnected successfully')
@@ -94,7 +94,7 @@ function SshManager() {
     }
 
     try {
-      addLog(`Executing command: ${command} on ${currentConnection.host}:${currentConnection.port}`)
+      addLog(`Executing command: ${ command } on ${ currentConnection.host }:${ currentConnection.port }`)
       setIsLoading(true)
       const result = await invoke('execute_ssh_command', {
         id: currentConnection.id,
@@ -103,7 +103,7 @@ function SshManager() {
       setOutput(result)
       message.success('Command executed successfully')
       addLog('Command executed successfully')
-      addLog(`Command output: ${result}`)
+      addLog(`Command output: ${ result }`)
     } catch (error) {
       message.error('Failed to execute command: ' + error)
       setOutput(error)
@@ -120,7 +120,7 @@ function SshManager() {
     }
 
     try {
-      addLog(`Uploading file: ${values.localPath} to ${currentConnection.host}:${values.remotePath}`)
+      addLog(`Uploading file: ${ values.localPath } to ${ currentConnection.host }:${ values.remotePath }`)
       setIsLoading(true)
       setProgress(0)
       // 模拟上传进度
@@ -162,7 +162,7 @@ function SshManager() {
     }
 
     try {
-      addLog(`Downloading file: ${currentConnection.host}:${values.remotePath} to ${values.localPath}`)
+      addLog(`Downloading file: ${ currentConnection.host }:${ values.remotePath } to ${ values.localPath }`)
       setIsLoading(true)
       setProgress(0)
       // 模拟下载进度
