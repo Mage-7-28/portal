@@ -8,7 +8,7 @@ function App() {
   return (
     <ConfigProvider theme={ {
       token: {
-        colorPrimary: '#595f65',
+        colorPrimary: '#ec4773',
         borderRadius: 5,
         fontFamily: GlobalFontFamily
       },
