@@ -30,6 +30,8 @@
     "lodash-es": "^4.17.23",
     "pubsub-js": "^1.9.5",
     "react": "^19.1.0",
+    "react-dnd": "^16.0.1",
+    "react-dnd-html5-backend": "^16.0.1",
     "react-dom": "^19.1.0",
     "sass": "^1.98.0",
     "ssh2-sftp-client": "^12.1.0",
