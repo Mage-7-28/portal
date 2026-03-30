@@ -27,5 +27,12 @@ export default defineConfig(async () => ({
       // 3. tell Vite to ignore watching `src-tauri`
       ignored: ['**/src-tauri/**']
     }
+  },
+  // 4. 构建配置：移除 console 日志
+  build: {
+    minify: 'esbuild',
+    esbuild: {
+      drop: [ 'console', 'debugger' ]
+    }
   }
 }))
