@@ -143,23 +143,19 @@ pub fn run() {
                 let separator = PredefinedMenuItem::separator(app)?;
                 let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some("Cmd+Q"))?;
                 
-                let undo_item = MenuItem::with_id(app, "undo", "撤销", true, Some("Cmd+Z"))?;
-                let redo_item = MenuItem::with_id(app, "redo", "重做", true, Some("Cmd+Shift+Z"))?;
-                let copy_item = MenuItem::with_id(app, "copy", "复制", true, Some("Cmd+C"))?;
-                let paste_item = MenuItem::with_id(app, "paste", "粘贴", true, Some("Cmd+V"))?;
-                
                 // 创建子菜单
                 let file_submenu = Submenu::new(app, "文件", true)?;
                 file_submenu.append(&about_item)?;
                 file_submenu.append(&separator)?;
                 file_submenu.append(&quit_item)?;
                 
+                // 创建编辑子菜单，使用原生菜单项
                 let edit_submenu = Submenu::new(app, "编辑", true)?;
-                edit_submenu.append(&undo_item)?;
-                edit_submenu.append(&redo_item)?;
+                edit_submenu.append(&PredefinedMenuItem::undo(app, None)?)?;
+                edit_submenu.append(&PredefinedMenuItem::redo(app, None)?)?;
                 edit_submenu.append(&separator)?;
-                edit_submenu.append(&copy_item)?;
-                edit_submenu.append(&paste_item)?;
+                edit_submenu.append(&PredefinedMenuItem::copy(app, None)?)?;
+                edit_submenu.append(&PredefinedMenuItem::paste(app, None)?)?;
                 
                 // 创建主菜单
                 let menu = Menu::new(app)?;
@@ -194,22 +190,7 @@ pub fn run() {
                                     }
                                 });
                         }
-                        "undo" => {
-                            // 撤销操作
-                            println!("撤销操作");
-                        }
-                        "redo" => {
-                            // 重做操作
-                            println!("重做操作");
-                        }
-                        "copy" => {
-                            // 复制操作
-                            println!("复制操作");
-                        }
-                        "paste" => {
-                            // 粘贴操作
-                            println!("粘贴操作");
-                        }
+
                         _ => {}
                     }
                 });
