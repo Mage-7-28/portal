@@ -174,7 +174,12 @@ pub fn run() {
                     match event.id().as_ref() {
                         "about" => {
                             // 显示关于对话框
-                            println!("显示关于对话框");
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                            app.dialog()
+                                .message("        Portal 应用\n        版本: 0.1.0\n\n        一个现代化的跨平台桌面应用")
+                                .title("关于 Portal")
+                                .buttons(MessageDialogButtons::OkCustom("确定".to_string()))
+                                .show(|_| {});
                         }
                         "quit" => {
                             // 显示退出确认对话框
