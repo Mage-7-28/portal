@@ -2,6 +2,7 @@
 mod ssh;
 
 use std::path::Path;
+use tauri::Manager;
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -116,6 +117,7 @@ fn list_drives() -> Result<Vec<String>, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -131,6 +133,129 @@ pub fn run() {
             ssh::scp_upload,
             ssh::scp_download
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .setup(|app| {
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+                
+                // 创建菜单项
+                let about_item = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
+                let separator = PredefinedMenuItem::separator(app)?;
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some("Cmd+Q"))?;
+                
+                let undo_item = MenuItem::with_id(app, "undo", "撤销", true, Some("Cmd+Z"))?;
+                let redo_item = MenuItem::with_id(app, "redo", "重做", true, Some("Cmd+Shift+Z"))?;
+                let copy_item = MenuItem::with_id(app, "copy", "复制", true, Some("Cmd+C"))?;
+                let paste_item = MenuItem::with_id(app, "paste", "粘贴", true, Some("Cmd+V"))?;
+                
+                // 创建子菜单
+                let file_submenu = Submenu::new(app, "文件", true)?;
+                file_submenu.append(&about_item)?;
+                file_submenu.append(&separator)?;
+                file_submenu.append(&quit_item)?;
+                
+                let edit_submenu = Submenu::new(app, "编辑", true)?;
+                edit_submenu.append(&undo_item)?;
+                edit_submenu.append(&redo_item)?;
+                edit_submenu.append(&separator)?;
+                edit_submenu.append(&copy_item)?;
+                edit_submenu.append(&paste_item)?;
+                
+                // 创建主菜单
+                let menu = Menu::new(app)?;
+                menu.append(&file_submenu)?;
+                menu.append(&edit_submenu)?;
+                
+                // 设置应用菜单
+                app.set_menu(menu)?;
+                
+                // 绑定菜单事件
+                app.on_menu_event(|app, event| {
+                    match event.id().as_ref() {
+                        "about" => {
+                            // 显示关于对话框
+                            println!("显示关于对话框");
+                        }
+                        "quit" => {
+                            // 显示退出确认对话框
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                            app.dialog()
+                                .message("确定要退出应用吗？")
+                                .title("退出确认")
+                                .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
+                                .show(|confirmed| {
+                                    if confirmed {
+                                        std::process::exit(0);
+                                    }
+                                });
+                        }
+                        "undo" => {
+                            // 撤销操作
+                            println!("撤销操作");
+                        }
+                        "redo" => {
+                            // 重做操作
+                            println!("重做操作");
+                        }
+                        "copy" => {
+                            // 复制操作
+                            println!("复制操作");
+                        }
+                        "paste" => {
+                            // 粘贴操作
+                            println!("粘贴操作");
+                        }
+                        _ => {}
+                    }
+                });
+                
+                // 处理窗口关闭事件
+                if let Some(window) = app.get_webview_window("Portal") {
+                    let window_clone = window.clone();
+                    window.on_window_event(move |event| match event {
+                        tauri::WindowEvent::CloseRequested { api, .. } => {
+                            // 阻止窗口关闭
+                            api.prevent_close();
+                            
+                            // 显示退出确认对话框
+                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                            window_clone.dialog()
+                                .message("确定要退出应用吗？")
+                                .title("退出确认")
+                                .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
+                                .show(|confirmed| {
+                                    if confirmed {
+                                        std::process::exit(0);
+                                    }
+                                });
+                        }
+                        _ => {}
+                    });
+                }
+            }
+            Ok(())
+        })
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| match event {
+            tauri::RunEvent::ExitRequested { api, .. } => {
+                // 阻止默认退出行为
+                api.prevent_exit();
+                
+                // 显示退出确认对话框
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                app.dialog()
+                    .message("确定要退出应用吗？")
+                    .title("退出确认")
+                    .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
+                    .show(|confirmed| {
+                        if confirmed {
+                            // 强制退出应用
+                            std::process::exit(0);
+                        }
+                        // 点击取消时，什么都不做，窗口保持打开状态
+                    });
+            }
+            _ => {}
+        });
 }
