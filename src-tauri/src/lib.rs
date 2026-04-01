@@ -27,17 +27,17 @@ fn get_home_dir() -> Result<String, String> {
 #[tauri::command]
 fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
     let path = Path::new(path);
-    
+
     if !path.exists() {
         return Err("Path does not exist".to_string());
     }
-    
+
     if !path.is_dir() {
         return Err("Path is not a directory".to_string());
     }
-    
+
     let mut entries = Vec::new();
-    
+
     match std::fs::read_dir(path) {
         Ok(dir_entries) => {
             for entry in dir_entries {
@@ -49,7 +49,7 @@ fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
                     } else {
                         entry.metadata().map(|m| m.len()).unwrap_or(0)
                     };
-                    
+
                     entries.push(FileEntry {
                         name,
                         is_directory,
@@ -74,17 +74,17 @@ fn list_drives() -> Result<Vec<String>, String> {
     {
         use std::ffi::OsString;
         use std::os::windows::ffi::OsStringExt;
-        
+
         unsafe {
             let mut drives = Vec::new();
             let buffer_size = 256;
             let mut buffer: Vec<u16> = vec![0; buffer_size];
-            
+
             let len = windows_sys::Win32::Storage::FileSystem::GetLogicalDriveStringsW(
                 buffer_size as u32,
                 buffer.as_mut_ptr(),
             );
-            
+
             if len > 0 {
                 let mut i = 0;
                 while i < len as usize {
@@ -98,15 +98,15 @@ fn list_drives() -> Result<Vec<String>, String> {
                     i += 1;
                 }
             }
-            
+
             if drives.is_empty() {
                 drives.push("C:".to_string());
             }
-            
+
             Ok(drives)
         }
     }
-    
+
     #[cfg(not(target_os = "windows"))]
     {
         Ok(vec!["/".to_string()])
@@ -116,6 +116,7 @@ fn list_drives() -> Result<Vec<String>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())

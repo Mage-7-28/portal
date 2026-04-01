@@ -49,10 +49,7 @@ pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>
 }
 
 #[tauri::command]
-pub fn connect_ssh(
-    state: State<SshState>,
-    id: String,
-) -> Result<bool, String> {
+pub fn connect_ssh(state: State<SshState>, id: String) -> Result<bool, String> {
     let mut connections = state.connections.lock().unwrap();
     if let Some(connection) = connections.iter_mut().find(|c| c.id == id) {
         // 这里应该使用 ssh2 库来实现 SSH 连接
@@ -65,10 +62,7 @@ pub fn connect_ssh(
 }
 
 #[tauri::command]
-pub fn disconnect_ssh(
-    state: State<SshState>,
-    id: String,
-) -> Result<bool, String> {
+pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, String> {
     let mut connections = state.connections.lock().unwrap();
     if let Some(connection) = connections.iter_mut().find(|c| c.id == id) {
         connection.connected = false;
@@ -88,7 +82,10 @@ pub fn execute_ssh_command(
     if let Some(connection) = connections.iter().find(|c| c.id == id && c.connected) {
         // 使用系统命令来执行 SSH 命令
         let output = Command::new("ssh")
-            .arg(format!("{}@{}:{}", connection.username, connection.host, connection.port))
+            .arg(format!(
+                "{}@{}:{}",
+                connection.username, connection.host, connection.port
+            ))
             .arg(command)
             .output()
             .map_err(|e| e.to_string())?;
@@ -118,7 +115,10 @@ pub fn scp_upload(
         // 使用系统命令来执行 SCP 上传
         let output = Command::new("scp")
             .arg(local_path)
-            .arg(format!("{}@{}:{}", connection.username, connection.host, remote_path))
+            .arg(format!(
+                "{}@{}:{}",
+                connection.username, connection.host, remote_path
+            ))
             .output()
             .map_err(|e| e.to_string())?;
 
@@ -145,7 +145,10 @@ pub fn scp_download(
     if let Some(connection) = connections.iter().find(|c| c.id == id && c.connected) {
         // 使用系统命令来执行 SCP 下载
         let output = Command::new("scp")
-            .arg(format!("{}@{}:{}", connection.username, connection.host, remote_path))
+            .arg(format!(
+                "{}@{}:{}",
+                connection.username, connection.host, remote_path
+            ))
             .arg(local_path)
             .output()
             .map_err(|e| e.to_string())?;
