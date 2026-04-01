@@ -6,7 +6,8 @@
     "linux"
   ],
   "windows": [
-    "main"
+    "main",
+    "Portal"
   ],
   "permissions": [
     "global-shortcut:default"

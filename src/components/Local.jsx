@@ -190,7 +190,7 @@ function Local() {
       <div style={{ height: 'calc(100vh - 85px)', overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-            <Spin tip="加载中..." />
+            <Spin description="加载中..." />
           </div>
         ) : files.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
