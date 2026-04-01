@@ -7,6 +7,7 @@ import './style/index.css'
 import './style/fonts.css'
 import { GlobalFontFamily } from './utils/GlobalEnum.js'
 import { initStore } from './utils/storeUtils.js'
+import { initNotification } from './utils/notificationUtils.js'
 
 // 设置CSS变量
 document.documentElement.style.setProperty('--global-font-family', GlobalFontFamily)
@@ -16,6 +17,13 @@ initStore().then(() => {
   console.log('存储初始化成功')
 }).catch(error => {
   console.error('初始化存储失败:', error)
+})
+
+// 初始化通知
+initNotification().then(() => {
+  console.log('通知初始化成功')
+}).catch(error => {
+  console.error('初始化通知失败:', error)
 })
 
 // 渲染应用
