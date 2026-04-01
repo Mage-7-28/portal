@@ -1,4 +1,4 @@
-import { Store } from '@tauri-apps/plugin-store'
+import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
 
 /**
@@ -6,13 +6,27 @@ import { proxy, useSnapshot } from 'valtio'
  * 基于 Tauri Store 和 Valtio 实现
  */
 export class ReactiveStore {
-  constructor(storeName = 'store.bin') {
-    // 初始化 Tauri Store
-    this.store = new Store(storeName)
+  constructor(storePath = 'store.json') {
     // 初始化响应式状态
     this.state = proxy({})
+    // 存储路径
+    this.storePath = storePath
     // 标记是否已加载
     this.loaded = false
+    // Store 实例
+    this.store = null
+  }
+
+  /**
+   * 初始化 Store
+   */
+  async init() {
+    try {
+      this.store = await load(this.storePath, { autoSave: true })
+      console.log('Store 初始化成功')
+    } catch (error) {
+      console.error('Store 初始化失败:', error)
+    }
   }
 
   /**
@@ -20,6 +34,11 @@ export class ReactiveStore {
    */
   async load() {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       // 从 Store 中获取所有数据
       const keys = await this.store.keys()
       for (const key of keys) {
@@ -40,6 +59,11 @@ export class ReactiveStore {
    */
   async set(key, value) {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       // 更新响应式状态
       this.state[key] = value
       // 更新 Store
@@ -66,6 +90,11 @@ export class ReactiveStore {
    */
   async delete(key) {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       // 从响应式状态中删除
       delete this.state[key]
       // 从 Store 中删除
@@ -82,6 +111,11 @@ export class ReactiveStore {
    */
   async clear() {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       // 清空响应式状态
       Object.keys(this.state).forEach(key => {
         delete this.state[key]
@@ -103,6 +137,11 @@ export class ReactiveStore {
    */
   async save() {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       await this.store.save()
       console.log('存储保存成功')
     } catch (error) {
@@ -116,6 +155,11 @@ export class ReactiveStore {
    */
   async keys() {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       return await this.store.keys()
     } catch (error) {
       console.error('获取键列表失败:', error)
@@ -130,6 +174,11 @@ export class ReactiveStore {
    */
   async has(key) {
     try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+
       const keys = await this.store.keys()
       return keys.includes(key)
     } catch (error) {
