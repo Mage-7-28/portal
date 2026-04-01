@@ -19,7 +19,6 @@ function Local() {
         setLoading(true)
         // 获取用户主目录
         const userHomeDir = await getUserHomeDir()
-        console.log(userHomeDir, 11);
         setHomeDir(userHomeDir)
         setCurrentPath(userHomeDir)
 
