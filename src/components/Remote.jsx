@@ -354,19 +354,21 @@ function Remote() {
           padding: 0
         }}
       >
-        <div style={{ padding: '20px' }}>
+        <div style={{ padding: '24px' }}>
           <Form
             form={addForm}
             onFinish={handleAddConnection}
             layout="vertical"
           >
             {/* 连接基本信息 */}
-            <div style={{ marginBottom: '20px' }}>
+            <div style={{ marginBottom: '24px' }}>
               <h4 style={{ 
                 color: '#ffffff', 
-                marginBottom: '12px', 
+                marginBottom: '16px', 
                 fontSize: '14px', 
-                fontWeight: '600'
+                fontWeight: '600',
+                borderBottom: '1px solid #3E4148',
+                paddingBottom: '8px'
               }}>
                 连接基本信息
               </h4>
@@ -374,49 +376,30 @@ function Remote() {
                 name="name"
                 label="连接名称"
                 rules={[{ required: true, message: '请输入连接名称' }]}
-                style={{ marginBottom: '12px' }}
               >
-                <Input 
-                  placeholder="例如：我的服务器" 
-                  style={{
-                    backgroundColor: '#2B2D30',
-                    border: '1px solid #3E4148',
-                    color: '#ffffff',
-                    height: '36px',
-                    borderRadius: '4px',
-                    fontSize: '13px'
-                  }}
-                />
+                <Input placeholder="例如：我的服务器" />
               </Form.Item>
             </div>
 
             {/* 服务器信息 */}
-            <div style={{ marginBottom: '20px' }}>
+            <div style={{ marginBottom: '24px' }}>
               <h4 style={{ 
                 color: '#ffffff', 
-                marginBottom: '12px', 
+                marginBottom: '16px', 
                 fontSize: '14px', 
-                fontWeight: '600'
+                fontWeight: '600',
+                borderBottom: '1px solid #3E4148',
+                paddingBottom: '8px'
               }}>
                 服务器信息
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <Form.Item
                   name="host"
                   label="主机地址"
                   rules={[{ required: true, message: '请输入主机地址' }]}
                 >
-                  <Input 
-                    placeholder="例如：192.168.1.1" 
-                    style={{
-                      backgroundColor: '#2B2D30',
-                      border: '1px solid #3E4148',
-                      color: '#ffffff',
-                      height: '36px',
-                      borderRadius: '4px',
-                      fontSize: '13px'
-                    }}
-                  />
+                  <Input placeholder="例如：192.168.1.1" />
                 </Form.Item>
                 <Form.Item
                   name="port"
@@ -424,103 +407,51 @@ function Remote() {
                   initialValue={22}
                   rules={[{ required: true, message: '请输入端口' }]}
                 >
-                  <Input 
-                    type="number" 
-                    placeholder="22" 
-                    style={{
-                      backgroundColor: '#2B2D30',
-                      border: '1px solid #3E4148',
-                      color: '#ffffff',
-                      height: '36px',
-                      borderRadius: '4px',
-                      fontSize: '13px'
-                    }}
-                  />
+                  <Input type="number" placeholder="22" />
                 </Form.Item>
               </div>
             </div>
 
             {/* 认证信息 */}
-            <div style={{ marginBottom: '20px' }}>
+            <div style={{ marginBottom: '24px' }}>
               <h4 style={{ 
                 color: '#ffffff', 
-                marginBottom: '12px', 
+                marginBottom: '16px', 
                 fontSize: '14px', 
-                fontWeight: '600'
+                fontWeight: '600',
+                borderBottom: '1px solid #3E4148',
+                paddingBottom: '8px'
               }}>
                 认证信息
               </h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <Form.Item
                   name="username"
                   label="用户名"
                   rules={[{ required: true, message: '请输入用户名' }]}
                 >
-                  <Input 
-                    placeholder="例如：root" 
-                    style={{
-                      backgroundColor: '#2B2D30',
-                      border: '1px solid #3E4148',
-                      color: '#ffffff',
-                      height: '36px',
-                      borderRadius: '4px',
-                      fontSize: '13px'
-                    }}
-                  />
+                  <Input placeholder="例如：root" />
                 </Form.Item>
                 <Form.Item
                   name="password"
                   label="密码"
                   rules={[{ required: true, message: '请输入密码' }]}
                 >
-                  <Input.Password 
-                    placeholder="请输入密码" 
-                    style={{
-                      backgroundColor: '#2B2D30',
-                      border: '1px solid #3E4148',
-                      color: '#ffffff',
-                      height: '36px',
-                      borderRadius: '4px',
-                      fontSize: '13px'
-                    }}
-                  />
+                  <Input.Password placeholder="请输入密码" />
                 </Form.Item>
               </div>
             </div>
 
             {/* 操作按钮 */}
             <Form.Item style={{ marginBottom: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-                <Button 
-                  onClick={() => {
-                    setAddModalVisible(false)
-                    addForm.resetFields()
-                  }}
-                  style={{
-                    backgroundColor: '#2B2D30',
-                    border: '1px solid #3E4148',
-                    color: '#ffffff',
-                    height: '36px',
-                    minWidth: '70px',
-                    borderRadius: '4px',
-                    fontSize: '13px'
-                  }}
-                >
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px' }}>
+                <Button onClick={() => {
+                  setAddModalVisible(false)
+                  addForm.resetFields()
+                }}>
                   取消
                 </Button>
-                <Button 
-                  type="primary" 
-                  htmlType="submit"
-                  style={{
-                    backgroundColor: 'rgb(224, 82, 156)',
-                    border: '1px solid rgb(224, 82, 156)',
-                    color: '#ffffff',
-                    height: '36px',
-                    minWidth: '70px',
-                    borderRadius: '4px',
-                    fontSize: '13px'
-                  }}
-                >
+                <Button type="primary" htmlType="submit">
                   保存
                 </Button>
               </div>
