@@ -246,20 +246,12 @@ function Remote() {
 
   // 渲染连接列表视图（未连接状态）
   const renderConnectionList = () => (
-    <div style={{ padding: '16px', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h3 style={{ color: '#ffffff', margin: 0, fontSize: '16px', fontWeight: '600' }}>SSH 连接管理</h3>
+    <div style={{ padding: '12px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ color: '#ffffff', margin: 0, fontSize: '14px', fontWeight: '600' }}>SSH 连接管理</h3>
         <Button
           type="primary"
           icon={<PlusOutlined />}
-          size="small"
-          style={{
-            backgroundColor: 'rgb(224, 82, 156)',
-            border: '1px solid rgb(224, 82, 156)',
-            color: '#ffffff',
-            height: '32px',
-            fontSize: '12px'
-          }}
           onClick={() => setAddModalVisible(true)}
         >
           新建连接
@@ -360,18 +352,7 @@ function Remote() {
             onFinish={handleAddConnection}
             layout="vertical"
           >
-            {/* 连接基本信息 */}
             <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ 
-                color: '#ffffff', 
-                marginBottom: '16px', 
-                fontSize: '14px', 
-                fontWeight: '600',
-                borderBottom: '1px solid #3E4148',
-                paddingBottom: '8px'
-              }}>
-                连接基本信息
-              </h4>
               <Form.Item
                 name="name"
                 label="连接名称"
@@ -381,18 +362,7 @@ function Remote() {
               </Form.Item>
             </div>
 
-            {/* 服务器信息 */}
             <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ 
-                color: '#ffffff', 
-                marginBottom: '16px', 
-                fontSize: '14px', 
-                fontWeight: '600',
-                borderBottom: '1px solid #3E4148',
-                paddingBottom: '8px'
-              }}>
-                服务器信息
-              </h4>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <Form.Item
                   name="host"
@@ -412,18 +382,7 @@ function Remote() {
               </div>
             </div>
 
-            {/* 认证信息 */}
             <div style={{ marginBottom: '24px' }}>
-              <h4 style={{ 
-                color: '#ffffff', 
-                marginBottom: '16px', 
-                fontSize: '14px', 
-                fontWeight: '600',
-                borderBottom: '1px solid #3E4148',
-                paddingBottom: '8px'
-              }}>
-                认证信息
-              </h4>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
                 <Form.Item
                   name="username"
@@ -464,20 +423,18 @@ function Remote() {
 
   // 渲染文件浏览器视图（已连接状态）
   const renderFileBrowser = () => (
-    <div style={{ borderRadius: '8px', backgroundColor: '#101113', padding: 12, display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column' }}>
       {/* 地址栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
         <Button
           onClick={handleGoBack}
           icon={<UpOutlined />}
-          size="small"
           style={{
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             color: '#ffffff',
             borderTopRightRadius: 0,
-            borderBottomRightRadius: 0,
-            height: '32px'
+            borderBottomRightRadius: 0
           }}
         />
 
@@ -485,31 +442,26 @@ function Remote() {
           value={currentPath}
           onChange={handlePathChange}
           onKeyPress={handlePathSubmit}
-          size="small"
           style={{
             flex: 1,
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             borderLeft: 'none',
             borderRight: 'none',
-            color: '#ffffff',
-            height: '32px',
-            fontSize: '13px'
+            color: '#ffffff'
           }}
         />
 
         <Button
           onClick={handleRefresh}
           icon={<ReloadOutlined />}
-          size="small"
           style={{
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             borderLeft: 'none',
             color: '#ffffff',
             borderTopLeftRadius: 0,
-            borderBottomLeftRadius: 0,
-            height: '32px'
+            borderBottomLeftRadius: 0
           }}
         />
       </div>
@@ -519,37 +471,31 @@ function Remote() {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 12,
-        padding: '6px 10px',
+        marginBottom: 16,
+        padding: '8px 12px',
         backgroundColor: '#1E1E1E',
-        borderRadius: '4px',
-        fontSize: '12px'
+        borderRadius: '4px'
       }}>
-        <span style={{ color: '#4EC9B0', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           已连接: {currentConnection?.name} ({currentConnection?.host}:{currentConnection?.port})
         </span>
         <Button
           danger
-          size="small"
           icon={<DisconnectOutlined />}
-          style={{
-            fontSize: '11px',
-            height: '28px'
-          }}
           onClick={handleDisconnect}
         >
-          断开
+          断开连接
         </Button>
       </div>
 
       {/* 文件列表 */}
-      <div style={{ flex: 1, overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
+      <div style={{ height: 'calc(100vh - 135px)', overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '150px' }}>
-            <Spin size="small" description="加载中..." />
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
+            <Spin description="加载中..." />
           </div>
         ) : files.length === 0 ? (
-          <div style={{ padding: '30px', textAlign: 'center', color: '#888888', fontSize: '13px' }}>
+          <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
             该目录为空
           </div>
         ) : (
@@ -563,23 +509,23 @@ function Remote() {
                 style={{
                   cursor: entry.isDirectory ? 'pointer' : 'default',
                   borderBottom: '1px solid #1E1E1E',
-                  padding: '10px',
-                  fontSize: '13px'
+                  padding: '12px'
                 }}
+                hoverable
               >
                 <List.Item.Meta
                   avatar={
                     entry.isDirectory ?
-                      <FolderOutlined style={{ color: '#4EC9B0', fontSize: '14px' }} /> :
-                      <FileOutlined style={{ color: '#ffffff', fontSize: '14px' }} />
+                      <FolderOutlined style={{ color: '#4EC9B0' }} /> :
+                      <FileOutlined style={{ color: '#ffffff' }} />
                   }
                   title={
-                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff', fontSize: '13px' }}>
+                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
                       {entry.name}
                     </span>
                   }
                 />
-                <span style={{ color: '#888888', fontSize: '11px' }}>
+                <span style={{ color: '#888888', fontSize: 12 }}>
                   {entry.isDirectory ? '' : formatFileSize(entry.size)}
                 </span>
               </List.Item>
