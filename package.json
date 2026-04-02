@@ -2,6 +2,7 @@
   "name": "portal",
   "private": true,
   "version": "0.1.0",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -54,6 +55,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "license-checker": "^25.0.1",
     "vite": "^7.0.4"
   }
 }
