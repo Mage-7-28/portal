@@ -78,10 +78,25 @@ export class ReactiveStore {
   /**
    * 获取值
    * @param {string} key - 键
-   * @returns {any} 值
+   * @returns {Promise<any>} 值
    */
-  get(key) {
-    return this.state[key]
+  async get(key) {
+    try {
+      // 确保 Store 已初始化
+      if (!this.store) {
+        await this.init()
+      }
+      
+      // 从 Store 中获取最新值
+      const value = await this.store.get(key)
+      // 更新响应式状态
+      this.state[key] = value
+      return value
+    } catch (error) {
+      console.error('获取值失败:', error)
+      // 失败时返回内存中的值
+      return this.state[key]
+    }
   }
 
   /**

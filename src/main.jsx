@@ -12,26 +12,29 @@ import { initNotification } from './utils/notificationUtils.js'
 // 设置CSS变量
 document.documentElement.style.setProperty('--global-font-family', GlobalFontFamily)
 
-// 初始化 store
-initStore().then(() => {
-  console.log('存储初始化成功')
+// 初始化 store 和通知，然后渲染应用
+Promise.all([
+  initStore(),
+  initNotification()
+]).then(() => {
+  console.log('存储和通知初始化成功')
+  
+  // 渲染应用
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  )
 }).catch(error => {
-  console.error('初始化存储失败:', error)
+  console.error('初始化失败:', error)
+  
+  // 即使初始化失败也渲染应用
+  ReactDOM.createRoot(document.getElementById('root')).render(
+    <React.StrictMode>
+      <App />
+    </React.StrictMode>
+  )
 })
-
-// 初始化通知
-initNotification().then(() => {
-  console.log('通知初始化成功')
-}).catch(error => {
-  console.error('初始化通知失败:', error)
-})
-
-// 渲染应用
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    <App />
-  </React.StrictMode>
-)
 
 // 应用加载完成后隐藏加载动画
 window.addEventListener('load', () => {
