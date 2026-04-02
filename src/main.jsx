@@ -12,23 +12,16 @@ import { initNotification } from './utils/notificationUtils.js'
 // 设置CSS变量
 document.documentElement.style.setProperty('--global-font-family', GlobalFontFamily)
 
-// 初始化 store 和通知，然后渲染应用
+// 初始化 store 和通知
 Promise.all([
   initStore(),
   initNotification()
 ]).then(() => {
   console.log('存储和通知初始化成功')
-  
-  // 渲染应用
-  ReactDOM.createRoot(document.getElementById('root')).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>
-  )
 }).catch(error => {
   console.error('初始化失败:', error)
-  
-  // 即使初始化失败也渲染应用
+}).finally(() => {
+  // 无论初始化成功与否，都渲染应用
   ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
       <App />
