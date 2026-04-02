@@ -11,17 +11,17 @@ const SSH_CONNECTIONS_KEY = 'ssh_connections'
 
 function Remote() {
   // 连接相关状态
-  const [connections, setConnections] = useState([])
-  const [currentConnection, setCurrentConnection] = useState(null)
-  const [isConnected, setIsConnected] = useState(false)
-  
+  const [ connections, setConnections ] = useState([])
+  const [ currentConnection, setCurrentConnection ] = useState(null)
+  const [ isConnected, setIsConnected ] = useState(false)
+
   // 文件浏览相关状态
-  const [currentPath, setCurrentPath] = useState('/')
-  const [files, setFiles] = useState([])
-  const [loading, setLoading] = useState(false)
-  
+  const [ currentPath, setCurrentPath ] = useState('/')
+  const [ files, setFiles ] = useState([])
+  const [ loading, setLoading ] = useState(false)
+
   // 弹窗状态
-  const [addModalVisible, setAddModalVisible] = useState(false)
+  const [ addModalVisible, setAddModalVisible ] = useState(false)
   const [addForm] = Form.useForm()
 
   // 初始化：加载历史连接
@@ -55,18 +55,18 @@ function Remote() {
   const handleAddConnection = async (values) => {
     try {
       const newConnection = {
-        id: `${values.host}-${values.port}-${Date.now()}`,
+        id: `${ values.host }-${ values.port }-${ Date.now() }`,
         host: values.host,
         port: values.port,
         username: values.username,
         password: values.password,
-        name: values.name || `${values.username}@${values.host}:${values.port}`,
+        name: values.name || `${ values.username }@${ values.host }:${ values.port }`,
         createdAt: new Date().toISOString()
       }
-      
-      const newConnections = [...connections, newConnection]
+
+      const newConnections = [ ...connections, newConnection ]
       await saveConnections(newConnections)
-      
+
       message.success('连接添加成功')
       setAddModalVisible(false)
       addForm.resetFields()
@@ -92,7 +92,7 @@ function Remote() {
   const handleConnect = async (connection) => {
     try {
       setLoading(true)
-      
+
       // 先添加到后端 SSH 管理
       await invoke('add_ssh_connection', {
         host: connection.host,
@@ -100,18 +100,18 @@ function Remote() {
         username: connection.username,
         password: connection.password
       })
-      
+
       // 尝试连接
-      const connectionId = `${connection.host}-${connection.port}`
+      const connectionId = `${ connection.host }-${ connection.port }`
       await invoke('connect_ssh', { id: connectionId })
-      
+
       setCurrentConnection(connection)
       setIsConnected(true)
       setCurrentPath('/home/' + connection.username) // 默认进入用户主目录
-      
+
       // 加载远程目录内容
       await loadRemoteDirectory('/home/' + connection.username)
-      
+
       message.success('连接成功')
     } catch (error) {
       console.error('连接失败:', error)
@@ -125,10 +125,10 @@ function Remote() {
   const handleDisconnect = async () => {
     try {
       if (currentConnection) {
-        const connectionId = `${currentConnection.host}-${currentConnection.port}`
+        const connectionId = `${ currentConnection.host }-${ currentConnection.port }`
         await invoke('disconnect_ssh', { id: connectionId })
       }
-      
+
       setCurrentConnection(null)
       setIsConnected(false)
       setCurrentPath('/')
@@ -144,21 +144,21 @@ function Remote() {
   const loadRemoteDirectory = async (path) => {
     try {
       setLoading(true)
-      
+
       // 这里应该调用后端命令获取远程目录内容
       // 暂时模拟数据，后续需要实现远程文件列表获取
-      const connectionId = `${currentConnection.host}-${currentConnection.port}`
-      
+      const connectionId = `${ currentConnection.host }-${ currentConnection.port }`
+
       // 使用 SSH 命令获取目录内容
       const result = await invoke('execute_ssh_command', {
         id: connectionId,
-        command: `ls -la "${path}"`
+        command: `ls -la "${ path }"`
       })
-      
+
       // 解析 ls -la 的输出
       const lines = result.split('\n').filter(line => line.trim())
       const parsedFiles = []
-      
+
       for (let i = 1; i < lines.length; i++) { // 跳过第一行总计
         const line = lines[i]
         const parts = line.split(/\s+/)
@@ -166,7 +166,7 @@ function Remote() {
           const isDirectory = parts[0].startsWith('d')
           const name = parts.slice(8).join(' ')
           const size = isDirectory ? 0 : parseInt(parts[4]) || 0
-          
+
           if (name !== '.' && name !== '..') {
             parsedFiles.push({
               name,
@@ -176,14 +176,14 @@ function Remote() {
           }
         }
       }
-      
+
       // 排序：目录在前，文件在后
       parsedFiles.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1
         if (!a.isDirectory && b.isDirectory) return 1
         return a.name.localeCompare(b.name)
       })
-      
+
       setFiles(parsedFiles)
       setCurrentPath(path)
     } catch (error) {
@@ -225,7 +225,7 @@ function Remote() {
   // 处理返回上一级
   const handleGoBack = async () => {
     if (currentPath === '/') return
-    
+
     const lastSlashIndex = currentPath.lastIndexOf('/')
     if (lastSlashIndex > 0) {
       const parentPath = currentPath.substring(0, lastSlashIndex) || '/'
@@ -239,78 +239,101 @@ function Remote() {
   const formatFileSize = (bytes) => {
     if (bytes === 0) return ''
     const k = 1024
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB']
+    const sizes = [ 'B', 'KB', 'MB', 'GB', 'TB' ]
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
 
   // 渲染连接列表视图（未连接状态）
   const renderConnectionList = () => (
-    <div style={{ padding: '20px' }}>
-      <div style={{ marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <Title level={4} style={{ color: '#ffffff', margin: 0 }}>SSH 连接管理</Title>
-        <Button 
-          type="primary" 
+    <div style={{ padding: '16px', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ marginBottom: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <h3 style={{ color: '#ffffff', margin: 0, fontSize: '16px', fontWeight: '600' }}>SSH 连接管理</h3>
+        <Button
+          type="primary"
           icon={<PlusOutlined />}
+          size="small"
+          style={{
+            backgroundColor: 'rgb(224, 82, 156)',
+            border: '1px solid rgb(224, 82, 156)',
+            color: '#ffffff',
+            height: '32px',
+            fontSize: '12px'
+          }}
           onClick={() => setAddModalVisible(true)}
         >
           新建连接
         </Button>
       </div>
 
-      {connections.length === 0 ? (
-        <div style={{ 
-          padding: '60px 20px', 
-          textAlign: 'center', 
-          color: '#888888',
-          backgroundColor: '#0C0D0E',
-          borderRadius: '8px'
-        }}>
-          <p>暂无历史连接</p>
-          <p>点击上方"新建连接"按钮添加 SSH 连接</p>
-        </div>
-      ) : (
-        <List
-          itemLayout="horizontal"
-          dataSource={connections}
-          renderItem={item => (
-            <List.Item
-              style={{
-                backgroundColor: '#1E1E1E',
-                borderRadius: '8px',
-                marginBottom: '12px',
-                padding: '16px',
-                border: '1px solid #2B2D30'
-              }}
-              actions={[
-                <Button 
-                  type="primary" 
-                  onClick={() => handleConnect(item)}
-                  loading={loading}
-                >
-                  连接
-                </Button>,
-                <Button 
-                  danger 
-                  icon={<DeleteOutlined />}
-                  onClick={() => handleDeleteConnection(item.id)}
-                >
-                  删除
-                </Button>
-              ]}
-            >
-              <List.Item.Meta
-                title={<span style={{ color: '#ffffff' }}>{item.name}</span>}
-                description={
-                  <span style={{ color: '#888888' }}>
-                    {item.host}:{item.port} ({item.username})
-                  </span>
-                }
-              />
-            </List.Item>
-          )}
-        />
-      )}
+      <div style={{ flex: 1, overflow: 'auto' }}>
+        {connections.length === 0 ? (
+          <div style={{
+            padding: '40px 20px',
+            textAlign: 'center',
+            color: '#888888',
+            backgroundColor: '#0C0D0E',
+            borderRadius: '8px',
+            marginTop: '20px'
+          }}>
+            <p>暂无历史连接</p>
+            <p style={{ fontSize: '12px', marginTop: '8px' }}>点击上方"新建连接"按钮添加 SSH 连接</p>
+          </div>
+        ) : (
+          <List
+            itemLayout="horizontal"
+            dataSource={connections}
+            style={{ maxHeight: '100%' }}
+            renderItem={item => (
+              <List.Item
+                style={{
+                  backgroundColor: '#1E1E1E',
+                  borderRadius: '8px',
+                  marginBottom: '10px',
+                  padding: '12px',
+                  border: '1px solid #2B2D30'
+                }}
+                actions={[
+                  <Button
+                    type="primary"
+                    size="small"
+                    style={{
+                      backgroundColor: 'rgb(224, 82, 156)',
+                      border: '1px solid rgb(224, 82, 156)',
+                      color: '#ffffff',
+                      fontSize: '12px'
+                    }}
+                    onClick={() => handleConnect(item)}
+                    loading={loading}
+                  >
+                    连接
+                  </Button>,
+                  <Button
+                    danger
+                    size="small"
+                    icon={<DeleteOutlined />}
+                    style={{
+                      fontSize: '12px'
+                    }}
+                    onClick={() => handleDeleteConnection(item.id)}
+                  >
+                    删除
+                  </Button>
+                ]}
+              >
+                <List.Item.Meta
+                  title={<span style={{ color: '#ffffff', fontSize: '14px' }}>{item.name}</span>}
+                  description={
+                    <span style={{ color: '#888888', fontSize: '12px' }}>
+                      {item.host}:{item.port} ({item.username})
+                    </span>
+                  }
+                />
+              </List.Item>
+            )}
+          />
+        )}
+      </div>
 
       {/* 添加连接弹窗 */}
       <Modal
@@ -320,81 +343,210 @@ function Remote() {
           setAddModalVisible(false)
           addForm.resetFields()
         }}
+        centered={true}
         footer={null}
+        width={500}
+        style={{
+          backgroundColor: '#101113',
+          borderRadius: '8px'
+        }}
+        bodyStyle={{
+          padding: 0
+        }}
       >
-        <Form
-          form={addForm}
-          onFinish={handleAddConnection}
-          layout="vertical"
-        >
-          <Form.Item
-            name="name"
-            label="连接名称"
-            rules={[{ required: true, message: '请输入连接名称' }]}
+        <div style={{ padding: '20px' }}>
+          <Form
+            form={addForm}
+            onFinish={handleAddConnection}
+            layout="vertical"
           >
-            <Input placeholder="例如：我的服务器" />
-          </Form.Item>
-          <Form.Item
-            name="host"
-            label="主机地址"
-            rules={[{ required: true, message: '请输入主机地址' }]}
-          >
-            <Input placeholder="例如：192.168.1.1 或 example.com" />
-          </Form.Item>
-          <Form.Item
-            name="port"
-            label="端口"
-            initialValue={22}
-            rules={[{ required: true, message: '请输入端口' }]}
-          >
-            <Input type="number" placeholder="默认 22" />
-          </Form.Item>
-          <Form.Item
-            name="username"
-            label="用户名"
-            rules={[{ required: true, message: '请输入用户名' }]}
-          >
-            <Input placeholder="例如：root" />
-          </Form.Item>
-          <Form.Item
-            name="password"
-            label="密码"
-            rules={[{ required: true, message: '请输入密码' }]}
-          >
-            <Input.Password placeholder="请输入密码" />
-          </Form.Item>
-          <Form.Item>
-            <Space>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-              <Button onClick={() => {
-                setAddModalVisible(false)
-                addForm.resetFields()
+            {/* 连接基本信息 */}
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ 
+                color: '#ffffff', 
+                marginBottom: '12px', 
+                fontSize: '14px', 
+                fontWeight: '600'
               }}>
-                取消
-              </Button>
-            </Space>
-          </Form.Item>
-        </Form>
+                连接基本信息
+              </h4>
+              <Form.Item
+                name="name"
+                label="连接名称"
+                rules={[{ required: true, message: '请输入连接名称' }]}
+                style={{ marginBottom: '12px' }}
+              >
+                <Input 
+                  placeholder="例如：我的服务器" 
+                  style={{
+                    backgroundColor: '#2B2D30',
+                    border: '1px solid #3E4148',
+                    color: '#ffffff',
+                    height: '36px',
+                    borderRadius: '4px',
+                    fontSize: '13px'
+                  }}
+                />
+              </Form.Item>
+            </div>
+
+            {/* 服务器信息 */}
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ 
+                color: '#ffffff', 
+                marginBottom: '12px', 
+                fontSize: '14px', 
+                fontWeight: '600'
+              }}>
+                服务器信息
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <Form.Item
+                  name="host"
+                  label="主机地址"
+                  rules={[{ required: true, message: '请输入主机地址' }]}
+                >
+                  <Input 
+                    placeholder="例如：192.168.1.1" 
+                    style={{
+                      backgroundColor: '#2B2D30',
+                      border: '1px solid #3E4148',
+                      color: '#ffffff',
+                      height: '36px',
+                      borderRadius: '4px',
+                      fontSize: '13px'
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="port"
+                  label="端口"
+                  initialValue={22}
+                  rules={[{ required: true, message: '请输入端口' }]}
+                >
+                  <Input 
+                    type="number" 
+                    placeholder="22" 
+                    style={{
+                      backgroundColor: '#2B2D30',
+                      border: '1px solid #3E4148',
+                      color: '#ffffff',
+                      height: '36px',
+                      borderRadius: '4px',
+                      fontSize: '13px'
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+
+            {/* 认证信息 */}
+            <div style={{ marginBottom: '20px' }}>
+              <h4 style={{ 
+                color: '#ffffff', 
+                marginBottom: '12px', 
+                fontSize: '14px', 
+                fontWeight: '600'
+              }}>
+                认证信息
+              </h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '12px' }}>
+                <Form.Item
+                  name="username"
+                  label="用户名"
+                  rules={[{ required: true, message: '请输入用户名' }]}
+                >
+                  <Input 
+                    placeholder="例如：root" 
+                    style={{
+                      backgroundColor: '#2B2D30',
+                      border: '1px solid #3E4148',
+                      color: '#ffffff',
+                      height: '36px',
+                      borderRadius: '4px',
+                      fontSize: '13px'
+                    }}
+                  />
+                </Form.Item>
+                <Form.Item
+                  name="password"
+                  label="密码"
+                  rules={[{ required: true, message: '请输入密码' }]}
+                >
+                  <Input.Password 
+                    placeholder="请输入密码" 
+                    style={{
+                      backgroundColor: '#2B2D30',
+                      border: '1px solid #3E4148',
+                      color: '#ffffff',
+                      height: '36px',
+                      borderRadius: '4px',
+                      fontSize: '13px'
+                    }}
+                  />
+                </Form.Item>
+              </div>
+            </div>
+
+            {/* 操作按钮 */}
+            <Form.Item style={{ marginBottom: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+                <Button 
+                  onClick={() => {
+                    setAddModalVisible(false)
+                    addForm.resetFields()
+                  }}
+                  style={{
+                    backgroundColor: '#2B2D30',
+                    border: '1px solid #3E4148',
+                    color: '#ffffff',
+                    height: '36px',
+                    minWidth: '70px',
+                    borderRadius: '4px',
+                    fontSize: '13px'
+                  }}
+                >
+                  取消
+                </Button>
+                <Button 
+                  type="primary" 
+                  htmlType="submit"
+                  style={{
+                    backgroundColor: 'rgb(224, 82, 156)',
+                    border: '1px solid rgb(224, 82, 156)',
+                    color: '#ffffff',
+                    height: '36px',
+                    minWidth: '70px',
+                    borderRadius: '4px',
+                    fontSize: '13px'
+                  }}
+                >
+                  保存
+                </Button>
+              </div>
+            </Form.Item>
+          </Form>
+        </div>
       </Modal>
     </div>
   )
 
   // 渲染文件浏览器视图（已连接状态）
   const renderFileBrowser = () => (
-    <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <div style={{ borderRadius: '8px', backgroundColor: '#101113', padding: 12, display: 'flex', flexDirection: 'column', height: '100%' }}>
       {/* 地址栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
         <Button
           onClick={handleGoBack}
           icon={<UpOutlined />}
+          size="small"
           style={{
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             color: '#ffffff',
             borderTopRightRadius: 0,
-            borderBottomRightRadius: 0
+            borderBottomRightRadius: 0,
+            height: '32px'
           }}
         />
 
@@ -402,61 +554,71 @@ function Remote() {
           value={currentPath}
           onChange={handlePathChange}
           onKeyPress={handlePathSubmit}
+          size="small"
           style={{
             flex: 1,
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             borderLeft: 'none',
             borderRight: 'none',
-            color: '#ffffff'
+            color: '#ffffff',
+            height: '32px',
+            fontSize: '13px'
           }}
         />
 
         <Button
           onClick={handleRefresh}
           icon={<ReloadOutlined />}
+          size="small"
           style={{
             backgroundColor: '#2B2D30',
             border: '1px solid #3E4148',
             borderLeft: 'none',
             color: '#ffffff',
             borderTopLeftRadius: 0,
-            borderBottomLeftRadius: 0
+            borderBottomLeftRadius: 0,
+            height: '32px'
           }}
         />
       </div>
 
       {/* 连接信息栏 */}
-      <div style={{ 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <div style={{
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 16,
-        padding: '8px 12px',
+        marginBottom: 12,
+        padding: '6px 10px',
         backgroundColor: '#1E1E1E',
-        borderRadius: '4px'
+        borderRadius: '4px',
+        fontSize: '12px'
       }}>
-        <span style={{ color: '#4EC9B0' }}>
+        <span style={{ color: '#4EC9B0', fontSize: '12px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           已连接: {currentConnection?.name} ({currentConnection?.host}:{currentConnection?.port})
         </span>
-        <Button 
-          danger 
+        <Button
+          danger
           size="small"
           icon={<DisconnectOutlined />}
+          style={{
+            fontSize: '11px',
+            height: '28px'
+          }}
           onClick={handleDisconnect}
         >
-          断开连接
+          断开
         </Button>
       </div>
 
       {/* 文件列表 */}
       <div style={{ flex: 1, overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
         {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-            <Spin description="加载中..." />
+          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '150px' }}>
+            <Spin size="small" description="加载中..." />
           </div>
         ) : files.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
+          <div style={{ padding: '30px', textAlign: 'center', color: '#888888', fontSize: '13px' }}>
             该目录为空
           </div>
         ) : (
@@ -470,22 +632,23 @@ function Remote() {
                 style={{
                   cursor: entry.isDirectory ? 'pointer' : 'default',
                   borderBottom: '1px solid #1E1E1E',
-                  padding: '12px'
+                  padding: '10px',
+                  fontSize: '13px'
                 }}
               >
                 <List.Item.Meta
                   avatar={
                     entry.isDirectory ?
-                      <FolderOutlined style={{ color: '#4EC9B0' }} /> :
-                      <FileOutlined style={{ color: '#ffffff' }} />
+                      <FolderOutlined style={{ color: '#4EC9B0', fontSize: '14px' }} /> :
+                      <FileOutlined style={{ color: '#ffffff', fontSize: '14px' }} />
                   }
                   title={
-                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
+                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff', fontSize: '13px' }}>
                       {entry.name}
                     </span>
                   }
                 />
-                <span style={{ color: '#888888', fontSize: 12 }}>
+                <span style={{ color: '#888888', fontSize: '11px' }}>
                   {entry.isDirectory ? '' : formatFileSize(entry.size)}
                 </span>
               </List.Item>
