@@ -129,13 +129,16 @@ pub fn run() {
             read_directory,
             get_platform,
             list_drives,
+            ssh::test_sftp_connection,
             ssh::add_ssh_connection,
             ssh::list_ssh_connections,
             ssh::connect_ssh,
             ssh::disconnect_ssh,
             ssh::execute_ssh_command,
             ssh::scp_upload,
-            ssh::scp_download
+            ssh::scp_download,
+            ssh::list_sftp_directory,
+            ssh::remove_ssh_connection
         ])
         .setup(|app| {
             #[cfg(desktop)]

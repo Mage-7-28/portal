@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react'
-import { Input, Button, Dropdown, List, Spin, Typography, Modal, Form, message, Space } from 'antd'
-import { UpOutlined, DownOutlined, ReloadOutlined, FolderOutlined, FileOutlined, PlusOutlined, DeleteOutlined, DisconnectOutlined } from '@ant-design/icons'
-import { invoke } from '@tauri-apps/api/core'
+import { Input, Button, Dropdown, List, Spin, Typography, Modal, Form, Space } from 'antd'
+import { UpOutlined, DownOutlined, ReloadOutlined, FolderOutlined, FileOutlined, PlusOutlined, DeleteOutlined, DisconnectOutlined, CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
 import { store } from '../utils/storeUtils'
+import sftpManager from '../utils/sftpUtils'
+import toast from 'react-hot-toast'
+import { msgBoxStyle } from '../style/LayoutStyle.js'
 
 const { Title } = Typography
 
@@ -14,6 +16,7 @@ function Remote() {
   const [ connections, setConnections ] = useState([])
   const [ currentConnection, setCurrentConnection ] = useState(null)
   const [ isConnected, setIsConnected ] = useState(false)
+  const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
 
   // 文件浏览相关状态
   const [ currentPath, setCurrentPath ] = useState('/')
@@ -24,6 +27,10 @@ function Remote() {
   const [ addModalVisible, setAddModalVisible ] = useState(false)
   const [addForm] = Form.useForm()
 
+  // 测试连接状态
+  const [ testing, setTesting ] = useState(false)
+  const [ testResult, setTestResult ] = useState(null)
+
   // 初始化：加载历史连接
   useEffect(() => {
     loadConnections()
@@ -33,21 +40,29 @@ function Remote() {
   const loadConnections = async () => {
     try {
       const savedConnections = await store.get(SSH_CONNECTIONS_KEY) || []
+      // 按创建时间排序，最新的在前面
+      savedConnections.sort((a, b) => {
+        return new Date(b.createdAt) - new Date(a.createdAt)
+      })
       setConnections(savedConnections)
     } catch (error) {
       console.error('加载连接列表失败:', error)
-      message.error('加载连接列表失败')
+      toast.error('加载连接列表失败！', { id: 'msgBoxGlobal', style: msgBoxStyle })
     }
   }
 
   // 保存连接列表到 store
   const saveConnections = async (newConnections) => {
     try {
+      // 按创建时间排序，最新的在前面
+      newConnections.sort((a, b) => {
+        return new Date(b.createdAt) - new Date(a.createdAt)
+      })
       await store.set(SSH_CONNECTIONS_KEY, newConnections)
       setConnections(newConnections)
     } catch (error) {
       console.error('保存连接列表失败:', error)
-      message.error('保存连接列表失败')
+      toast.error('保存连接列表失败！', { id: 'msgBoxGlobal', style: msgBoxStyle })
     }
   }
 
@@ -55,7 +70,7 @@ function Remote() {
   const handleAddConnection = async (values) => {
     try {
       const newConnection = {
-        id: `${ values.host }-${ values.port }-${ Date.now() }`,
+        id: `${ values.host }-${ values.port }-${ values.username }-${ Date.now() }`,
         host: values.host,
         port: values.port,
         username: values.username,
@@ -64,27 +79,67 @@ function Remote() {
         createdAt: new Date().toISOString()
       }
 
-      const newConnections = [ ...connections, newConnection ]
+      const newConnections = [ newConnection, ...connections ]
       await saveConnections(newConnections)
 
-      message.success('连接添加成功')
+      toast.success('连接添加成功！', { id: 'msgBoxGlobal', style: msgBoxStyle })
       setAddModalVisible(false)
       addForm.resetFields()
+      setTestResult(null)
     } catch (error) {
       console.error('添加连接失败:', error)
-      message.error('添加连接失败: ' + error)
+      toast.error(`添加连接失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    }
+  }
+
+  // 测试连接
+  const handleTestConnection = async () => {
+    try {
+      const values = await addForm.validateFields()
+      setTesting(true)
+      setTestResult(null)
+
+      const result = await sftpManager.testConnection({
+        host: values.host,
+        port: parseInt(values.port),
+        username: values.username,
+        password: values.password
+      })
+
+      setTestResult(result)
+
+      if (result.success) {
+        toast.success('连接测试成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      } else {
+        toast.error(`连接测试失败: ${result.error}`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      }
+    } catch (error) {
+      console.error('测试连接失败:', error)
+      const result = {
+        success: false,
+        error: error.message || '测试连接失败'
+      }
+      setTestResult(result)
+      toast.error(`测试连接失败: ${ result.error }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } finally {
+      setTesting(false)
     }
   }
 
   // 删除连接
   const handleDeleteConnection = async (connectionId) => {
     try {
+      // 从前端状态中删除
       const newConnections = connections.filter(c => c.id !== connectionId)
       await saveConnections(newConnections)
-      message.success('连接删除成功')
+
+      // 从后端删除
+      await sftpManager.disconnect(connectionId)
+
+      toast.success('连接删除成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (error) {
       console.error('删除连接失败:', error)
-      message.error('删除连接失败')
+      toast.error('删除连接失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
     }
   }
 
@@ -93,29 +148,37 @@ function Remote() {
     try {
       setLoading(true)
 
-      // 先添加到后端 SSH 管理
-      await invoke('add_ssh_connection', {
+      // 创建连接
+      const connectionId = await sftpManager.createConnection({
         host: connection.host,
         port: connection.port,
         username: connection.username,
         password: connection.password
       })
 
-      // 尝试连接
-      const connectionId = `${ connection.host }-${ connection.port }`
-      await invoke('connect_ssh', { id: connectionId })
+      // 连接到服务器
+      await sftpManager.connect(connectionId)
 
+      // 更新状态
       setCurrentConnection(connection)
+      setCurrentConnectionId(connectionId)
       setIsConnected(true)
       setCurrentPath('/home/' + connection.username) // 默认进入用户主目录
 
-      // 加载远程目录内容
-      await loadRemoteDirectory('/home/' + connection.username)
+      // 等待状态更新后再加载目录
+      setTimeout(async () => {
+        try {
+          await loadRemoteDirectory('/home/' + connection.username, connectionId)
+        } catch (error) {
+          console.error('加载远程目录失败:', error)
+          toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        }
+      }, 100)
 
-      message.success('连接成功')
+      toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (error) {
       console.error('连接失败:', error)
-      message.error('连接失败: ' + error)
+      toast.error(`连接失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
     } finally {
       setLoading(false)
     }
@@ -124,71 +187,40 @@ function Remote() {
   // 断开连接
   const handleDisconnect = async () => {
     try {
-      if (currentConnection) {
-        const connectionId = `${ currentConnection.host }-${ currentConnection.port }`
-        await invoke('disconnect_ssh', { id: connectionId })
+      if (currentConnectionId) {
+        await sftpManager.disconnect(currentConnectionId)
       }
 
       setCurrentConnection(null)
+      setCurrentConnectionId(null)
       setIsConnected(false)
       setCurrentPath('/')
       setFiles([])
-      message.success('已断开连接')
+      toast.success('已断开连接', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (error) {
       console.error('断开连接失败:', error)
-      message.error('断开连接失败')
+      toast.error('断开连接失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
     }
   }
 
   // 加载远程目录内容
-  const loadRemoteDirectory = async (path) => {
+  const loadRemoteDirectory = async (path, connId = currentConnectionId) => {
     try {
       setLoading(true)
 
-      // 这里应该调用后端命令获取远程目录内容
-      // 暂时模拟数据，后续需要实现远程文件列表获取
-      const connectionId = `${ currentConnection.host }-${ currentConnection.port }`
-
-      // 使用 SSH 命令获取目录内容
-      const result = await invoke('execute_ssh_command', {
-        id: connectionId,
-        command: `ls -la "${ path }"`
-      })
-
-      // 解析 ls -la 的输出
-      const lines = result.split('\n').filter(line => line.trim())
-      const parsedFiles = []
-
-      for (let i = 1; i < lines.length; i++) { // 跳过第一行总计
-        const line = lines[i]
-        const parts = line.split(/\s+/)
-        if (parts.length >= 9) {
-          const isDirectory = parts[0].startsWith('d')
-          const name = parts.slice(8).join(' ')
-          const size = isDirectory ? 0 : parseInt(parts[4]) || 0
-
-          if (name !== '.' && name !== '..') {
-            parsedFiles.push({
-              name,
-              isDirectory,
-              size
-            })
-          }
-        }
+      // 检查连接状态
+      if (!connId) {
+        throw new Error('未连接到服务器')
       }
 
-      // 排序：目录在前，文件在后
-      parsedFiles.sort((a, b) => {
-        if (a.isDirectory && !b.isDirectory) return -1
-        if (!a.isDirectory && b.isDirectory) return 1
-        return a.name.localeCompare(b.name)
-      })
+      // 使用SFTP工具类获取目录内容
+      const files = await sftpManager.listRemoteDirectory(connId, path)
 
-      setFiles(parsedFiles)
+      setFiles(files)
       setCurrentPath(path)
     } catch (error) {
       console.error('加载远程目录失败:', error)
-      message.error('加载远程目录失败: ' + error)
+      toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
       setFiles([])
     } finally {
       setLoading(false)
@@ -202,19 +234,21 @@ function Remote() {
 
   // 处理地址栏回车
   const handlePathSubmit = async (e) => {
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && currentConnectionId) {
       await loadRemoteDirectory(currentPath)
     }
   }
 
   // 处理刷新
   const handleRefresh = async () => {
-    await loadRemoteDirectory(currentPath)
+    if (currentConnectionId) {
+      await loadRemoteDirectory(currentPath)
+    }
   }
 
   // 处理文件/目录点击
   const handleItemClick = async (entry) => {
-    if (entry.isDirectory) {
+    if (entry.isDirectory && currentConnectionId) {
       const newPath = currentPath.endsWith('/')
         ? currentPath + entry.name
         : currentPath + '/' + entry.name
@@ -224,7 +258,7 @@ function Remote() {
 
   // 处理返回上一级
   const handleGoBack = async () => {
-    if (currentPath === '/') return
+    if (currentPath === '/' || !currentConnectionId) return
 
     const lastSlashIndex = currentPath.lastIndexOf('/')
     if (lastSlashIndex > 0) {
@@ -334,6 +368,7 @@ function Remote() {
         onCancel={() => {
           setAddModalVisible(false)
           addForm.resetFields()
+          setTestResult(null)
         }}
         centered={true}
         footer={null}
@@ -403,18 +438,49 @@ function Remote() {
 
             {/* 操作按钮 */}
             <Form.Item style={{ marginBottom: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '16px' }}>
-                <Button onClick={() => {
-                  setAddModalVisible(false)
-                  addForm.resetFields()
-                }}>
-                  取消
-                </Button>
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
+                <div style={{ display: 'flex', gap: '16px' }}>
+                  <Button onClick={() => {
+                    setAddModalVisible(false)
+                    addForm.resetFields()
+                    setTestResult(null)
+                  }}>
+                    取消
+                  </Button>
+                  <Button
+                    onClick={handleTestConnection}
+                    loading={testing}
+                    icon={testResult ? (testResult.success ? <CheckCircleOutlined /> : <CloseCircleOutlined />) : null}
+                    style={{
+                      borderColor: testResult ? (testResult.success ? '#52c41a' : '#ff4d4f') : undefined,
+                      color: testResult ? (testResult.success ? '#52c41a' : '#ff4d4f') : undefined
+                    }}
+                  >
+                    {testing ? '测试中...' : '测试连接'}
+                  </Button>
+                </div>
                 <Button type="primary" htmlType="submit">
                   保存
                 </Button>
               </div>
             </Form.Item>
+
+            {/* 测试结果提示 */}
+            {testResult && (
+              <div style={{
+                marginTop: '16px',
+                padding: '12px',
+                borderRadius: '4px',
+                backgroundColor: testResult.success ? 'rgba(82, 196, 26, 0.1)' : 'rgba(255, 77, 79, 0.1)',
+                border: `1px solid ${ testResult.success ? '#52c41a' : '#ff4d4f' }`,
+                color: testResult.success ? '#52c41a' : '#ff4d4f'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {testResult.success ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
+                  <span>{testResult.success ? '连接测试成功' : `连接失败: ${ testResult.error }`}</span>
+                </div>
+              </div>
+            )}
           </Form>
         </div>
       </Modal>
@@ -477,7 +543,7 @@ function Remote() {
         borderRadius: '4px'
       }}>
         <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          已连接: {currentConnection?.name} ({currentConnection?.host}:{currentConnection?.port})
+          已连接: {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
         </span>
         <Button
           danger
@@ -536,7 +602,7 @@ function Remote() {
     </div>
   )
 
-  return isConnected ? renderFileBrowser() : renderConnectionList()
+  return isConnected && currentConnection ? renderFileBrowser() : renderConnectionList()
 }
 
 export default Remote

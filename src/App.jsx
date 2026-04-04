@@ -1,7 +1,7 @@
 import { Col, ConfigProvider, Row, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { GlobalFontFamily } from './utils/GlobalEnum.js'
-import SshManager from './components/SshManager'
+import { Toaster } from 'react-hot-toast'
 import Local from './components/Local'
 import Remote from './components/Remote'
 
@@ -33,6 +33,7 @@ function App() {
           <Remote />
         </Col>
       </Row>
+      <Toaster />
     </ConfigProvider>
   )
 }
