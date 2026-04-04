@@ -97,8 +97,15 @@ pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>
 pub fn connect_ssh(state: State<SshState>, id: String) -> Result<bool, String> {
     let mut connections = state.connections.lock().unwrap();
     if let Some(connection) = connections.iter_mut().find(|c| c.id == id) {
+        let timeout_duration = Duration::from_millis(30000);
+        
         let tcp = TcpStream::connect(format!("{}:{}", connection.host, connection.port))
             .map_err(|e| format!("无法连接到服务器: {}", e))?;
+        
+        tcp.set_read_timeout(Some(timeout_duration))
+            .map_err(|e| format!("设置读取超时失败: {}", e))?;
+        tcp.set_write_timeout(Some(timeout_duration))
+            .map_err(|e| format!("设置写入超时失败: {}", e))?;
         
         let mut sess = Session::new()
             .map_err(|e| format!("创建SSH会话失败: {}", e))?;

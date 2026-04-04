@@ -111,7 +111,7 @@ function Remote() {
       if (result.success) {
         toast.success('连接测试成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
       } else {
-        toast.error(`连接测试失败: ${result.error}`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        toast.error(`连接测试失败: ${ result.error }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
       }
     } catch (error) {
       console.error('测试连接失败:', error)
@@ -129,12 +129,17 @@ function Remote() {
   // 删除连接
   const handleDeleteConnection = async (connectionId) => {
     try {
+      // 尝试从后端删除
+      try {
+        await sftpManager.disconnect(connectionId)
+      } catch (error) {
+        // 如果后端删除失败（例如连接不存在），仍然继续从前端删除
+        console.warn('后端删除连接失败，继续从前端删除:', error)
+      }
+
       // 从前端状态中删除
       const newConnections = connections.filter(c => c.id !== connectionId)
       await saveConnections(newConnections)
-
-      // 从后端删除
-      await sftpManager.disconnect(connectionId)
 
       toast.success('连接删除成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (error) {
@@ -284,10 +289,12 @@ function Remote() {
   const handleItemClick = async (entry) => {
     if (entry.isDirectory && currentConnectionId) {
       setLoading(true)
-      const newPath = currentPath.endsWith('/')
-        ? currentPath + entry.name
-        : currentPath + '/' + entry.name
-      await loadRemoteDirectory(newPath)
+      setTimeout(async () => {
+        const newPath = currentPath.endsWith('/')
+          ? currentPath + entry.name
+          : currentPath + '/' + entry.name
+        await loadRemoteDirectory(newPath)
+      }, 100)
     }
   }
 
