@@ -246,9 +246,44 @@ function Remote() {
     }
   }
 
+  // 构建下拉菜单
+  const menuItems = [
+    // 添加根目录选项
+    {
+      key: 'root',
+      label: (
+        <div key="root" onClick={() => {
+          setLoading(true)
+          loadRemoteDirectory('/')
+        }}>
+          / (根目录)
+        </div>
+      )
+    },
+    // 添加分隔线
+    {
+      key: 'divider',
+      type: 'divider'
+    },
+    // 添加用户主目录选项
+    {
+      key: 'home',
+      label: (
+        <div key="home" onClick={() => {
+          const homePath = '/home/' + (currentConnection?.username || '')
+          setLoading(true)
+          loadRemoteDirectory(homePath)
+        }}>
+          /home/{currentConnection?.username || 'user'}
+        </div>
+      )
+    }
+  ]
+
   // 处理文件/目录点击
   const handleItemClick = async (entry) => {
     if (entry.isDirectory && currentConnectionId) {
+      setLoading(true)
       const newPath = currentPath.endsWith('/')
         ? currentPath + entry.name
         : currentPath + '/' + entry.name
@@ -260,6 +295,7 @@ function Remote() {
   const handleGoBack = async () => {
     if (currentPath === '/' || !currentConnectionId) return
 
+    setLoading(true)
     const lastSlashIndex = currentPath.lastIndexOf('/')
     if (lastSlashIndex > 0) {
       const parentPath = currentPath.substring(0, lastSlashIndex) || '/'
@@ -518,6 +554,19 @@ function Remote() {
           }}
         />
 
+        <Dropdown menu={{ items: menuItems }}>
+          <Button
+            icon={<DownOutlined />}
+            style={{
+              backgroundColor: '#2B2D30',
+              border: '1px solid #3E4148',
+              borderLeft: 'none',
+              borderRight: 'none',
+              color: '#ffffff'
+            }}
+          />
+        </Dropdown>
+
         <Button
           onClick={handleRefresh}
           icon={<ReloadOutlined />}
@@ -543,7 +592,7 @@ function Remote() {
         borderRadius: '4px'
       }}>
         <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          已连接: {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
+          {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
         </span>
         <Button
           danger
