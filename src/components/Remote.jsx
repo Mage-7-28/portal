@@ -153,38 +153,46 @@ function Remote() {
     try {
       setLoading(true)
 
-      // 创建连接
-      const connectionId = await sftpManager.createConnection({
-        host: connection.host,
-        port: connection.port,
-        username: connection.username,
-        password: connection.password
-      })
-
-      // 连接到服务器
-      await sftpManager.connect(connectionId)
-
-      // 更新状态
-      setCurrentConnection(connection)
-      setCurrentConnectionId(connectionId)
-      setIsConnected(true)
-      setCurrentPath('/home/' + connection.username) // 默认进入用户主目录
-
-      // 等待状态更新后再加载目录
       setTimeout(async () => {
         try {
-          await loadRemoteDirectory('/home/' + connection.username, connectionId)
+          // 创建连接
+          const connectionId = await sftpManager.createConnection({
+            host: connection.host,
+            port: connection.port,
+            username: connection.username,
+            password: connection.password
+          })
+
+          // 连接到服务器
+          await sftpManager.connect(connectionId)
+
+          // 更新状态
+          setCurrentConnection(connection)
+          setCurrentConnectionId(connectionId)
+          setIsConnected(true)
+          setCurrentPath('/home/' + connection.username) // 默认进入用户主目录
+
+          // 等待状态更新后再加载目录
+          setTimeout(async () => {
+            try {
+              await loadRemoteDirectory('/home/' + connection.username, connectionId)
+            } catch (error) {
+              console.error('加载远程目录失败:', error)
+              toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+            }
+          }, 100)
+
+          toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
         } catch (error) {
-          console.error('加载远程目录失败:', error)
-          toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+          console.error('连接失败:', error)
+          toast.error(`连接失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        } finally {
+          setLoading(false)
         }
       }, 100)
-
-      toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (error) {
       console.error('连接失败:', error)
       toast.error(`连接失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
-    } finally {
       setLoading(false)
     }
   }
@@ -213,21 +221,30 @@ function Remote() {
     try {
       setLoading(true)
 
-      // 检查连接状态
-      if (!connId) {
-        throw new Error('未连接到服务器')
-      }
+      setTimeout(async () => {
+        try {
+          // 检查连接状态
+          if (!connId) {
+            throw new Error('未连接到服务器')
+          }
 
-      // 使用SFTP工具类获取目录内容
-      const files = await sftpManager.listRemoteDirectory(connId, path)
+          // 使用SFTP工具类获取目录内容
+          const files = await sftpManager.listRemoteDirectory(connId, path)
 
-      setFiles(files)
-      setCurrentPath(path)
+          setFiles(files)
+          setCurrentPath(path)
+        } catch (error) {
+          console.error('加载远程目录失败:', error)
+          toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+          setFiles([])
+        } finally {
+          setLoading(false)
+        }
+      }, 100)
     } catch (error) {
       console.error('加载远程目录失败:', error)
       toast.error(`加载远程目录失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
       setFiles([])
-    } finally {
       setLoading(false)
     }
   }
@@ -259,7 +276,9 @@ function Remote() {
       label: (
         <div key="root" onClick={() => {
           setLoading(true)
-          loadRemoteDirectory('/')
+          setTimeout(() => {
+            loadRemoteDirectory('/')
+          }, 100)
         }}>
           / (根目录)
         </div>
@@ -277,7 +296,9 @@ function Remote() {
         <div key="home" onClick={() => {
           const homePath = '/home/' + (currentConnection?.username || '')
           setLoading(true)
-          loadRemoteDirectory(homePath)
+          setTimeout(() => {
+            loadRemoteDirectory(homePath)
+          }, 100)
         }}>
           /home/{currentConnection?.username || 'user'}
         </div>
@@ -303,13 +324,15 @@ function Remote() {
     if (currentPath === '/' || !currentConnectionId) return
 
     setLoading(true)
-    const lastSlashIndex = currentPath.lastIndexOf('/')
-    if (lastSlashIndex > 0) {
-      const parentPath = currentPath.substring(0, lastSlashIndex) || '/'
-      await loadRemoteDirectory(parentPath)
-    } else {
-      await loadRemoteDirectory('/')
-    }
+    setTimeout(async () => {
+      const lastSlashIndex = currentPath.lastIndexOf('/')
+      if (lastSlashIndex > 0) {
+        const parentPath = currentPath.substring(0, lastSlashIndex) || '/'
+        await loadRemoteDirectory(parentPath)
+      } else {
+        await loadRemoteDirectory('/')
+      }
+    }, 100)
   }
 
   // 格式化文件大小
