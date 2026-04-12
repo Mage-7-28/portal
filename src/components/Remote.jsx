@@ -50,11 +50,7 @@ function Remote() {
   // 删除连接
   const handleDeleteConnection = async (connectionId) => {
     // 尝试从后端删除
-    try {
-      await sftpManager.disconnect(connectionId)
-    } catch (error) {
-      // 如果后端删除失败（例如连接不存在），仍然继续从前端删除
-    }
+    // await sftpManager.disconnect(connectionId)
 
     // 从前端状态中删除
     const newConnections = connections.filter(c => c.id !== connectionId)
