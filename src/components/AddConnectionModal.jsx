@@ -8,7 +8,7 @@ import { msgBoxStyle } from '../style/LayoutStyle.js'
 
 const SSH_CONNECTIONS_KEY = 'ssh_connections'
 
-const AddConnectionModal = ({ visible, onCancel }) => {
+const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   const [addForm] = Form.useForm()
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
@@ -71,6 +71,7 @@ const AddConnectionModal = ({ visible, onCancel }) => {
     await saveConnections(newConnections)
 
     toast.success('连接添加成功！', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    onAddSuccess()
     onCancel()
     addForm.resetFields()
     setTestResult(null)

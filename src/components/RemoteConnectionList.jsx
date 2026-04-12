@@ -7,7 +7,8 @@ const RemoteConnectionList = ({
   connections,
   handleConnect,
   handleDeleteConnection,
-  loading
+  loading,
+  onAddSuccess
 }) => {
   // 弹窗状态
   const [ addModalVisible, setAddModalVisible ] = useState(false)
@@ -97,6 +98,7 @@ const RemoteConnectionList = ({
       <AddConnectionModal
         visible={addModalVisible}
         onCancel={() => setAddModalVisible(false)}
+        onAddSuccess={onAddSuccess}
       />
     </div>
   )
