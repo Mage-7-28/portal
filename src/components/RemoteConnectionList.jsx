@@ -13,10 +13,12 @@ const RemoteConnectionList = ({
   const [ addModalVisible, setAddModalVisible ] = useState(false)
   // 连接按钮loading状态
   const [ connectLoading, setConnectLoading ] = useState(false)
+  const [ id, setId ] = useState('')
 
   // 当连接列表变化时重置loading状态
   useEffect(() => {
     setConnectLoading(false)
+    setId('')
   }, [connections])
 
   return (
@@ -72,12 +74,17 @@ const RemoteConnectionList = ({
                     }}
                     onClick={() => {
                       setConnectLoading(true)
+                      setId(item.id)
                       setTimeout(async () => {
                         await handleConnect(item)
-                        setAddModalVisible(false)
+                        setTimeout(() => {
+                          setAddModalVisible(false)
+                          setId('')
+                        }, 100)
                       }, 100)
                     }}
-                    loading={connectLoading}
+                    disabled={connectLoading && id !== item.id}
+                    loading={connectLoading && id === item.id}
                   >
                     连接
                   </Button>,
