@@ -1,7 +1,7 @@
 import React from 'react'
 import { List, Button, message } from 'antd'
 import { FolderOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
-import { formatFileSize } from '../utils/common'
+import { formatFileSize, StoreKeys } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
@@ -58,7 +58,7 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
                   // 构建远程文件路径
                   const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
                   // 从store中获取下载路径
-                  const downloadPath = await store.get('download_path')
+                  const downloadPath = await store.get(StoreKeys.DOWNLOAD_PATH)
                   // 构建本地文件路径
                   const localPath = `${ downloadPath }/${ entry.name }`
                   // 调用sftpManager下载文件

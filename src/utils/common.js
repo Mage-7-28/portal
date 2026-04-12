@@ -80,3 +80,13 @@ export const PubSubBusinessKeyEnum = {
   /* 发布统计未读消息数量事件 */
   SEND_COUNT_UNREAD_MSG: (data) => PubSub.publish(PubSubBusinessKeyEnum.COUNT_UNREAD_MSG, data)
 }
+
+/**
+ * Store键名枚举
+ */
+export const StoreKeys = {
+  /* 本地下载路径 */
+  DOWNLOAD_PATH: 'download_path',
+  /* SSH连接列表 */
+  SSH_CONNECTIONS: 'ssh_connections'
+}
