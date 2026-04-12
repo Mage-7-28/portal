@@ -199,6 +199,7 @@ function Remote() {
       files={files}
       loading={loading}
       currentConnection={currentConnection}
+      currentConnectionId={currentConnectionId}
       homeDir={homeDir}
       drives={drives}
       handleGoBack={handleGoBack}

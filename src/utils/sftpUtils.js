@@ -296,6 +296,41 @@ class SftpManager {
   }
 
   /**
+   * 获取远程文件内容
+   * @param {string} connectionId - 连接ID
+   * @param {string} remotePath - 远程文件路径
+   * @returns {Promise<ArrayBuffer>}
+   */
+  async getRemoteFileContent(connectionId, remotePath) {
+    try {
+      const connectionInfo = this.connections.get(connectionId)
+      if (!connectionInfo) {
+        notification.error('连接错误', '连接不存在')
+        return null
+      }
+
+      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+        notification.error('连接错误', '连接未建立')
+        return null
+      }
+
+      // 调用后端API获取文件内容
+      const result = await invoke('get_sftp_file_content', {
+        id: connectionId,
+        remotePath: remotePath
+      })
+
+      connectionInfo.lastActivity = Date.now()
+      return result
+    } catch (error) {
+      const errorMessage = this.parseError(error)
+      console.error('获取文件内容失败:', errorMessage)
+      notification.error('获取文件内容失败', errorMessage)
+      return null
+    }
+  }
+
+  /**
    * 列出远程目录内容
    * @param {string} connectionId - 连接ID
    * @param {string} remotePath - 远程目录路径

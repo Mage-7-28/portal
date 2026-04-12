@@ -3,8 +3,9 @@ import { List, Button, message } from 'antd'
 import { FolderOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
 import { formatFileSize } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
-import toast from "react-hot-toast";
-import { msgBoxStyle } from "../style/LayoutStyle.js";
+import toast from 'react-hot-toast'
+import { msgBoxStyle } from '../style/LayoutStyle.js'
+import { saveAs } from 'file-saver'
 
 const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
   return (
@@ -53,16 +54,22 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
               }}
               onClick={async (e) => {
                 e.stopPropagation()
-                // 构建远程文件路径
-                const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
-                // 构建本地文件路径（使用临时目录）
-                const localPath = `${ window.navigator.userAgent.indexOf('Windows') !== -1 ? 'C:\\Temp\\' : '/tmp/' }${ entry.name }`
-                // 调用sftpManager下载文件
-                const result = await sftpManager.downloadFile(connectionId, remotePath, localPath)
-                if (result) {
-                  toast.success(`文件 ${ entry.name } 下载成功`, { id: 'msgBoxGlobal', style: msgBoxStyle })
-                } else {
-                  toast.error('文件下载失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+                try {
+                  // 构建远程文件路径
+                  const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
+                  console.log(remotePath);
+                  // 构建本地文件路径（使用用户下载目录）
+                  const localPath = `${ window.navigator.userAgent.indexOf('Windows') !== -1 ? 'C:\\Downloads\\' : '~/Downloads/' }${ entry.name }`
+                  // 调用sftpManager下载文件
+                  const result = await sftpManager.downloadFile(connectionId, remotePath, localPath)
+                  if (result) {
+                    toast.success(`文件 ${ entry.name } 下载成功，保存在: ${ localPath }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                  } else {
+                    toast.error('文件下载失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+                  }
+                } catch (error) {
+                  console.error('下载文件失败:', error)
+                  toast.error(`文件 ${ entry.name } 下载失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
                 }
               }}
             >

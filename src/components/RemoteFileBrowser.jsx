@@ -8,6 +8,7 @@ const RemoteFileBrowser = ({
   files,
   loading,
   currentConnection,
+  currentConnectionId,
   homeDir,
   drives,
   handleGoBack,
@@ -152,7 +153,7 @@ const RemoteFileBrowser = ({
               <RemoteFileItem
                 entry={entry}
                 currentPath={currentPath}
-                connectionId={currentConnection?.id}
+                connectionId={currentConnectionId}
                 onClick={() => handleItemClick(entry)}
               />
             )}
