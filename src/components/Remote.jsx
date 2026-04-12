@@ -127,7 +127,8 @@ function Remote() {
     setTimeout(async () => {
       // 检查连接状态
       if (!connId) {
-        throw new Error('未连接到服务器')
+        notification.error('连接错误', '未连接到服务器')
+        return
       }
 
       // 使用SFTP工具类获取目录内容

@@ -1,5 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 import { SftpConnectionStatus } from './common'
+import { notification } from './notificationUtils'
 
 /**
  * SFTP连接配置接口
@@ -94,7 +95,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('创建SFTP连接失败:', errorMessage)
-      throw new Error(`创建连接失败: ${ errorMessage }`)
+      notification.error('创建连接失败', errorMessage)
+      return null
     }
   }
 
@@ -107,7 +109,8 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return false
       }
 
       console.log('连接信息:', connectionInfo)
@@ -132,7 +135,8 @@ class SftpManager {
         connectionInfo.lastError = errorMessage
       }
       console.error('SFTP连接失败:', errorMessage)
-      throw new Error(`连接失败: ${ errorMessage }`)
+      notification.error('连接失败', errorMessage)
+      return false
     }
   }
 
@@ -154,7 +158,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('断开SFTP连接失败:', errorMessage)
-      throw new Error(`断开连接失败: ${ errorMessage }`)
+      notification.error('断开连接失败', errorMessage)
+      return false
     }
   }
 
@@ -170,11 +175,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return null
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return null
       }
 
       // 模拟进度更新
@@ -217,7 +224,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('上传文件失败:', errorMessage)
-      throw new Error(`上传文件失败: ${ errorMessage }`)
+      notification.error('上传文件失败', errorMessage)
+      return null
     }
   }
 
@@ -233,11 +241,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return null
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return null
       }
 
       // 模拟进度更新
@@ -280,7 +290,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('下载文件失败:', errorMessage)
-      throw new Error(`下载文件失败: ${ errorMessage }`)
+      notification.error('下载文件失败', errorMessage)
+      return null
     }
   }
 
@@ -294,11 +305,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return []
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return []
       }
 
       // 使用SFTP命令获取目录内容
@@ -322,7 +335,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('列出远程目录失败:', errorMessage)
-      throw new Error(`列出目录失败: ${ errorMessage }`)
+      notification.error('列出目录失败', errorMessage)
+      return []
     }
   }
 
@@ -336,11 +350,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return false
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return false
       }
 
       await invoke('execute_ssh_command', {
@@ -353,7 +369,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('创建远程目录失败:', errorMessage)
-      throw new Error(`创建目录失败: ${ errorMessage }`)
+      notification.error('创建目录失败', errorMessage)
+      return false
     }
   }
 
@@ -368,11 +385,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return false
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return false
       }
 
       const command = recursive
@@ -389,7 +408,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('删除远程项目失败:', errorMessage)
-      throw new Error(`删除失败: ${ errorMessage }`)
+      notification.error('删除失败', errorMessage)
+      return false
     }
   }
 
@@ -402,11 +422,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return ''
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return ''
       }
 
       // 执行命令获取用户主目录
@@ -420,7 +442,8 @@ class SftpManager {
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('获取远程用户主目录失败:', errorMessage)
-      throw new Error(`获取用户主目录失败: ${ errorMessage }`)
+      notification.error('获取用户主目录失败', errorMessage)
+      return ''
     }
   }
 
@@ -433,11 +456,13 @@ class SftpManager {
     try {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
-        throw new Error('连接不存在')
+        notification.error('连接错误', '连接不存在')
+        return ['/']
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        throw new Error('连接未建立')
+        notification.error('连接错误', '连接未建立')
+        return ['/']
       }
 
       let drives = []
@@ -483,12 +508,18 @@ class SftpManager {
         }
       }
 
+      // 如果没有获取到任何驱动器，至少返回根目录
+      if (drives.length === 0) {
+        drives.push('/')
+      }
+
       connectionInfo.lastActivity = Date.now()
       return drives
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('获取远程驱动器失败:', errorMessage)
-      throw new Error(`获取驱动器失败: ${ errorMessage }`)
+      notification.error('获取驱动器失败', errorMessage)
+      return ['/']
     }
   }
 
