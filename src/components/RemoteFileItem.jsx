@@ -5,7 +5,7 @@ import { formatFileSize } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
-import { saveAs } from 'file-saver'
+import { store } from '../utils/storeUtils.js'
 
 const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
   return (
@@ -57,9 +57,10 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
                 try {
                   // 构建远程文件路径
                   const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
-                  console.log(remotePath);
-                  // 构建本地文件路径（使用用户下载目录）
-                  const localPath = `${ window.navigator.userAgent.indexOf('Windows') !== -1 ? 'C:\\Downloads\\' : '~/Downloads/' }${ entry.name }`
+                  // 从store中获取下载路径
+                  const downloadPath = await store.get('download_path')
+                  // 构建本地文件路径
+                  const localPath = `${ downloadPath }/${ entry.name }`
                   // 调用sftpManager下载文件
                   const result = await sftpManager.downloadFile(connectionId, remotePath, localPath)
                   if (result) {
