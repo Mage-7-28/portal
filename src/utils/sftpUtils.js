@@ -441,7 +441,7 @@ class SftpManager {
       }
 
       let drives = []
-      
+
       // 根据不同的操作系统获取驱动器
       try {
         // 尝试获取Windows驱动器
@@ -449,7 +449,7 @@ class SftpManager {
           id: connectionId,
           command: 'wmic logicaldisk get caption'
         })
-        
+
         // 解析Windows驱动器
         if (windowsResult) {
           const lines = windowsResult.split('\n')
@@ -467,7 +467,7 @@ class SftpManager {
             id: connectionId,
             command: 'df -h | grep -E "^/dev/" | awk "{print \$6}"'
           })
-          
+
           // 解析Linux/macOS挂载点
           if (unixResult) {
             const lines = unixResult.split('\n')
