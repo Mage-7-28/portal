@@ -1,6 +1,6 @@
 import { Col, ConfigProvider, Row, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { GlobalFontFamily } from './utils/GlobalEnum.js'
+import { GlobalFontFamily } from './utils/common.js'
 import { Toaster } from 'react-hot-toast'
 import Remote from './components/Remote'
 

@@ -1,49 +1,8 @@
-import React, { useState, useEffect } from 'react'
-import { Input, Button, Dropdown, List, Spin, Typography, Space } from 'antd'
-import { UpOutlined, DownOutlined, ReloadOutlined, FolderOutlined, FileOutlined } from '@ant-design/icons'
-import { getUserHomeDir, getDirectoryContents, formatFileSize, getDrives } from '../utils/fsUtils'
-import sftpManager from '../utils/sftpUtils'
-import toast from 'react-hot-toast'
-import { msgBoxStyle } from '../style/LayoutStyle.js'
-
-const { Title } = Typography
-
-// 文件项组件
-const FileItem = ({ entry, currentPath, onClick }) => {
-  return (
-    <div
-      style={{
-        cursor: 'default'
-      }}
-      onClick={onClick}
-    >
-      <List.Item
-        style={{
-          cursor: entry.isDirectory ? 'pointer' : 'default',
-          borderBottom: '1px solid #1E1E1E',
-          padding: '12px'
-        }}
-        hoverable
-      >
-        <List.Item.Meta
-          avatar={
-            entry.isDirectory ?
-              <FolderOutlined style={{ color: '#4EC9B0' }} /> :
-              <FileOutlined style={{ color: '#ffffff' }} />
-          }
-          title={
-            <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
-              {entry.name}
-            </span>
-          }
-        />
-        <span style={{ color: '#888888', fontSize: 12 }}>
-          {entry.isDirectory ? '' : formatFileSize(entry.size)}
-        </span>
-      </List.Item>
-    </div>
-  )
-}
+import React, { useEffect, useState } from 'react'
+import { Button, Dropdown, Input, List, Spin } from 'antd'
+import { DownOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons'
+import { getDirectoryContents, getDrives, getUserHomeDir } from '../utils/fsUtils'
+import LocalFileItem from './LocalFileItem'
 
 function Local() {
   const [ currentPath, setCurrentPath ] = useState('')
@@ -55,25 +14,20 @@ function Local() {
   // 初始化
   useEffect(() => {
     const init = async () => {
-      try {
-        setLoading(true)
-        // 获取用户主目录
-        const userHomeDir = await getUserHomeDir()
-        setHomeDir(userHomeDir)
-        setCurrentPath(userHomeDir)
+      setLoading(true)
+      // 获取用户主目录
+      const userHomeDir = await getUserHomeDir()
+      setHomeDir(userHomeDir)
+      setCurrentPath(userHomeDir)
 
-        // 获取系统驱动器
-        const driveList = await getDrives()
-        setDrives(driveList)
+      // 获取系统驱动器
+      const driveList = await getDrives()
+      setDrives(driveList)
 
-        // 获取目录内容
-        const contents = await getDirectoryContents(userHomeDir)
-        setFiles(contents)
-      } catch (error) {
-        console.error('初始化错误:', error)
-      } finally {
-        setLoading(false)
-      }
+      // 获取目录内容
+      const contents = await getDirectoryContents(userHomeDir)
+      setFiles(contents)
+      setLoading(false)
     }
 
     init()
@@ -93,16 +47,10 @@ function Local() {
 
   // 加载目录内容
   const loadDirectoryContents = async (pathToLoad) => {
-    try {
-      setLoading(true)
-      const contents = await getDirectoryContents(pathToLoad)
-      setFiles(contents)
-    } catch (error) {
-      console.error('加载目录内容失败:', error)
-      setFiles([])
-    } finally {
-      setLoading(false)
-    }
+    setLoading(true)
+    const contents = await getDirectoryContents(pathToLoad)
+    setFiles(contents)
+    setLoading(false)
   }
 
   // 处理驱动器选择
@@ -249,7 +197,7 @@ function Local() {
             itemLayout="horizontal"
             dataSource={files}
             renderItem={(entry, index) => (
-              <FileItem
+              <LocalFileItem
                 key={index}
                 entry={entry}
                 currentPath={currentPath}

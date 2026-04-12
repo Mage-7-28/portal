@@ -5,7 +5,7 @@ import App from './App.jsx'
 // 引入样式文件
 import './style/index.css'
 import './style/fonts.css'
-import { GlobalFontFamily } from './utils/GlobalEnum.js'
+import { GlobalFontFamily } from './utils/common.js'
 import { initStore } from './utils/storeUtils.js'
 import { initNotification } from './utils/notificationUtils.js'
 

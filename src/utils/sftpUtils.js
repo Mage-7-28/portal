@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { SftpConnectionStatus } from './common'
 
 /**
  * SFTP连接配置接口
@@ -8,16 +9,6 @@ import { invoke } from '@tauri-apps/api/core'
  * @property {string} username - 用户名
  * @property {string} password - 密码
  */
-
-/**
- * SFTP连接状态枚举
- */
-export const SftpConnectionStatus = {
-  DISCONNECTED: 'disconnected',
-  CONNECTING: 'connecting',
-  CONNECTED: 'connected',
-  ERROR: 'error'
-}
 
 /**
  * 远程文件信息
@@ -399,6 +390,105 @@ class SftpManager {
       const errorMessage = this.parseError(error)
       console.error('删除远程项目失败:', errorMessage)
       throw new Error(`删除失败: ${ errorMessage }`)
+    }
+  }
+
+  /**
+   * 获取远程用户主目录
+   * @param {string} connectionId - 连接ID
+   * @returns {Promise<string>}
+   */
+  async getRemoteUserHome(connectionId) {
+    try {
+      const connectionInfo = this.connections.get(connectionId)
+      if (!connectionInfo) {
+        throw new Error('连接不存在')
+      }
+
+      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+        throw new Error('连接未建立')
+      }
+
+      // 执行命令获取用户主目录
+      const result = await invoke('execute_ssh_command', {
+        id: connectionId,
+        command: 'echo $HOME'
+      })
+
+      connectionInfo.lastActivity = Date.now()
+      return result.trim()
+    } catch (error) {
+      const errorMessage = this.parseError(error)
+      console.error('获取远程用户主目录失败:', errorMessage)
+      throw new Error(`获取用户主目录失败: ${ errorMessage }`)
+    }
+  }
+
+  /**
+   * 获取远程服务器驱动器
+   * @param {string} connectionId - 连接ID
+   * @returns {Promise<string[]>}
+   */
+  async getRemoteDrives(connectionId) {
+    try {
+      const connectionInfo = this.connections.get(connectionId)
+      if (!connectionInfo) {
+        throw new Error('连接不存在')
+      }
+
+      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+        throw new Error('连接未建立')
+      }
+
+      let drives = []
+      
+      // 根据不同的操作系统获取驱动器
+      try {
+        // 尝试获取Windows驱动器
+        const windowsResult = await invoke('execute_ssh_command', {
+          id: connectionId,
+          command: 'wmic logicaldisk get caption'
+        })
+        
+        // 解析Windows驱动器
+        if (windowsResult) {
+          const lines = windowsResult.split('\n')
+          for (const line of lines) {
+            const drive = line.trim()
+            if (drive && drive.match(/^[A-Z]:$/)) {
+              drives.push(drive)
+            }
+          }
+        }
+      } catch (error) {
+        // Windows命令失败，尝试获取Linux/macOS挂载点
+        try {
+          const unixResult = await invoke('execute_ssh_command', {
+            id: connectionId,
+            command: 'df -h | grep -E "^/dev/" | awk "{print \$6}"'
+          })
+          
+          // 解析Linux/macOS挂载点
+          if (unixResult) {
+            const lines = unixResult.split('\n')
+            for (const line of lines) {
+              const drive = line.trim()
+              if (drive) {
+                drives.push(drive)
+              }
+            }
+          }
+        } catch (error) {
+          console.warn('获取远程驱动器失败:', error)
+        }
+      }
+
+      connectionInfo.lastActivity = Date.now()
+      return drives
+    } catch (error) {
+      const errorMessage = this.parseError(error)
+      console.error('获取远程驱动器失败:', errorMessage)
+      throw new Error(`获取驱动器失败: ${ errorMessage }`)
     }
   }
 
