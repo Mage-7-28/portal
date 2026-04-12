@@ -150,9 +150,9 @@ const RemoteFileBrowser = ({
             dataSource={files}
             renderItem={(entry, index) => (
               <RemoteFileItem
-                key={index}
                 entry={entry}
                 currentPath={currentPath}
+                connectionId={currentConnection?.id}
                 onClick={() => handleItemClick(entry)}
               />
             )}
