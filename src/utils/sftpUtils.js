@@ -483,6 +483,63 @@ class SftpManager {
   }
 
   /**
+   * 获取远程服务器系统信息
+   * @param {string} connectionId - 连接ID
+   * @returns {Promise<{os: string, version: string}>}
+   */
+  async getRemoteSystemInfo(connectionId) {
+    try {
+      const connectionInfo = this.connections.get(connectionId)
+      if (!connectionInfo) {
+        notification.error('连接错误', '连接不存在')
+        return { os: 'unknown', version: '' }
+      }
+
+      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+        notification.error('连接错误', '连接未建立')
+        return { os: 'unknown', version: '' }
+      }
+
+      let os = 'unknown'
+      let version = ''
+
+      try {
+        // 尝试执行Windows命令
+        const windowsResult = await invoke('execute_ssh_command', {
+          id: connectionId,
+          command: 'ver'
+        })
+
+        if (windowsResult) {
+          os = 'windows'
+          version = windowsResult.trim()
+        } else {
+          // 尝试执行Linux/macOS命令
+          const unixResult = await invoke('execute_ssh_command', {
+            id: connectionId,
+            command: 'uname -a'
+          })
+
+          if (unixResult) {
+            os = 'unix'
+            version = unixResult.trim()
+          }
+        }
+      } catch (error) {
+        console.warn('获取系统信息失败:', error)
+      }
+
+      connectionInfo.lastActivity = Date.now()
+      return { os, version }
+    } catch (error) {
+      const errorMessage = this.parseError(error)
+      console.error('获取系统信息失败:', errorMessage)
+      notification.error('获取系统信息失败', errorMessage)
+      return { os: 'unknown', version: '' }
+    }
+  }
+
+  /**
    * 获取远程服务器驱动器
    * @param {string} connectionId - 连接ID
    * @returns {Promise<string[]>}
@@ -502,30 +559,34 @@ class SftpManager {
 
       let drives = []
 
-      // 根据不同的操作系统获取驱动器
-      try {
-        // 尝试获取Windows驱动器
-        const windowsResult = await invoke('execute_ssh_command', {
-          id: connectionId,
-          command: 'wmic logicaldisk get caption'
-        })
+      // 获取远程系统信息
+      const systemInfo = await this.getRemoteSystemInfo(connectionId)
 
-        // 解析Windows驱动器
-        if (windowsResult) {
-          const lines = windowsResult.split('\n')
-          for (const line of lines) {
-            const drive = line.trim()
-            if (drive && drive.match(/^[A-Z]:$/)) {
-              drives.push(drive)
+      // 根据系统类型获取驱动器
+      try {
+        if (systemInfo.os === 'windows') {
+          // 获取Windows驱动器
+          const windowsResult = await invoke('execute_ssh_command', {
+            id: connectionId,
+            command: 'wmic logicaldisk get caption'
+          })
+
+          // 解析Windows驱动器
+          if (windowsResult) {
+            const lines = windowsResult.split('\n')
+            for (const line of lines) {
+              const drive = line.trim()
+              if (drive && drive.match(/^[A-Z]:$/)) {
+                drives.push(drive)
+              }
             }
           }
-        }
-      } catch (error) {
-        // Windows命令失败，尝试获取Linux/macOS挂载点
-        try {
+        } else if (systemInfo.os === 'unix') {
+          // 获取Linux/macOS挂载点
+          // 使用更可靠的命令获取挂载点
           const unixResult = await invoke('execute_ssh_command', {
             id: connectionId,
-            command: 'df -h | grep -E "^/dev/" | awk "{print \$6}"'
+            command: 'findmnt -n -o TARGET | grep -E "^/" | head -20'
           })
 
           // 解析Linux/macOS挂载点
@@ -533,19 +594,14 @@ class SftpManager {
             const lines = unixResult.split('\n')
             for (const line of lines) {
               const drive = line.trim()
-              if (drive) {
+              if (drive && drive.startsWith('/')) {
                 drives.push(drive)
               }
             }
           }
-        } catch (error) {
-          console.warn('获取远程驱动器失败:', error)
         }
-      }
-
-      // 如果没有获取到任何驱动器，至少返回根目录
-      if (drives.length === 0) {
-        drives.push('/')
+      } catch (error) {
+        console.warn('获取远程驱动器失败:', error)
       }
 
       connectionInfo.lastActivity = Date.now()
@@ -554,7 +610,7 @@ class SftpManager {
       const errorMessage = this.parseError(error)
       console.error('获取远程驱动器失败:', errorMessage)
       notification.error('获取驱动器失败', errorMessage)
-      return ['/']
+      return []
     }
   }
 
