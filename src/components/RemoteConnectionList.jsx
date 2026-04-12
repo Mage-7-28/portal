@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { Button, List } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import AddConnectionModal from './AddConnectionModal'
@@ -7,11 +7,18 @@ const RemoteConnectionList = ({
   connections,
   handleConnect,
   handleDeleteConnection,
-  loading,
   onAddSuccess
 }) => {
   // 弹窗状态
   const [ addModalVisible, setAddModalVisible ] = useState(false)
+  // 连接按钮loading状态
+  const [ connectLoading, setConnectLoading ] = useState(false)
+
+  // 当连接列表变化时重置loading状态
+  useEffect(() => {
+    setConnectLoading(false)
+  }, [connections])
+
   return (
     <div style={{ padding: '12px', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -54,6 +61,7 @@ const RemoteConnectionList = ({
                 }}
                 actions={[
                   <Button
+                    key={item.id + connectLoading}
                     type="primary"
                     size="small"
                     style={{
@@ -62,12 +70,19 @@ const RemoteConnectionList = ({
                       color: '#ffffff',
                       fontSize: '12px'
                     }}
-                    onClick={() => handleConnect(item)}
-                    loading={loading}
+                    onClick={() => {
+                      setConnectLoading(true)
+                      setTimeout(async () => {
+                        await handleConnect(item)
+                        setAddModalVisible(false)
+                      }, 100)
+                    }}
+                    loading={connectLoading}
                   >
                     连接
                   </Button>,
                   <Button
+                    key={item.id + connectLoading}
                     danger
                     size="small"
                     icon={<DeleteOutlined />}
@@ -75,6 +90,7 @@ const RemoteConnectionList = ({
                       fontSize: '12px'
                     }}
                     onClick={() => handleDeleteConnection(item.id)}
+                    disabled={connectLoading}
                   >
                     删除
                   </Button>

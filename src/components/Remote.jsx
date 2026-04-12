@@ -214,7 +214,6 @@ function Remote() {
       connections={connections}
       handleConnect={handleConnect}
       handleDeleteConnection={handleDeleteConnection}
-      loading={loading}
       onAddSuccess={loadConnections}
     />
   )
