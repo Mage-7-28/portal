@@ -492,12 +492,12 @@ class SftpManager {
       const connectionInfo = this.connections.get(connectionId)
       if (!connectionInfo) {
         notification.error('连接错误', '连接不存在')
-        return ['/']
+        return []
       }
 
       if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
         notification.error('连接错误', '连接未建立')
-        return ['/']
+        return []
       }
 
       let drives = []
