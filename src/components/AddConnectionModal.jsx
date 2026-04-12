@@ -1,6 +1,6 @@
-import React, { useState } from 'react'
-import { Modal, Form, Input, Button } from 'antd'
-import { CheckCircleOutlined, CloseCircleOutlined } from '@ant-design/icons'
+import React, { useState, useEffect } from 'react'
+import { Modal, Form, Input, Button, Space, Tooltip } from 'antd'
+import { CheckCircleOutlined, CloseCircleOutlined, LockOutlined, UserOutlined, FieldTimeOutlined, CloudServerOutlined, WifiOutlined } from '@ant-design/icons'
 import { store } from '../utils/storeUtils'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
@@ -12,6 +12,14 @@ const AddConnectionModal = ({ visible, onCancel }) => {
   const [addForm] = Form.useForm()
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
+  const [ isAnimating, setIsAnimating ] = useState(false)
+
+  useEffect(() => {
+    if (visible) {
+      setIsAnimating(true)
+      setTimeout(() => setIsAnimating(false), 300)
+    }
+  }, [visible])
 
   // 测试连接
   const handleTestConnection = async () => {
@@ -70,7 +78,7 @@ const AddConnectionModal = ({ visible, onCancel }) => {
 
   return (
     <Modal
-      title="新建 SSH 连接"
+      title={null}
       open={visible}
       onCancel={() => {
         onCancel()
@@ -79,117 +87,308 @@ const AddConnectionModal = ({ visible, onCancel }) => {
       }}
       centered={true}
       footer={null}
-      width={500}
+      width={480}
+      closable={false}
       style={{
-        backgroundColor: '#101113',
-        borderRadius: '8px'
+        backgroundColor: '#1a1b1f',
+        borderRadius: '10px',
+        boxShadow: '0 15px 30px rgba(0, 0, 0, 0.4)',
+        transform: isAnimating ? 'scale(0.95)' : 'scale(1)',
+        opacity: isAnimating ? 0 : 1,
+        transition: 'all 0.3s ease-out'
       }}
-      bodyStyle={{
-        padding: 0
+      styles={{
+        body: {
+          padding: '16px',
+          border: 'none'
+        },
+        mask: {
+          backgroundColor: 'rgba(0, 0, 0, 0.7)',
+          backdropFilter: 'blur(8px)'
+        }
       }}
     >
-      <div style={{ padding: '24px' }}>
-        <Form
-          form={addForm}
-          onFinish={handleAddConnection}
-          layout="vertical"
-        >
-          <div style={{ marginBottom: '24px' }}>
-            <Form.Item
-              name="name"
-              label="连接名称"
-              rules={[{ required: true, message: '请输入连接名称' }]}
-            >
-              <Input placeholder="例如：我的服务器" />
-            </Form.Item>
-          </div>
-
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <Form.Item
-                name="host"
-                label="主机地址"
-                rules={[{ required: true, message: '请输入主机地址' }]}
-              >
-                <Input placeholder="例如：192.168.1.1" />
-              </Form.Item>
-              <Form.Item
-                name="port"
-                label="端口"
-                initialValue={22}
-                rules={[{ required: true, message: '请输入端口' }]}
-              >
-                <Input type="number" placeholder="22" />
-              </Form.Item>
-            </div>
-          </div>
-
-          <div style={{ marginBottom: '24px' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px' }}>
-              <Form.Item
-                name="username"
-                label="用户名"
-                rules={[{ required: true, message: '请输入用户名' }]}
-              >
-                <Input placeholder="例如：root" />
-              </Form.Item>
-              <Form.Item
-                name="password"
-                label="密码"
-                rules={[{ required: true, message: '请输入密码' }]}
-              >
-                <Input.Password placeholder="请输入密码" />
-              </Form.Item>
-            </div>
-          </div>
-
-          {/* 操作按钮 */}
-          <Form.Item style={{ marginBottom: 0 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px' }}>
-              <div style={{ display: 'flex', gap: '16px' }}>
-                <Button onClick={() => {
-                  onCancel()
-                  addForm.resetFields()
-                  setTestResult(null)
-                }}>
-                  取消
-                </Button>
-                <Button
-                  onClick={handleTestConnection}
-                  loading={testing}
-                  icon={testResult ? (testResult.success ? <CheckCircleOutlined /> : <CloseCircleOutlined />) : null}
-                  style={{
-                    borderColor: testResult ? (testResult.success ? '#52c41a' : '#ff4d4f') : undefined,
-                    color: testResult ? (testResult.success ? '#52c41a' : '#ff4d4f') : undefined
-                  }}
-                >
-                  {testing ? '测试中...' : '测试连接'}
-                </Button>
-              </div>
-              <Button type="primary" htmlType="submit">
-                保存
-              </Button>
-            </div>
-          </Form.Item>
-
-          {/* 测试结果提示 */}
-          {testResult && (
-            <div style={{
-              marginTop: '16px',
-              padding: '12px',
-              borderRadius: '4px',
-              backgroundColor: testResult.success ? 'rgba(82, 196, 26, 0.1)' : 'rgba(255, 77, 79, 0.1)',
-              border: `1px solid ${ testResult.success ? '#52c41a' : '#ff4d4f' }`,
-              color: testResult.success ? '#52c41a' : '#ff4d4f'
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {testResult.success ? <CheckCircleOutlined /> : <CloseCircleOutlined />}
-                <span>{testResult.success ? '连接测试成功' : `连接失败: ${ testResult.error }`}</span>
-              </div>
-            </div>
-          )}
-        </Form>
+      {/* 标题区域 */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        marginBottom: '24px',
+        paddingBottom: '12px',
+        borderBottom: '1px solid #2d2e32'
+      }}>
+        <CloudServerOutlined style={{ fontSize: '20px', color: '#4caf50', marginRight: '10px' }} />
+        <h2 style={{
+          fontSize: '18px',
+          fontWeight: '600',
+          color: '#ffffff',
+          margin: 0
+        }}>新建 SSH 连接</h2>
       </div>
+
+      <Form
+        form={addForm}
+        onFinish={handleAddConnection}
+        layout="vertical"
+      >
+        {/* 连接名称 */}
+        <Form.Item
+          name="name"
+          label={
+            <div style={{ display: 'flex', alignItems: 'center', color: '#b0b0b0' }}>
+              <WifiOutlined style={{ marginRight: '8px' }} />
+              连接名称
+            </div>
+          }
+          rules={[{ required: true, message: '请输入连接名称' }]}
+          style={{
+            marginBottom: '16px'
+          }}
+        >
+          <Input
+            placeholder="例如：我的服务器"
+            style={{
+              backgroundColor: '#25262a',
+              border: '1px solid #3a3b3f',
+              borderRadius: '6px',
+              color: '#ffffff',
+              height: '42px',
+              fontSize: '14px',
+              '&:focus': {
+                borderColor: '#4caf50',
+                boxShadow: '0 0 0 2px rgba(76, 175, 80, 0.2)'
+              }
+            }}
+          />
+        </Form.Item>
+
+        {/* 主机和端口 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '16px' }}>
+          <Form.Item
+            name="host"
+            label={
+              <div style={{ display: 'flex', alignItems: 'center', color: '#b0b0b0' }}>
+                <CloudServerOutlined style={{ marginRight: '8px', fontSize: '14px' }} />
+                主机地址
+              </div>
+            }
+            rules={[{ required: true, message: '请输入主机地址' }]}
+          >
+            <Input
+              placeholder="例如：192.168.1.1"
+              style={{
+                backgroundColor: '#25262a',
+                border: '1px solid #3a3b3f',
+                borderRadius: '6px',
+                color: '#ffffff',
+                height: '42px',
+                fontSize: '14px',
+                '&:focus': {
+                  borderColor: '#4caf50',
+                  boxShadow: '0 0 0 2px rgba(76, 175, 80, 0.2)'
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="port"
+            label={
+              <div style={{ display: 'flex', alignItems: 'center', color: '#b0b0b0' }}>
+                <FieldTimeOutlined style={{ marginRight: '8px', fontSize: '14px' }} />
+                端口
+              </div>
+            }
+            initialValue={22}
+            rules={[{ required: true, message: '请输入端口' }]}
+          >
+            <Input
+              type="number"
+              placeholder="22"
+              style={{
+                backgroundColor: '#25262a',
+                border: '1px solid #3a3b3f',
+                borderRadius: '6px',
+                color: '#ffffff',
+                height: '42px',
+                fontSize: '14px',
+                '&:focus': {
+                  borderColor: '#4caf50',
+                  boxShadow: '0 0 0 2px rgba(76, 175, 80, 0.2)'
+                }
+              }}
+            />
+          </Form.Item>
+        </div>
+
+        {/* 用户名和密码 */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginBottom: '24px' }}>
+          <Form.Item
+            name="username"
+            label={
+              <div style={{ display: 'flex', alignItems: 'center', color: '#b0b0b0' }}>
+                <UserOutlined style={{ marginRight: '8px', fontSize: '14px' }} />
+                用户名
+              </div>
+            }
+            rules={[{ required: true, message: '请输入用户名' }]}
+          >
+            <Input
+              placeholder="例如：root"
+              style={{
+                backgroundColor: '#25262a',
+                border: '1px solid #3a3b3f',
+                borderRadius: '6px',
+                color: '#ffffff',
+                height: '42px',
+                fontSize: '14px',
+                '&:focus': {
+                  borderColor: '#4caf50',
+                  boxShadow: '0 0 0 2px rgba(76, 175, 80, 0.2)'
+                }
+              }}
+            />
+          </Form.Item>
+          <Form.Item
+            name="password"
+            label={
+              <div style={{ display: 'flex', alignItems: 'center', color: '#b0b0b0' }}>
+                <LockOutlined style={{ marginRight: '8px', fontSize: '14px' }} />
+                密码
+              </div>
+            }
+            rules={[{ required: true, message: '请输入密码' }]}
+          >
+            <Input.Password
+              placeholder="请输入密码"
+              style={{
+                backgroundColor: '#25262a',
+                border: '1px solid #3a3b3f',
+                borderRadius: '6px',
+                color: '#ffffff',
+                height: '42px',
+                fontSize: '14px',
+                '&:focus': {
+                  borderColor: '#4caf50',
+                  boxShadow: '0 0 0 2px rgba(76, 175, 80, 0.2)'
+                }
+              }}
+              iconRender={(visible) => (
+                <LockOutlined
+                  style={{
+                    color: visible ? '#4caf50' : '#666',
+                    fontSize: '14px'
+                  }}
+                />
+              )}
+            />
+          </Form.Item>
+        </div>
+
+        {/* 测试结果提示 */}
+        {testResult && (
+          <div style={{
+            marginBottom: '16px',
+            padding: '12px',
+            borderRadius: '6px',
+            backgroundColor: testResult.success ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)',
+            border: `1px solid ${ testResult.success ? '#4caf50' : '#f44336' }`,
+            color: testResult.success ? '#4caf50' : '#f44336',
+            animation: 'slideIn 0.3s ease-out'
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              {testResult.success ?
+                <CheckCircleOutlined style={{ fontSize: '16px' }} /> :
+                <CloseCircleOutlined style={{ fontSize: '16px' }} />
+              }
+              <span style={{ fontSize: '13px', fontWeight: '500' }}>
+                {testResult.success ? '连接测试成功' : `连接失败: ${ testResult.error }`}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+          <Button
+            onClick={() => {
+              onCancel()
+              addForm.resetFields()
+              setTestResult(null)
+            }}
+            style={{
+              backgroundColor: '#25262a',
+              border: '1px solid #3a3b3f',
+              borderRadius: '6px',
+              color: '#ffffff',
+              height: '36px',
+              minWidth: '80px',
+              fontSize: '13px',
+              fontWeight: '500',
+              '&:hover': {
+                backgroundColor: '#2d2e32',
+                borderColor: '#4a4b4f'
+              }
+            }}
+          >
+            取消
+          </Button>
+          <Button
+            onClick={handleTestConnection}
+            loading={testing}
+            style={{
+              backgroundColor: 'transparent',
+              border: `1px solid ${ testResult ? (testResult.success ? '#4caf50' : '#f44336') : '#3a3b3f' }`,
+              borderRadius: '6px',
+              color: testResult ? (testResult.success ? '#4caf50' : '#f44336') : '#ffffff',
+              height: '36px',
+              minWidth: '100px',
+              fontSize: '13px',
+              fontWeight: '500',
+              '&:hover': {
+                backgroundColor: testResult ? (testResult.success ? 'rgba(76, 175, 80, 0.1)' : 'rgba(244, 67, 54, 0.1)') : 'rgba(255, 255, 255, 0.05)'
+              }
+            }}
+            icon={testResult ? (testResult.success ? <CheckCircleOutlined style={{ fontSize: '14px' }} /> : <CloseCircleOutlined style={{ fontSize: '14px' }} />) : null}
+          >
+            {testing ? '测试中...' : '测试连接'}
+          </Button>
+          <Button
+            type="primary"
+            htmlType="submit"
+            style={{
+              backgroundColor: '#4caf50',
+              border: 'none',
+              borderRadius: '6px',
+              color: '#ffffff',
+              height: '36px',
+              minWidth: '80px',
+              fontSize: '13px',
+              fontWeight: '500',
+              '&:hover': {
+                backgroundColor: '#45a049'
+              },
+              '&:active': {
+                backgroundColor: '#3d8b40'
+              }
+            }}
+          >
+            保存
+          </Button>
+        </div>
+      </Form>
+
+      {/* 样式 */}
+      <style jsx>{`
+        @keyframes slideIn {
+          from {
+            opacity: 0;
+            transform: translateY(-10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+      `}</style>
     </Modal>
   )
 }
