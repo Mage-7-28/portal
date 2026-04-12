@@ -1,13 +1,22 @@
 import { Col, ConfigProvider, Row, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
-import { GlobalFontFamily, StoreKeys } from './utils/common.js'
+import { GlobalFontFamily, PubSubBusinessKeyEnum, StoreKeys } from './utils/common.js'
 import { Toaster } from 'react-hot-toast'
 import Remote from './components/Remote'
 import { store } from './utils/storeUtils.js'
 import * as dialog from '@tauri-apps/plugin-dialog'
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
+import PubSub from 'pubsub-js'
 
 function App() {
+  const [ showMask, setShowMask ] = useState(false)
+
+  useEffect(() => {
+    const mask = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => { setShowMask(data) })
+    return () => {
+      PubSub.unsubscribe(mask)
+    }
+  }, [])
 
   // 检查本地下载路径
   useEffect(() => {
@@ -67,6 +76,7 @@ function App() {
         </Col>
       </Row>
       <Toaster />
+      { showMask && <div className="mask"></div> }
     </ConfigProvider>
   )
 }
