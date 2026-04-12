@@ -22,8 +22,6 @@ function Remote() {
   const [ drives, setDrives ] = useState([])
   const [ homeDir, setHomeDir ] = useState('')
 
-
-
   // 初始化：加载历史连接
   useEffect(() => {
     loadConnections()
