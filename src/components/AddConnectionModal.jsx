@@ -5,8 +5,7 @@ import { store } from '../utils/storeUtils'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
-
-const SSH_CONNECTIONS_KEY = 'ssh_connections'
+import { StoreKeys } from '../utils/common.js'
 
 const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   const [addForm] = Form.useForm()
@@ -50,7 +49,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
     newConnections.sort((a, b) => {
       return new Date(b.createdAt) - new Date(a.createdAt)
     })
-    await store.set(SSH_CONNECTIONS_KEY, newConnections)
+    await store.set(StoreKeys.SSH_CONNECTIONS, newConnections)
   }
 
   // 添加新连接
@@ -66,7 +65,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
     }
 
     // 加载现有连接
-    const existingConnections = await store.get(SSH_CONNECTIONS_KEY) || []
+    const existingConnections = await store.get(StoreKeys.SSH_CONNECTIONS) || []
     const newConnections = [ newConnection, ...existingConnections ]
     await saveConnections(newConnections)
 

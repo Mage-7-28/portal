@@ -5,9 +5,7 @@ import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
 import RemoteFileBrowser from './RemoteFileBrowser'
 import RemoteConnectionList from './RemoteConnectionList'
-
-// 存储键名
-const SSH_CONNECTIONS_KEY = 'ssh_connections'
+import { StoreKeys } from '../utils/common.js'
 
 function Remote() {
   // 连接相关状态
@@ -28,8 +26,8 @@ function Remote() {
   }, [])
 
   // 加载存储的连接列表
-  const loadConnections = async () => {
-    const savedConnections = await store.get(SSH_CONNECTIONS_KEY) || []
+  const loadConnections = async () => { // 从存储中加载连接列表
+    const savedConnections = await store.get(StoreKeys.SSH_CONNECTIONS) || []
     // 按创建时间排序，最新的在前面
     savedConnections.sort((a, b) => {
       return new Date(b.createdAt) - new Date(a.createdAt)
@@ -43,7 +41,7 @@ function Remote() {
     newConnections.sort((a, b) => {
       return new Date(b.createdAt) - new Date(a.createdAt)
     })
-    await store.set(SSH_CONNECTIONS_KEY, newConnections)
+    await store.set(StoreKeys.SSH_CONNECTIONS, newConnections)
     setConnections(newConnections)
   }
 
