@@ -1,16 +1,16 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { Button, List } from 'antd'
 import { DeleteOutlined, PlusOutlined } from '@ant-design/icons'
 import AddConnectionModal from './AddConnectionModal'
 
 const RemoteConnectionList = ({
   connections,
-  addModalVisible,
-  setAddModalVisible,
   handleConnect,
   handleDeleteConnection,
   loading
 }) => {
+  // 弹窗状态
+  const [ addModalVisible, setAddModalVisible ] = useState(false)
   return (
     <div style={{ padding: '12px', height: '100%', display: 'flex', flexDirection: 'column' }}>
       <div style={{ marginBottom: '12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

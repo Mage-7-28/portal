@@ -13,7 +13,6 @@ function Remote() {
   // 连接相关状态
   const [ connections, setConnections ] = useState([])
   const [ currentConnection, setCurrentConnection ] = useState(null)
-  const [ isConnected, setIsConnected ] = useState(false)
   const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
 
   // 文件浏览相关状态
@@ -23,8 +22,7 @@ function Remote() {
   const [ drives, setDrives ] = useState([])
   const [ homeDir, setHomeDir ] = useState('')
 
-  // 弹窗状态
-  const [ addModalVisible, setAddModalVisible ] = useState(false)
+
 
   // 初始化：加载历史连接
   useEffect(() => {
@@ -92,11 +90,9 @@ function Remote() {
       // 获取远程服务器驱动器
       const driveList = await sftpManager.getRemoteDrives(connectionId)
 
-
       // 更新状态
       setCurrentConnection(connection)
       setCurrentConnectionId(connectionId)
-      setIsConnected(true)
       setCurrentPath(homeDir) // 默认进入用户主目录
       setHomeDir(homeDir)
       setDrives(driveList)
@@ -119,7 +115,6 @@ function Remote() {
 
     setCurrentConnection(null)
     setCurrentConnectionId(null)
-    setIsConnected(false)
     setCurrentPath('/')
     setFiles([])
     setHomeDir('')
@@ -165,39 +160,6 @@ function Remote() {
     }
   }
 
-  // 构建下拉菜单
-  const menuItems = [
-    // 添加用户主目录选项
-    {
-      key: 'home',
-      label: (
-        <div key={homeDir} onClick={() => {
-          setCurrentPath(homeDir)
-          setLoading(true)
-          setTimeout(() => {
-            loadRemoteDirectory(homeDir)
-          }, 100)
-        }}>
-          {homeDir}
-        </div>
-      )
-    },
-    // 添加分隔线
-    {
-      key: 'divider',
-      type: 'divider'
-    },
-    // 添加驱动器选项
-    ...drives.map((drive, index) => ({
-      key: index,
-      label: (
-        <div onClick={() => handleDriveSelect(drive)}>
-          {drive}
-        </div>
-      )
-    }))
-  ]
-
   // 处理文件/目录点击
   const handleItemClick = async (entry) => {
     if (entry.isDirectory && currentConnectionId) {
@@ -236,7 +198,7 @@ function Remote() {
     }, 100)
   }
 
-  return isConnected && currentConnection ? (
+  return currentConnectionId && currentConnection ? (
     <RemoteFileBrowser
       currentPath={currentPath}
       files={files}
@@ -251,13 +213,10 @@ function Remote() {
       handleItemClick={handleItemClick}
       handleDriveSelect={handleDriveSelect}
       handleDisconnect={handleDisconnect}
-      menuItems={menuItems}
     />
   ) : (
     <RemoteConnectionList
       connections={connections}
-      addModalVisible={addModalVisible}
-      setAddModalVisible={setAddModalVisible}
       handleConnect={handleConnect}
       handleDeleteConnection={handleDeleteConnection}
       loading={loading}

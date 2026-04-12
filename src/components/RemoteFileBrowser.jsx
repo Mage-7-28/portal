@@ -16,9 +16,37 @@ const RemoteFileBrowser = ({
   handleRefresh,
   handleItemClick,
   handleDriveSelect,
-  handleDisconnect,
-  menuItems
+  handleDisconnect
 }) => {
+  // 构建下拉菜单
+  const menuItems = [
+    // 添加用户主目录选项
+    {
+      key: 'home',
+      label: (
+        <div key={homeDir} onClick={() => {
+          handlePathChange({ target: { value: homeDir }})
+          handlePathSubmit({ key: 'Enter' })
+        }}>
+          {homeDir}
+        </div>
+      )
+    },
+    // 添加分隔线
+    {
+      key: 'divider',
+      type: 'divider'
+    },
+    // 添加驱动器选项
+    ...drives.map((drive, index) => ({
+      key: index,
+      label: (
+        <div onClick={() => handleDriveSelect(drive)}>
+          {drive}
+        </div>
+      )
+    }))
+  ]
   return (
     <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column' }}>
       {/* 地址栏 */}
