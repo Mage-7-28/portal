@@ -2,7 +2,6 @@ import { Col, ConfigProvider, Row, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { GlobalFontFamily } from './utils/GlobalEnum.js'
 import { Toaster } from 'react-hot-toast'
-import Local from './components/Local'
 import Remote from './components/Remote'
 
 function App() {
@@ -26,10 +25,7 @@ function App() {
       }
     } } locale={ zhCN } componentSize={ 'middle' }>
       <Row gutter={5} style={{ padding: '0 10px' }}>
-        <Col span={12}>
-          <Local />
-        </Col>
-        <Col span={12}>
+        <Col span={24}>
           <Remote />
         </Col>
       </Row>

@@ -67,6 +67,15 @@ pub fn add_ssh_connection(
     password: String,
 ) -> Result<String, String> {
     let id = format!("{}-{}-{}", host, port, username);
+    let mut connections = state.connections.lock().unwrap();
+    
+    // 检查连接是否已存在，如果存在则更新密码
+    if let Some(existing) = connections.iter_mut().find(|c| c.id == id) {
+        existing.password = password;
+        existing.connected = false;
+        return Ok(existing.id.clone());
+    }
+    
     let connection = SshConnection {
         id: id.clone(),
         host,
@@ -75,13 +84,6 @@ pub fn add_ssh_connection(
         password,
         connected: false,
     };
-
-    let mut connections = state.connections.lock().unwrap();
-    
-    // 检查连接是否已存在
-    if let Some(existing) = connections.iter().find(|c| c.id == id) {
-        return Ok(existing.id.clone());
-    }
     
     connections.push(connection);
     Ok(id)

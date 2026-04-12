@@ -8,6 +8,52 @@ import { msgBoxStyle } from '../style/LayoutStyle.js'
 
 const { Title } = Typography
 
+// 远程文件项组件
+const RemoteFileItem = ({ entry, currentPath, onClick }) => {
+  // 格式化文件大小
+  const formatFileSize = (bytes) => {
+    if (bytes === 0) return ''
+    const k = 1024
+    const sizes = [ 'B', 'KB', 'MB', 'GB', 'TB' ]
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  }
+
+  return (
+    <div
+      style={{
+        cursor: 'default'
+      }}
+      onClick={onClick}
+    >
+      <List.Item
+        style={{
+          cursor: entry.isDirectory ? 'pointer' : 'default',
+          borderBottom: '1px solid #1E1E1E',
+          padding: '12px'
+        }}
+        hoverable
+      >
+        <List.Item.Meta
+          avatar={
+            entry.isDirectory ?
+              <FolderOutlined style={{ color: '#4EC9B0' }} /> :
+              <FileOutlined style={{ color: '#ffffff' }} />
+          }
+          title={
+            <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
+              {entry.name}
+            </span>
+          }
+        />
+        <span style={{ color: '#888888', fontSize: 12 }}>
+          {entry.isDirectory ? '' : formatFileSize(entry.size)}
+        </span>
+      </List.Item>
+    </div>
+  )
+}
+
 // 存储键名
 const SSH_CONNECTIONS_KEY = 'ssh_connections'
 
@@ -152,19 +198,26 @@ function Remote() {
   const handleConnect = async (connection) => {
     try {
       setLoading(true)
+      console.log('连接信息:', connection)
 
       setTimeout(async () => {
         try {
+          // 确保port是数字类型
+          const port = parseInt(connection.port)
+          console.log('转换后的端口:', port)
+
           // 创建连接
           const connectionId = await sftpManager.createConnection({
             host: connection.host,
-            port: connection.port,
+            port: port,
             username: connection.username,
             password: connection.password
           })
+          console.log('创建连接成功，连接ID:', connectionId)
 
           // 连接到服务器
           await sftpManager.connect(connectionId)
+          console.log('连接到服务器成功')
 
           // 更新状态
           setCurrentConnection(connection)
@@ -343,6 +396,8 @@ function Remote() {
     const i = Math.floor(Math.log(bytes) / Math.log(k))
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
   }
+
+
 
   // 渲染连接列表视图（未连接状态）
   const renderConnectionList = () => (
@@ -554,40 +609,29 @@ function Remote() {
   )
 
   // 渲染文件浏览器视图（已连接状态）
-  const renderFileBrowser = () => (
-    <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column' }}>
-      {/* 地址栏 */}
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
-        <Button
-          onClick={handleGoBack}
-          icon={<UpOutlined />}
-          style={{
-            backgroundColor: '#2B2D30',
-            border: '1px solid #3E4148',
-            color: '#ffffff',
-            borderTopRightRadius: 0,
-            borderBottomRightRadius: 0
-          }}
-        />
-
-        <Input
-          value={currentPath}
-          onChange={handlePathChange}
-          onKeyPress={handlePathSubmit}
-          style={{
-            flex: 1,
-            backgroundColor: '#2B2D30',
-            border: '1px solid #3E4148',
-            borderLeft: 'none',
-            borderRight: 'none',
-            color: '#ffffff'
-          }}
-        />
-
-        <Dropdown menu={{ items: menuItems }}>
+  const renderFileBrowser = () => {
+    return (
+      <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column' }}>
+        {/* 地址栏 */}
+        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
           <Button
-            icon={<DownOutlined />}
+            onClick={handleGoBack}
+            icon={<UpOutlined />}
             style={{
+              backgroundColor: '#2B2D30',
+              border: '1px solid #3E4148',
+              color: '#ffffff',
+              borderTopRightRadius: 0,
+              borderBottomRightRadius: 0
+            }}
+          />
+
+          <Input
+            value={currentPath}
+            onChange={handlePathChange}
+            onKeyPress={handlePathSubmit}
+            style={{
+              flex: 1,
               backgroundColor: '#2B2D30',
               border: '1px solid #3E4148',
               borderLeft: 'none',
@@ -595,91 +639,92 @@ function Remote() {
               color: '#ffffff'
             }}
           />
-        </Dropdown>
 
-        <Button
-          onClick={handleRefresh}
-          icon={<ReloadOutlined />}
-          style={{
-            backgroundColor: '#2B2D30',
-            border: '1px solid #3E4148',
-            borderLeft: 'none',
-            color: '#ffffff',
-            borderTopLeftRadius: 0,
-            borderBottomLeftRadius: 0
-          }}
-        />
-      </div>
+          <Dropdown menu={{ items: menuItems }}>
+            <Button
+              icon={<DownOutlined />}
+              style={{
+                backgroundColor: '#2B2D30',
+                border: '1px solid #3E4148',
+                borderLeft: 'none',
+                borderRight: 'none',
+                color: '#ffffff'
+              }}
+            />
+          </Dropdown>
 
-      {/* 连接信息栏 */}
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-        padding: '8px 12px',
-        backgroundColor: '#1E1E1E',
-        borderRadius: '4px'
-      }}>
-        <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
-        </span>
-        <Button
-          danger
-          icon={<DisconnectOutlined />}
-          onClick={handleDisconnect}
-        >
-          断开连接
-        </Button>
-      </div>
-
-      {/* 文件列表 */}
-      <div style={{ height: 'calc(100vh - 135px)', overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
-        {loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-            <Spin description="加载中..." />
-          </div>
-        ) : files.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
-            该目录为空
-          </div>
-        ) : (
-          <List
-            itemLayout="horizontal"
-            dataSource={files}
-            renderItem={(entry, index) => (
-              <List.Item
-                key={index}
-                onClick={() => handleItemClick(entry)}
-                style={{
-                  cursor: entry.isDirectory ? 'pointer' : 'default',
-                  borderBottom: '1px solid #1E1E1E',
-                  padding: '12px'
-                }}
-                hoverable
-              >
-                <List.Item.Meta
-                  avatar={
-                    entry.isDirectory ?
-                      <FolderOutlined style={{ color: '#4EC9B0' }} /> :
-                      <FileOutlined style={{ color: '#ffffff' }} />
-                  }
-                  title={
-                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
-                      {entry.name}
-                    </span>
-                  }
-                />
-                <span style={{ color: '#888888', fontSize: 12 }}>
-                  {entry.isDirectory ? '' : formatFileSize(entry.size)}
-                </span>
-              </List.Item>
-            )}
+          <Button
+            onClick={handleRefresh}
+            icon={<ReloadOutlined />}
+            style={{
+              backgroundColor: '#2B2D30',
+              border: '1px solid #3E4148',
+              borderLeft: 'none',
+              color: '#ffffff',
+              borderTopLeftRadius: 0,
+              borderBottomLeftRadius: 0
+            }}
           />
-        )}
+        </div>
+
+        {/* 连接信息栏 */}
+        <div style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginBottom: 16,
+          padding: '8px 12px',
+          backgroundColor: '#1E1E1E',
+          borderRadius: '4px'
+        }}>
+          <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
+          </span>
+          <Button
+            danger
+            icon={<DisconnectOutlined />}
+            onClick={handleDisconnect}
+          >
+            断开连接
+          </Button>
+        </div>
+
+        {/* 文件列表 */}
+        <div
+          style={{
+            height: 'calc(100vh - 148px)',
+            overflow: 'auto',
+            backgroundColor: '#0C0D0E',
+            borderRadius: '4px',
+            border: '1px solid transparent'
+          }}
+        >
+          {loading ? (
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
+              <Spin description="加载中..." />
+            </div>
+          ) : files.length === 0 ? (
+            <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
+              该目录为空
+            </div>
+          ) : (
+            <List
+              itemLayout="horizontal"
+              dataSource={files}
+              renderItem={(entry, index) => (
+                <RemoteFileItem
+                  key={index}
+                  entry={entry}
+                  currentPath={currentPath}
+                  onClick={() => handleItemClick(entry)}
+                />
+              )}
+            />
+          )}
+        </div>
       </div>
-    </div>
-  )
+    )
+  }
 
   return isConnected && currentConnection ? renderFileBrowser() : renderConnectionList()
 }

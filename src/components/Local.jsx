@@ -2,8 +2,48 @@ import React, { useState, useEffect } from 'react'
 import { Input, Button, Dropdown, List, Spin, Typography, Space } from 'antd'
 import { UpOutlined, DownOutlined, ReloadOutlined, FolderOutlined, FileOutlined } from '@ant-design/icons'
 import { getUserHomeDir, getDirectoryContents, formatFileSize, getDrives } from '../utils/fsUtils'
+import sftpManager from '../utils/sftpUtils'
+import toast from 'react-hot-toast'
+import { msgBoxStyle } from '../style/LayoutStyle.js'
 
 const { Title } = Typography
+
+// 文件项组件
+const FileItem = ({ entry, currentPath, onClick }) => {
+  return (
+    <div
+      style={{
+        cursor: 'default'
+      }}
+      onClick={onClick}
+    >
+      <List.Item
+        style={{
+          cursor: entry.isDirectory ? 'pointer' : 'default',
+          borderBottom: '1px solid #1E1E1E',
+          padding: '12px'
+        }}
+        hoverable
+      >
+        <List.Item.Meta
+          avatar={
+            entry.isDirectory ?
+              <FolderOutlined style={{ color: '#4EC9B0' }} /> :
+              <FileOutlined style={{ color: '#ffffff' }} />
+          }
+          title={
+            <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
+              {entry.name}
+            </span>
+          }
+        />
+        <span style={{ color: '#888888', fontSize: 12 }}>
+          {entry.isDirectory ? '' : formatFileSize(entry.size)}
+        </span>
+      </List.Item>
+    </div>
+  )
+}
 
 function Local() {
   const [ currentPath, setCurrentPath ] = useState('')
@@ -187,7 +227,15 @@ function Local() {
       </div>
 
       {/* 文件列表 */}
-      <div style={{ height: 'calc(100vh - 85px)', overflow: 'auto', backgroundColor: '#0C0D0E', borderRadius: '4px' }}>
+      <div
+        style={{
+          height: 'calc(100vh - 85px)',
+          overflow: 'auto',
+          backgroundColor: '#0C0D0E',
+          borderRadius: '4px',
+          border: '1px solid transparent'
+        }}
+      >
         {loading ? (
           <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
             <Spin description="加载中..." />
@@ -201,32 +249,12 @@ function Local() {
             itemLayout="horizontal"
             dataSource={files}
             renderItem={(entry, index) => (
-              <List.Item
+              <FileItem
                 key={index}
+                entry={entry}
+                currentPath={currentPath}
                 onClick={() => handleItemClick(entry)}
-                style={{
-                  cursor: entry.isDirectory ? 'pointer' : 'default',
-                  borderBottom: '1px solid #1E1E1E',
-                  padding: '12px'
-                }}
-                hoverable
-              >
-                <List.Item.Meta
-                  avatar={
-                    entry.isDirectory ?
-                      <FolderOutlined style={{ color: '#4EC9B0' }} /> :
-                      <FileOutlined style={{ color: '#ffffff' }} />
-                  }
-                  title={
-                    <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
-                      {entry.name}
-                    </span>
-                  }
-                />
-                <span style={{ color: '#888888', fontSize: 12 }}>
-                  {entry.isDirectory ? '' : formatFileSize(entry.size)}
-                </span>
-              </List.Item>
+              />
             )}
           />
         )}

@@ -82,15 +82,8 @@ class SftpManager {
     try {
       const connectionId = this.generateConnectionId(config)
 
-      // 检查连接是否已存在
-      if (this.connections.has(connectionId)) {
-        const existingConnection = this.connections.get(connectionId)
-        if (existingConnection.status === SftpConnectionStatus.CONNECTED) {
-          return connectionId
-        }
-      }
-
-      // 添加连接到后端管理
+      // 无论连接是否已存在，都重新创建连接
+      // 这样可以确保使用最新的密码信息
       await invoke('add_ssh_connection', {
         host: config.host,
         port: config.port,
@@ -126,10 +119,13 @@ class SftpManager {
         throw new Error('连接不存在')
       }
 
+      console.log('连接信息:', connectionInfo)
       connectionInfo.status = SftpConnectionStatus.CONNECTING
       connectionInfo.lastError = null
 
+      console.log('尝试连接到服务器，连接ID:', connectionId)
       const result = await invoke('connect_ssh', { id: connectionId })
+      console.log('连接结果:', result)
 
       if (result) {
         connectionInfo.status = SftpConnectionStatus.CONNECTED
@@ -190,18 +186,43 @@ class SftpManager {
         throw new Error('连接未建立')
       }
 
-      const result = await invoke('scp_upload', {
-        id: connectionId,
-        localPath: localPath,
-        remotePath: remotePath
-      })
-
+      // 模拟进度更新
       if (onProgress) {
-        onProgress(100)
-      }
+        let progress = 0
+        const interval = setInterval(() => {
+          progress += Math.random() * 10
+          if (progress >= 90) {
+            clearInterval(interval)
+          }
+          onProgress(progress)
+        }, 200)
 
-      connectionInfo.lastActivity = Date.now()
-      return result
+        try {
+          const result = await invoke('scp_upload', {
+            id: connectionId,
+            localPath: localPath,
+            remotePath: remotePath
+          })
+
+          clearInterval(interval)
+          onProgress(100)
+
+          connectionInfo.lastActivity = Date.now()
+          return result
+        } catch (error) {
+          clearInterval(interval)
+          throw error
+        }
+      } else {
+        const result = await invoke('scp_upload', {
+          id: connectionId,
+          localPath: localPath,
+          remotePath: remotePath
+        })
+
+        connectionInfo.lastActivity = Date.now()
+        return result
+      }
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('上传文件失败:', errorMessage)
@@ -228,18 +249,43 @@ class SftpManager {
         throw new Error('连接未建立')
       }
 
-      const result = await invoke('scp_download', {
-        id: connectionId,
-        remotePath: remotePath,
-        localPath: localPath
-      })
-
+      // 模拟进度更新
       if (onProgress) {
-        onProgress(100)
-      }
+        let progress = 0
+        const interval = setInterval(() => {
+          progress += Math.random() * 10
+          if (progress >= 90) {
+            clearInterval(interval)
+          }
+          onProgress(progress)
+        }, 200)
 
-      connectionInfo.lastActivity = Date.now()
-      return result
+        try {
+          const result = await invoke('scp_download', {
+            id: connectionId,
+            remotePath: remotePath,
+            localPath: localPath
+          })
+
+          clearInterval(interval)
+          onProgress(100)
+
+          connectionInfo.lastActivity = Date.now()
+          return result
+        } catch (error) {
+          clearInterval(interval)
+          throw error
+        }
+      } else {
+        const result = await invoke('scp_download', {
+          id: connectionId,
+          remotePath: remotePath,
+          localPath: localPath
+        })
+
+        connectionInfo.lastActivity = Date.now()
+        return result
+      }
     } catch (error) {
       const errorMessage = this.parseError(error)
       console.error('下载文件失败:', errorMessage)
@@ -389,6 +435,14 @@ class SftpManager {
       }
     }
     this.connections.clear()
+  }
+
+  /**
+   * 获取所有连接
+   * @returns {Object}
+   */
+  getConnections() {
+    return Object.fromEntries(this.connections)
   }
 
   /**
