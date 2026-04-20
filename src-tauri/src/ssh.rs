@@ -268,6 +268,13 @@ pub fn scp_upload(
             remote_file.flush()
                 .map_err(|e| format!("刷新文件缓冲区失败: {}", e))?;
 
+            // 显式关闭远程文件
+            drop(remote_file);
+            // 显式关闭SFTP会话
+            drop(sftp);
+            // 显式关闭SSH会话
+            drop(sess);
+
             Ok("上传成功".to_string())
         })();
 
@@ -395,7 +402,14 @@ pub fn scp_download(
             writer.flush()
                 .map_err(|e| format!("刷新文件缓冲区失败: {}", e))?;
 
-            println!("文件下载完成，共读取 {} 字节", total_read);
+            // 显式关闭远程文件
+            drop(remote_file);
+            // 显式关闭SFTP会话
+            drop(sftp);
+            // 显式关闭SSH会话
+            drop(sess);
+
+            println!("文件下载完成，共读取 {} 字节，连接已关闭", total_read);
             Ok("下载成功".to_string())
         })();
 

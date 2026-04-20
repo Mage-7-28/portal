@@ -206,9 +206,9 @@ class SftpManager {
           if (event.payload.id === connectionId) {
             if (unlistenProgress) unlistenProgress()
             if (unlistenComplete) unlistenComplete()
-            
+
             connectionInfo.lastActivity = Date.now()
-            
+
             if (event.payload.success) {
               resolve(event.payload.message)
             } else {
@@ -251,7 +251,7 @@ class SftpManager {
     return new Promise(async (resolve, reject) => {
       try {
         console.log('开始下载文件:', { connectionId, remotePath, localPath })
-        
+
         const connectionInfo = this.connections.get(connectionId)
         if (!connectionInfo) {
           notification.error('连接错误', '连接不存在')
@@ -287,9 +287,9 @@ class SftpManager {
           if (event.payload.id === connectionId) {
             if (unlistenProgress) unlistenProgress()
             if (unlistenComplete) unlistenComplete()
-            
+
             connectionInfo.lastActivity = Date.now()
-            
+
             if (event.payload.success) {
               resolve(event.payload.message)
             } else {

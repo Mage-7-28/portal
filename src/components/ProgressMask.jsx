@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Progress, Typography } from 'antd'
 import { DownloadOutlined, UploadOutlined } from '@ant-design/icons'
 import PubSub from 'pubsub-js'
@@ -8,24 +8,53 @@ const { Text } = Typography
 
 const ProgressMask = () => {
   const [ maskData, setMaskData ] = useState(null)
+  const [ windowSize, setWindowSize ] = useState({
+    width: window.innerWidth,
+    height: window.innerHeight
+  })
 
   useEffect(() => {
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
       setMaskData(data)
     })
-    return () => PubSub.unsubscribe(token)
+
+    const handleResize = () => {
+      setWindowSize({
+        width: window.innerWidth,
+        height: window.innerHeight
+      })
+    }
+
+    window.addEventListener('resize', handleResize)
+    return () => {
+      PubSub.unsubscribe(token)
+      window.removeEventListener('resize', handleResize)
+    }
   }, [])
+
+  // 响应式计算容器大小
+  const containerStyle = useMemo(() => {
+    const maxWidth = Math.min(windowSize.width * 0.8, 400)
+    const minWidth = 300
+    const width = Math.max(minWidth, maxWidth)
+
+    return {
+      ...styles.container,
+      width: `${ width }px`
+    }
+  }, [windowSize])
 
   if (!maskData) {
     return null
   }
 
-  const { progress, fileName, operation } = maskData
+  // 确保 maskData 有必要的属性
+  const { progress = 0, fileName = '', operation = 'download' } = maskData
 
   return (
     <div style={styles.overlay}>
-      <div style={styles.container}>
-        <div style={styles.iconWrapper}>
+      <div style={containerStyle}>
+        <div style={styles.iconContainer}>
           <div style={styles.operationIcon}>
             {operation === 'download' ? (
               <DownloadOutlined style={styles.icon} />
@@ -36,7 +65,7 @@ const ProgressMask = () => {
         </div>
 
         <Text style={styles.title}>
-          {operation === 'download' ? '正在下载文件' : '正在上传文件'}
+          {operation === 'download' ? '下载中' : '上传中'}
         </Text>
 
         <Text style={styles.fileName} ellipsis={{ tooltip: fileName }}>
@@ -47,11 +76,12 @@ const ProgressMask = () => {
           <Progress
             percent={Math.round(progress)}
             strokeColor={{
-              '0%': '#4EC9B0',
-              '100%': '#52C9B0'
+              '0%': '#8B5CF6',
+              '100%': '#EC4899'
             }}
             trailColor="rgba(255, 255, 255, 0.1)"
             showInfo={false}
+            size="small"
           />
           <Text style={styles.percentText}>{Math.round(progress)}%</Text>
         </div>
@@ -67,76 +97,73 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.85)',
-    backdropFilter: 'blur(12px)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
+    backdropFilter: 'blur(8px)',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 99999,
-    animation: 'fadeIn 0.3s ease-out'
+    animation: 'fadeIn 0.2s ease-out'
   },
   container: {
-    background: 'linear-gradient(145deg, #1a1a1a 0%, #0d0d0d 100%)',
-    borderRadius: '20px',
-    padding: '48px 56px',
-    width: '420px',
+    background: 'linear-gradient(135deg, #1E293B 0%, #0F172A 100%)',
+    borderRadius: '16px',
+    padding: '32px 36px',
     textAlign: 'center',
-    boxShadow: '0 25px 80px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.05)',
-    animation: 'scaleIn 0.3s ease-out'
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08)',
+    animation: 'scaleIn 0.2s ease-out',
+    border: '1px solid rgba(255, 255, 255, 0.1)'
   },
-  iconWrapper: {
-    position: 'relative',
-    width: '100px',
-    height: '100px',
-    margin: '0 auto 32px',
+  iconContainer: {
+    margin: '0 auto 24px',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center'
   },
   operationIcon: {
-    position: 'absolute',
-    bottom: '-8px',
-    right: '-8px',
-    width: '40px',
-    height: '40px',
+    width: '56px',
+    height: '56px',
     borderRadius: '50%',
-    backgroundColor: '#4EC9B0',
+    background: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    boxShadow: '0 4px 12px rgba(78, 201, 176, 0.4)'
+    boxShadow: '0 8px 24px rgba(139, 92, 246, 0.4)'
   },
   icon: {
-    fontSize: '20px',
+    fontSize: '24px',
     color: '#ffffff'
   },
   title: {
-    fontSize: '22px',
+    fontSize: '18px',
     fontWeight: '600',
     color: '#ffffff',
-    marginBottom: '12px',
+    marginBottom: '8px',
     display: 'block',
-    letterSpacing: '0.5px'
+    letterSpacing: '0.3px'
   },
   fileName: {
-    fontSize: '14px',
+    fontSize: '13px',
     color: 'rgba(255, 255, 255, 0.6)',
-    marginBottom: '32px',
+    marginBottom: '24px',
     display: 'block',
-    maxWidth: '300px',
-    margin: '0 auto 32px'
+    maxWidth: '90%',
+    margin: '0 auto 24px',
+    lineHeight: '1.4'
   },
   progressWrapper: {
     position: 'relative',
-    padding: '0 8px'
+    padding: '0 4px'
   },
   percentText: {
-    fontSize: '28px',
+    fontSize: '24px',
     fontWeight: '700',
-    color: '#4EC9B0',
-    marginTop: '16px',
+    background: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)',
+    WebkitBackgroundClip: 'text',
+    WebkitTextFillColor: 'transparent',
+    marginTop: '12px',
     display: 'block',
-    textShadow: '0 0 20px rgba(78, 201, 176, 0.3)'
+    textShadow: '0 0 15px rgba(139, 92, 246, 0.3)'
   }
 }
 
