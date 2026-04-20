@@ -1,7 +1,7 @@
 import React from 'react'
-import { List, Button, message } from 'antd'
+import { List, Button } from 'antd'
 import { FolderOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
-import { formatFileSize, StoreKeys } from '../utils/common'
+import { formatFileSize, StoreKeys, PubSubBusinessKeyEnum } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
@@ -52,26 +52,54 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
                   borderColor: '#4EC9B0'
                 }
               }}
-              onClick={async (e) => {
+              onClick={(e) => {
                 e.stopPropagation()
-                try {
-                  // 构建远程文件路径
-                  const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
-                  // 从store中获取下载路径
-                  const downloadPath = await store.get(StoreKeys.DOWNLOAD_PATH)
+                // 构建远程文件路径
+                const remotePath = currentPath.endsWith('/') ? currentPath + entry.name : currentPath + '/' + entry.name
+                // 从store中获取下载路径
+                store.get(StoreKeys.DOWNLOAD_PATH).then(downloadPath => {
                   // 构建本地文件路径
                   const localPath = `${ downloadPath }/${ entry.name }`
-                  // 调用sftpManager下载文件
-                  const result = await sftpManager.downloadFile(connectionId, remotePath, localPath)
-                  if (result) {
-                    toast.success(`文件 ${ entry.name } 下载成功，保存在: ${ localPath }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
-                  } else {
-                    toast.error('文件下载失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+
+                  // 开启进度遮罩
+                  PubSubBusinessKeyEnum.SEND_MASK({
+                    progress: 0,
+                    fileName: entry.name,
+                    operation: 'download'
+                  })
+
+                  // 定义进度回调函数
+                  const onProgress = (progress) => {
+                    // 更新进度遮罩
+                    PubSubBusinessKeyEnum.SEND_MASK({
+                      progress: Math.round(progress),
+                      fileName: entry.name,
+                      operation: 'download'
+                    })
                   }
-                } catch (error) {
-                  console.error('下载文件失败:', error)
-                  toast.error(`文件 ${ entry.name } 下载失败: ${ error.message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
-                }
+
+                  // 添加延迟，确保进度遮罩有足够的时间显示
+                  setTimeout(() => {
+                    // 调用sftpManager下载文件，传入进度回调
+                    sftpManager.downloadFile(connectionId, remotePath, localPath, onProgress)
+                      .then(result => {
+                        // 关闭进度遮罩
+                        PubSubBusinessKeyEnum.SEND_MASK(null)
+                        if (result) {
+                          toast.success(`文件 ${ entry.name } 下载成功，保存在: ${ localPath }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                        } else {
+                          toast.error('文件下载失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+                        }
+                      })
+                      .catch(error => {
+                        console.error('下载文件失败:', error)
+                        // 关闭进度遮罩
+                        PubSubBusinessKeyEnum.SEND_MASK(null)
+                        const errorMessage = error.message || error.toString() || '未知错误'
+                        toast.error(`文件 ${ entry.name } 下载失败: ${ errorMessage }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                      })
+                  }, 100)
+                })
               }}
             >
               下载

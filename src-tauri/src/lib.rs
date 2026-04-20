@@ -141,6 +141,11 @@ pub fn run() {
             ssh::remove_ssh_connection
         ])
         .setup(|app| {
+            // 设置AppHandle到SshState中
+            let app_handle = app.app_handle();
+            let state = app.state::<ssh::SshState>();
+            *state.app_handle.lock().unwrap() = Some(app_handle.clone());
+            
             #[cfg(desktop)]
             {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};

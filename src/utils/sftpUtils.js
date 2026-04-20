@@ -172,61 +172,71 @@ class SftpManager {
    * @returns {Promise<string>}
    */
   async uploadFile(connectionId, localPath, remotePath, onProgress) {
-    try {
-      const connectionInfo = this.connections.get(connectionId)
-      if (!connectionInfo) {
-        notification.error('连接错误', '连接不存在')
-        return null
-      }
-
-      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        notification.error('连接错误', '连接未建立')
-        return null
-      }
-
-      // 模拟进度更新
-      if (onProgress) {
-        let progress = 0
-        const interval = setInterval(() => {
-          progress += Math.random() * 10
-          if (progress >= 90) {
-            clearInterval(interval)
-          }
-          onProgress(progress)
-        }, 200)
-
-        try {
-          const result = await invoke('scp_upload', {
-            id: connectionId,
-            localPath: localPath,
-            remotePath: remotePath
-          })
-
-          clearInterval(interval)
-          onProgress(100)
-
-          connectionInfo.lastActivity = Date.now()
-          return result
-        } catch (error) {
-          clearInterval(interval)
-          throw error
+    return new Promise(async (resolve, reject) => {
+      try {
+        const connectionInfo = this.connections.get(connectionId)
+        if (!connectionInfo) {
+          notification.error('连接错误', '连接不存在')
+          reject(new Error('连接不存在'))
+          return
         }
-      } else {
-        const result = await invoke('scp_upload', {
+
+        if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+          notification.error('连接错误', '连接未建立')
+          reject(new Error('连接未建立'))
+          return
+        }
+
+        const { listen } = await import('@tauri-apps/api/event')
+        let unlistenProgress = null
+        let unlistenComplete = null
+
+        // 监听上传进度事件
+        if (onProgress) {
+          const handleProgress = (event) => {
+            if (event.payload.id === connectionId) {
+              onProgress(event.payload.progress)
+            }
+          }
+          unlistenProgress = await listen('upload-progress', handleProgress)
+        }
+
+        // 监听上传完成事件
+        const handleComplete = (event) => {
+          if (event.payload.id === connectionId) {
+            if (unlistenProgress) unlistenProgress()
+            if (unlistenComplete) unlistenComplete()
+            
+            connectionInfo.lastActivity = Date.now()
+            
+            if (event.payload.success) {
+              resolve(event.payload.message)
+            } else {
+              reject(new Error(event.payload.message))
+            }
+          }
+        }
+        unlistenComplete = await listen('upload-complete', handleComplete)
+
+        // 启动上传 - 不阻塞UI
+        invoke('scp_upload', {
           id: connectionId,
           localPath: localPath,
           remotePath: remotePath
+        }).catch((error) => {
+          const errorMessage = this.parseError(error)
+          console.error('启动上传失败:', errorMessage)
+          if (unlistenProgress) unlistenProgress()
+          if (unlistenComplete) unlistenComplete()
+          reject(new Error(errorMessage))
         })
-
-        connectionInfo.lastActivity = Date.now()
-        return result
+      } catch (error) {
+        const errorMessage = this.parseError(error)
+        console.error('上传文件失败:', errorMessage)
+        notification.error('上传文件失败', errorMessage)
+        reject(new Error(errorMessage))
       }
-    } catch (error) {
-      const errorMessage = this.parseError(error)
-      console.error('上传文件失败:', errorMessage)
-      notification.error('上传文件失败', errorMessage)
-      return null
-    }
+    })
   }
 
   /**
@@ -238,61 +248,80 @@ class SftpManager {
    * @returns {Promise<string>}
    */
   async downloadFile(connectionId, remotePath, localPath, onProgress) {
-    try {
-      const connectionInfo = this.connections.get(connectionId)
-      if (!connectionInfo) {
-        notification.error('连接错误', '连接不存在')
-        return null
-      }
-
-      if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
-        notification.error('连接错误', '连接未建立')
-        return null
-      }
-
-      // 模拟进度更新
-      if (onProgress) {
-        let progress = 0
-        const interval = setInterval(() => {
-          progress += Math.random() * 10
-          if (progress >= 90) {
-            clearInterval(interval)
-          }
-          onProgress(progress)
-        }, 200)
-
-        try {
-          const result = await invoke('scp_download', {
-            id: connectionId,
-            remotePath: remotePath,
-            localPath: localPath
-          })
-
-          clearInterval(interval)
-          onProgress(100)
-
-          connectionInfo.lastActivity = Date.now()
-          return result
-        } catch (error) {
-          clearInterval(interval)
-          throw error
+    return new Promise(async (resolve, reject) => {
+      try {
+        console.log('开始下载文件:', { connectionId, remotePath, localPath })
+        
+        const connectionInfo = this.connections.get(connectionId)
+        if (!connectionInfo) {
+          notification.error('连接错误', '连接不存在')
+          reject(new Error('连接不存在'))
+          return
         }
-      } else {
-        const result = await invoke('scp_download', {
+
+        if (connectionInfo.status !== SftpConnectionStatus.CONNECTED) {
+          notification.error('连接错误', '连接未建立')
+          reject(new Error('连接未建立'))
+          return
+        }
+
+        const { listen } = await import('@tauri-apps/api/event')
+        let unlistenProgress = null
+        let unlistenComplete = null
+
+        // 监听下载进度事件
+        if (onProgress) {
+          const handleProgress = (event) => {
+            console.log('收到进度事件:', event.payload)
+            if (event.payload.id === connectionId) {
+              onProgress(event.payload.progress)
+            }
+          }
+          unlistenProgress = await listen('download-progress', handleProgress)
+          console.log('进度监听器已注册')
+        }
+
+        // 监听下载完成事件
+        const handleComplete = (event) => {
+          console.log('收到完成事件:', event.payload)
+          if (event.payload.id === connectionId) {
+            if (unlistenProgress) unlistenProgress()
+            if (unlistenComplete) unlistenComplete()
+            
+            connectionInfo.lastActivity = Date.now()
+            
+            if (event.payload.success) {
+              resolve(event.payload.message)
+            } else {
+              reject(new Error(event.payload.message))
+            }
+          }
+        }
+        unlistenComplete = await listen('download-complete', handleComplete)
+        console.log('完成监听器已注册')
+
+        // 启动下载 - 不阻塞UI
+        console.log('调用scp_download命令')
+        invoke('scp_download', {
           id: connectionId,
           remotePath: remotePath,
           localPath: localPath
+        }).then((result) => {
+          console.log('scp_download命令返回:', result)
+        }).catch((error) => {
+          const errorMessage = this.parseError(error)
+          console.error('启动下载失败:', errorMessage)
+          if (unlistenProgress) unlistenProgress()
+          if (unlistenComplete) unlistenComplete()
+          reject(new Error(errorMessage))
         })
-
-        connectionInfo.lastActivity = Date.now()
-        return result
+      } catch (error) {
+        const errorMessage = this.parseError(error)
+        console.error('下载文件失败:', errorMessage)
+        notification.error('下载文件失败', errorMessage)
+        reject(new Error(errorMessage))
       }
-    } catch (error) {
-      const errorMessage = this.parseError(error)
-      console.error('下载文件失败:', errorMessage)
-      notification.error('下载文件失败', errorMessage)
-      return null
-    }
+    })
   }
 
   /**
