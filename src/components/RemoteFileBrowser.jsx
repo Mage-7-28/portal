@@ -1,10 +1,9 @@
 import React from 'react'
 import { Button, Dropdown, Input, List, Spin } from 'antd'
-import { DisconnectOutlined, DownOutlined, ReloadOutlined, UpOutlined, UploadOutlined } from '@ant-design/icons'
+import { DisconnectOutlined, DownOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
 import RemoteFileItem from './RemoteFileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
-import { store } from '../utils/storeUtils'
-import { StoreKeys, PubSubBusinessKeyEnum } from '../utils/common'
+import { PubSubBusinessKeyEnum } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
@@ -37,7 +36,7 @@ const RemoteFileBrowser = ({
         filters: [
           {
             name: '所有文件',
-            extensions: [ 'png', 'jpeg', 'jpg', 'gif', 'md' ]
+            extensions: ['/*']
           }
         ]
       })
