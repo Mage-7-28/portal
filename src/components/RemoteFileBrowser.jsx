@@ -87,6 +87,8 @@ const RemoteFileBrowser = ({
               PubSubBusinessKeyEnum.SEND_MASK(null)
               if (result) {
                 toast.success(`文件 ${ fileName } 上传成功`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                // 刷新文件列表
+                handleRefresh()
               } else {
                 toast.error('文件上传失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
               }
