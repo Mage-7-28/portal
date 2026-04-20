@@ -1,7 +1,13 @@
 import React from 'react'
 import { Button, Dropdown, Input, List, Spin } from 'antd'
-import { DisconnectOutlined, DownOutlined, ReloadOutlined, UpOutlined } from '@ant-design/icons'
+import { DisconnectOutlined, DownOutlined, ReloadOutlined, UpOutlined, UploadOutlined } from '@ant-design/icons'
 import RemoteFileItem from './RemoteFileItem'
+import * as dialog from '@tauri-apps/plugin-dialog'
+import { store } from '../utils/storeUtils'
+import { StoreKeys, PubSubBusinessKeyEnum } from '../utils/common'
+import { sftpManager } from '../utils/sftpUtils'
+import toast from 'react-hot-toast'
+import { msgBoxStyle } from '../style/LayoutStyle.js'
 
 const RemoteFileBrowser = ({
   currentPath,
@@ -19,6 +25,88 @@ const RemoteFileBrowser = ({
   handleDriveSelect,
   handleDisconnect
 }) => {
+  // 上传文件
+  const handleUpload = async () => {
+    try {
+      console.log('开始上传文件...')
+      console.log('当前目录:', currentPath)
+
+      // 弹出系统级文件选择对话框，只能选择文件
+      const result = await dialog.open({
+        title: '选择要上传的文件',
+        filters: [
+          {
+            name: '所有文件',
+            extensions: [ 'png', 'jpeg', 'jpg', 'gif', 'md' ]
+          }
+        ]
+      })
+
+      console.log('对话框返回结果:', result)
+
+      if (result) {
+        // 处理返回结果，可能是字符串或数组
+        const localPath = Array.isArray(result) ? result[0] : result
+        if (!localPath) {
+          console.log('本地路径为空')
+          return
+        }
+        console.log('选择的本地文件路径:', localPath)
+
+        // 获取文件名
+        const fileName = localPath.split('/').pop()
+        console.log('文件名:', fileName)
+
+        // 构建远程路径
+        const remotePath = currentPath.endsWith('/') ? currentPath + fileName : currentPath + '/' + fileName
+        console.log('远程路径:', remotePath)
+
+        // 开启进度遮罩
+        PubSubBusinessKeyEnum.SEND_MASK({
+          progress: 0,
+          fileName: fileName,
+          operation: 'upload'
+        })
+
+        // 定义进度回调函数
+        const onProgress = (progress) => {
+          // 更新进度遮罩
+          PubSubBusinessKeyEnum.SEND_MASK({
+            progress: Math.round(progress),
+            fileName: fileName,
+            operation: 'upload'
+          })
+        }
+
+        // 添加延迟，确保进度遮罩有足够的时间显示
+        setTimeout(() => {
+          // 调用sftpManager上传文件，传入进度回调
+          sftpManager.uploadFile(currentConnectionId, localPath, remotePath, onProgress)
+            .then(result => {
+              // 关闭进度遮罩
+              PubSubBusinessKeyEnum.SEND_MASK(null)
+              if (result) {
+                toast.success(`文件 ${ fileName } 上传成功`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+              } else {
+                toast.error('文件上传失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+              }
+            })
+            .catch(error => {
+              console.error('上传文件失败:', error)
+              // 关闭进度遮罩
+              PubSubBusinessKeyEnum.SEND_MASK(null)
+              const errorMessage = error.message || error.toString() || '未知错误'
+              toast.error(`文件 ${ fileName } 上传失败: ${ errorMessage }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+            })
+        }, 100)
+      } else {
+        console.log('用户取消了文件选择')
+      }
+    } catch (error) {
+      console.error('上传文件失败:', error)
+      toast.error(`上传文件失败: ${ error.message || error.toString() || '未知错误' }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    }
+  }
   // 构建下拉菜单
   const menuItems = [
     // 添加用户主目录选项
@@ -118,13 +206,26 @@ const RemoteFileBrowser = ({
         <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
         </span>
-        <Button
-          danger
-          icon={<DisconnectOutlined />}
-          onClick={handleDisconnect}
-        >
-          断开连接
-        </Button>
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <Button
+            icon={<UploadOutlined />}
+            onClick={handleUpload}
+            style={{
+              backgroundColor: '#2B2D30',
+              border: '1px solid #3E4148',
+              color: '#ffffff'
+            }}
+          >
+            上传
+          </Button>
+          <Button
+            danger
+            icon={<DisconnectOutlined />}
+            onClick={handleDisconnect}
+          >
+            断开连接
+          </Button>
+        </div>
       </div>
 
       {/* 文件列表 */}

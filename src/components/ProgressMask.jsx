@@ -79,7 +79,7 @@ const ProgressMask = () => {
               '0%': '#8B5CF6',
               '100%': '#EC4899'
             }}
-            trailColor="rgba(255, 255, 255, 0.1)"
+            railColor="rgba(255, 255, 255, 0.1)"
             showInfo={false}
             size="small"
           />
