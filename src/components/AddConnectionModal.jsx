@@ -1,11 +1,11 @@
-import React, { useEffect, useState } from "react";
-import { Button, Form, Input, Modal } from "antd";
-import { CheckCircleOutlined, CloseCircleOutlined, CloudServerOutlined, FieldTimeOutlined, LockOutlined, UserOutlined, WifiOutlined } from "@ant-design/icons";
-import { store } from "../utils/storeUtils";
-import sftpManager from "../utils/sftpUtils";
-import toast from "react-hot-toast";
-import { msgBoxStyle } from "../style/LayoutStyle.js";
-import { StoreKeys } from "../utils/common.js";
+import React, { useEffect, useState } from 'react'
+import { Button, Form, Input, Modal } from 'antd'
+import { CheckCircleOutlined, CloseCircleOutlined, CloudServerOutlined, FieldTimeOutlined, LockOutlined, UserOutlined, WifiOutlined } from '@ant-design/icons'
+import { store } from '../utils/storeUtils'
+import sftpManager from '../utils/sftpUtils'
+import toast from 'react-hot-toast'
+import { msgBoxStyle } from '../style/LayoutStyle.js'
+import { StoreKeys } from '../utils/common.js'
 
 const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   const [addForm] = Form.useForm()

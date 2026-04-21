@@ -1,5 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
-import { FileSizeUnits } from "./common.js";
+import { FileSizeUnits } from './common.js'
 
 /**
  * 获取当前系统的当前登录用户的绝对路径
@@ -50,18 +50,6 @@ export const getDirectoryContents = async (targetPath) => {
     console.error('获取目录内容失败:', error)
     return []
   }
-}
-
-/**
- * 格式化文件大小
- * @param {number} bytes - 文件大小（字节）
- * @returns {string} 格式化后的文件大小
- */
-export const formatFileSize = (bytes) => {
-  if (bytes === 0) return '0 B'
-  const k = 1024
-  const i = Math.floor(Math.log(bytes) / Math.log(k))
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + FileSizeUnits[i]
 }
 
 /**

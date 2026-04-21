@@ -1,10 +1,9 @@
 import React from 'react'
-import { List, Button } from 'antd'
-import { FolderOutlined, FileOutlined, DownloadOutlined } from '@ant-design/icons'
-import { formatFileSize, StoreKeys, PubSubBusinessKeyEnum } from '../utils/common'
+import { Button, List } from 'antd'
+import { DownloadOutlined, FileOutlined, FolderOutlined } from '@ant-design/icons'
+import { formatFileSize, PubSubBusinessKeyEnum, StoreKeys } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
-import toast from 'react-hot-toast'
-import { msgBoxStyle } from '../style/LayoutStyle.js'
+import { notification } from '../utils/notificationUtils'
 import { store } from '../utils/storeUtils.js'
 
 const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
@@ -86,9 +85,9 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
                         // 关闭进度遮罩
                         PubSubBusinessKeyEnum.SEND_MASK(null)
                         if (result) {
-                          toast.success(`文件 ${ entry.name } 下载成功，保存在: ${ localPath }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                          notification.success('下载成功', `文件 ${ entry.name } 下载成功，保存在: ${ localPath }`)
                         } else {
-                          toast.error('文件下载失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+                          notification.error('下载失败', '文件下载失败')
                         }
                       })
                       .catch(error => {
@@ -96,7 +95,7 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
                         // 关闭进度遮罩
                         PubSubBusinessKeyEnum.SEND_MASK(null)
                         const errorMessage = error.message || error.toString() || '未知错误'
-                        toast.error(`文件 ${ entry.name } 下载失败: ${ errorMessage }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                        notification.error('下载失败', `文件 ${ entry.name } 下载失败: ${ errorMessage }`)
                       })
                   }, 100)
                 })

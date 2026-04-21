@@ -5,8 +5,7 @@ import RemoteFileItem from './RemoteFileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
-import toast from 'react-hot-toast'
-import { msgBoxStyle } from '../style/LayoutStyle.js'
+import { notification } from '../utils/notificationUtils'
 
 const RemoteFileBrowser = ({
   currentPath,
@@ -85,11 +84,11 @@ const RemoteFileBrowser = ({
               // 关闭进度遮罩
               PubSubBusinessKeyEnum.SEND_MASK(null)
               if (result) {
-                toast.success(`文件 ${ fileName } 上传成功`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+                notification.success('上传成功', `文件 ${ fileName } 上传成功`)
                 // 刷新文件列表
                 handleRefresh()
               } else {
-                toast.error('文件上传失败', { id: 'msgBoxGlobal', style: msgBoxStyle })
+                notification.error('上传失败', '文件上传失败')
               }
             })
             .catch(error => {
@@ -97,7 +96,7 @@ const RemoteFileBrowser = ({
               // 关闭进度遮罩
               PubSubBusinessKeyEnum.SEND_MASK(null)
               const errorMessage = error.message || error.toString() || '未知错误'
-              toast.error(`文件 ${ fileName } 上传失败: ${ errorMessage }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+              notification.error('上传失败', `文件 ${ fileName } 上传失败: ${ errorMessage }`)
             })
         }, 100)
       } else {
