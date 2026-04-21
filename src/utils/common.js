@@ -46,26 +46,6 @@ export const SftpConnectionStatus = {
   ERROR: 'error'
 }
 
-/**
- * 消息类型枚举
- */
-export const MessageType = {
-  SUCCESS: 'success',
-  ERROR: 'error',
-  WARNING: 'warning',
-  INFO: 'info'
-}
-
-/**
- * 操作类型枚举
- */
-export const OperationType = {
-  UPLOAD: 'upload',
-  DOWNLOAD: 'download',
-  DELETE: 'delete',
-  CREATE: 'create'
-}
-
 export const PubSubBusinessKeyEnum = {
   /* 全局遮罩 */
   MASK: 'mask',
