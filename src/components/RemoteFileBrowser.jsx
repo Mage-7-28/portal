@@ -114,8 +114,8 @@ const RemoteFileBrowser = ({
       key: 'home',
       label: (
         <div key={homeDir} onClick={() => {
-          handlePathChange({ target: { value: homeDir }})
-          handlePathSubmit({ key: 'Enter' })
+          // 使用与驱动器选择相同的逻辑，直接传入路径并加载
+          handleDriveSelect(homeDir)
         }}>
           {homeDir}
         </div>
