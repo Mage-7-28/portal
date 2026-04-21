@@ -1,4 +1,5 @@
 import PubSub from 'pubsub-js'
+import CryptoJS from 'crypto-js'
 
 export const GlobalFontFamily = 'AlimamaDongFangDaKai, sans-serif'
 
@@ -61,4 +62,43 @@ export const StoreKeys = {
   DOWNLOAD_PATH: 'download_path',
   /* SSH连接列表 */
   SSH_CONNECTIONS: 'ssh_connections'
+}
+
+/**
+ * 加密密钥 (可以从环境变量或其他安全方式获取)
+ * 注意：在生产环境中，应该使用更安全的方式管理密钥
+ */
+export const ENCRYPTION_KEY = 'portal-secure-key-2024'
+
+/**
+ * 加密数据
+ * @param {any} data - 要加密的数据
+ * @param {string} key - 加密密钥
+ * @returns {string} 加密后的数据
+ */
+export const encryptData = (data, key = ENCRYPTION_KEY) => {
+  try {
+    const jsonString = JSON.stringify(data)
+    return CryptoJS.AES.encrypt(jsonString, key).toString()
+  } catch (error) {
+    console.error('加密数据失败:', error)
+    return null
+  }
+}
+
+/**
+ * 解密数据
+ * @param {string} encryptedData - 加密的数据
+ * @param {string} key - 加密密钥
+ * @returns {any} 解密后的数据
+ */
+export const decryptData = (encryptedData, key = ENCRYPTION_KEY) => {
+  try {
+    const bytes = CryptoJS.AES.decrypt(encryptedData, key)
+    const jsonString = bytes.toString(CryptoJS.enc.Utf8)
+    return JSON.parse(jsonString)
+  } catch (error) {
+    console.error('解密数据失败:', error)
+    return null
+  }
 }

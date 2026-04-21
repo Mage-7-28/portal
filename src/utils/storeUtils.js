@@ -1,5 +1,6 @@
 import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
+import { encryptData, decryptData } from './common'
 
 /**
  * 响应式状态管理工具类
@@ -42,8 +43,14 @@ export class ReactiveStore {
       // 从 Store 中获取所有数据
       const keys = await this.store.keys()
       for (const key of keys) {
-        const value = await this.store.get(key)
-        this.state[key] = value
+        const encryptedValue = await this.store.get(key)
+        if (encryptedValue) {
+          // 解密数据
+          const value = decryptData(encryptedValue)
+          if (value !== null) {
+            this.state[key] = value
+          }
+        }
       }
       this.loaded = true
       console.log('存储加载成功')
@@ -66,10 +73,14 @@ export class ReactiveStore {
 
       // 更新响应式状态
       this.state[key] = value
-      // 更新 Store
-      await this.store.set(key, value)
-      // 保存到磁盘
-      await this.save()
+      // 加密数据
+      const encryptedValue = encryptData(value)
+      if (encryptedValue) {
+        // 更新 Store
+        await this.store.set(key, encryptedValue)
+        // 保存到磁盘
+        await this.save()
+      }
     } catch (error) {
       console.error('设置值失败:', error)
     }
@@ -87,11 +98,18 @@ export class ReactiveStore {
         await this.init()
       }
 
-      // 从 Store 中获取最新值
-      const value = await this.store.get(key)
-      // 更新响应式状态
-      this.state[key] = value
-      return value
+      // 从 Store 中获取加密值
+      const encryptedValue = await this.store.get(key)
+      if (encryptedValue) {
+        // 解密数据
+        const value = decryptData(encryptedValue)
+        // 更新响应式状态
+        this.state[key] = value
+        return value
+      }
+      // 没有值时返回 null
+      this.state[key] = null
+      return null
     } catch (error) {
       console.error('获取值失败:', error)
       // 失败时返回内存中的值
