@@ -6,7 +6,7 @@ import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { store } from '../utils/storeUtils.js'
 
-const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
+const FileItem = ({ entry, currentPath, connectionId, onClick }) => {
   return (
     <div
       style={{
@@ -110,4 +110,4 @@ const RemoteFileItem = ({ entry, currentPath, connectionId, onClick }) => {
   )
 }
 
-export default RemoteFileItem
+export default FileItem

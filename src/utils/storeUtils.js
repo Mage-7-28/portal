@@ -1,6 +1,6 @@
 import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
-import { encryptData, decryptData } from './common'
+import { encryptData, decryptData } from './constants'
 
 /**
  * 响应式状态管理工具类
@@ -24,7 +24,6 @@ export class ReactiveStore {
   async init() {
     try {
       this.store = await load(this.storePath, { autoSave: true })
-      console.log('Store 初始化成功')
     } catch (error) {
       console.error('Store 初始化失败:', error)
     }
@@ -53,7 +52,6 @@ export class ReactiveStore {
         }
       }
       this.loaded = true
-      console.log('存储加载成功')
     } catch (error) {
       console.error('加载存储失败:', error)
     }
@@ -176,7 +174,6 @@ export class ReactiveStore {
       }
 
       await this.store.save()
-      console.log('存储保存成功')
     } catch (error) {
       console.error('保存存储失败:', error)
     }

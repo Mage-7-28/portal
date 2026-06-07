@@ -6,7 +6,7 @@ import { store } from '../utils/storeUtils'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { StoreKeys } from '../utils/common'
 
-const RemoteConnectionList = ({
+const ConnectionList = ({
   connections,
   handleConnect,
   handleDeleteConnection,
@@ -208,4 +208,4 @@ const RemoteConnectionList = ({
   )
 }
 
-export default RemoteConnectionList
+export default ConnectionList

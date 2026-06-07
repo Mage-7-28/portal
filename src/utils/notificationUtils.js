@@ -16,7 +16,6 @@ export class NotificationUtils {
   static async checkPermission() {
     try {
       const granted = await isPermissionGranted()
-      console.log('通知权限检查结果:', granted ? '已授予' : '未授予')
       return granted
     } catch (error) {
       console.error('检查通知权限失败:', error)
@@ -32,7 +31,6 @@ export class NotificationUtils {
     try {
       const permission = await requestPermission()
       const granted = permission === 'granted'
-      console.log('请求通知权限结果:', granted ? '已授予' : '被拒绝')
       return granted
     } catch (error) {
       console.error('请求通知权限失败:', error)
@@ -67,13 +65,11 @@ export class NotificationUtils {
     try {
       const permissionGranted = await this.ensurePermission()
       if (!permissionGranted) {
-        console.warn('没有通知权限，无法发送通知')
         return false
       }
 
       // 发送通知
       await sendNotification(options)
-      console.log('通知发送成功:', options.title)
       return true
     } catch (error) {
       console.error('发送通知失败:', error)
@@ -185,11 +181,5 @@ export const sendNotificationWithDelay = NotificationUtils.sendWithDelay
 
 // 初始化函数，在应用启动时调用
 export const initNotification = async () => {
-  // 检查并请求通知权限
   const granted = await NotificationUtils.ensurePermission()
-  if (granted) {
-    console.log('通知权限已就绪')
-  } else {
-    console.log('通知权限未授予，部分功能可能无法使用')
-  }
 }

@@ -1,13 +1,13 @@
 import React from 'react'
 import { Button, Dropdown, Input, List, Spin } from 'antd'
 import { DisconnectOutlined, DownOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
-import RemoteFileItem from './RemoteFileItem'
+import FileItem from './FileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 
-const RemoteFileBrowser = ({
+const FileBrowser = ({
   currentPath,
   files,
   loading,
@@ -26,10 +26,6 @@ const RemoteFileBrowser = ({
   // 上传文件
   const handleUpload = async () => {
     try {
-      console.log('开始上传文件...')
-      console.log('当前目录:', currentPath)
-
-      // 弹出系统级文件选择对话框，只能选择文件
       const result = await dialog.open({
         title: '选择要上传的文件',
         filters: [
@@ -40,35 +36,22 @@ const RemoteFileBrowser = ({
         ]
       })
 
-      console.log('对话框返回结果:', result)
-
       if (result) {
-        // 处理返回结果，可能是字符串或数组
         const localPath = Array.isArray(result) ? result[0] : result
         if (!localPath) {
-          console.log('本地路径为空')
           return
         }
-        console.log('选择的本地文件路径:', localPath)
 
-        // 获取文件名
         const fileName = localPath.split('/').pop()
-        console.log('文件名:', fileName)
-
-        // 构建远程路径
         const remotePath = currentPath.endsWith('/') ? currentPath + fileName : currentPath + '/' + fileName
-        console.log('远程路径:', remotePath)
 
-        // 开启进度遮罩
         PubSubBusinessKeyEnum.SEND_MASK({
           progress: 0,
           fileName: fileName,
           operation: 'upload'
         })
 
-        // 定义进度回调函数
         const onProgress = (progress) => {
-          // 更新进度遮罩
           PubSubBusinessKeyEnum.SEND_MASK({
             progress: Math.round(progress),
             fileName: fileName,
@@ -76,57 +59,44 @@ const RemoteFileBrowser = ({
           })
         }
 
-        // 添加延迟，确保进度遮罩有足够的时间显示
         setTimeout(() => {
-          // 调用sftpManager上传文件，传入进度回调
           sftpManager.uploadFile(currentConnectionId, localPath, remotePath, onProgress)
             .then(result => {
-              // 关闭进度遮罩
               PubSubBusinessKeyEnum.SEND_MASK(null)
               if (result) {
                 notification.success('上传成功', `文件 ${ fileName } 上传成功`)
-                // 刷新文件列表
                 handleRefresh()
               } else {
                 notification.error('上传失败', '文件上传失败')
               }
             })
             .catch(error => {
-              console.error('上传文件失败:', error)
-              // 关闭进度遮罩
               PubSubBusinessKeyEnum.SEND_MASK(null)
               const errorMessage = error.message || error.toString() || '未知错误'
               notification.error('上传失败', `文件 ${ fileName } 上传失败: ${ errorMessage }`)
             })
         }, 100)
-      } else {
-        console.log('用户取消了文件选择')
       }
     } catch (error) {
-      console.error('上传文件失败:', error)
-      toast.error(`上传文件失败: ${ error.message || error.toString() || '未知错误' }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      notification.error('上传文件失败', error.message || error.toString() || '未知错误')
     }
   }
-  // 构建下拉菜单
+
   const menuItems = [
-    // 添加用户主目录选项
     {
       key: 'home',
       label: (
-        <div key={homeDir} onClick={() => {
-          // 使用与驱动器选择相同的逻辑，直接传入路径并加载
+        <div onClick={() => {
           handleDriveSelect(homeDir)
         }}>
           {homeDir}
         </div>
       )
     },
-    // 当有驱动器时添加分隔线
     ...(drives && drives.length > 0 ? [{
       key: 'divider',
       type: 'divider'
     }] : []),
-    // 添加驱动器选项
     ...(drives && drives.length > 0 ? drives.map((drive, index) => ({
       key: index,
       label: (
@@ -136,9 +106,9 @@ const RemoteFileBrowser = ({
       )
     })) : [])
   ]
+
   return (
     <div style={{ borderRadius: '10px', backgroundColor: '#101113', padding: 16, display: 'flex', flexDirection: 'column' }}>
-      {/* 地址栏 */}
       <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
         <Button
           onClick={handleGoBack}
@@ -193,7 +163,6 @@ const RemoteFileBrowser = ({
         />
       </div>
 
-      {/* 连接信息栏 */}
       <div style={{
         display: 'flex',
         justifyContent: 'space-between',
@@ -228,7 +197,6 @@ const RemoteFileBrowser = ({
         </div>
       </div>
 
-      {/* 文件列表 */}
       <div
         style={{
           height: 'calc(100vh - 148px)',
@@ -251,7 +219,7 @@ const RemoteFileBrowser = ({
             itemLayout="horizontal"
             dataSource={files}
             renderItem={(entry, index) => (
-              <RemoteFileItem
+              <FileItem
                 entry={entry}
                 currentPath={currentPath}
                 connectionId={currentConnectionId}
@@ -265,4 +233,4 @@ const RemoteFileBrowser = ({
   )
 }
 
-export default RemoteFileBrowser
+export default FileBrowser

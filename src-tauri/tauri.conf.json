@@ -12,17 +12,18 @@
   "app": {
     "windows": [
       {
-        "label": "main",
+        "label": "Portal",
         "title": "Portal",
         "width": 500,
         "height": 600,
         "minWidth": 500,
         "minHeight": 600,
-        "visible": true
+        "visible": true,
+        "devtools": true
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {

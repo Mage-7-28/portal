@@ -56,7 +56,6 @@ class SftpManager {
       }
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('SFTP连接测试失败:', errorMessage)
       return {
         success: false,
         message: '连接测试失败',
@@ -74,8 +73,6 @@ class SftpManager {
     try {
       const connectionId = this.generateConnectionId(config)
 
-      // 无论连接是否已存在，都重新创建连接
-      // 这样可以确保使用最新的密码信息
       await invoke('add_ssh_connection', {
         host: config.host,
         port: config.port,
@@ -83,7 +80,6 @@ class SftpManager {
         password: config.password
       })
 
-      // 存储连接信息
       this.connections.set(connectionId, {
         config,
         status: SftpConnectionStatus.DISCONNECTED,
@@ -94,7 +90,6 @@ class SftpManager {
       return connectionId
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('创建SFTP连接失败:', errorMessage)
       notification.error('创建连接失败', errorMessage)
       return null
     }
@@ -113,13 +108,10 @@ class SftpManager {
         return false
       }
 
-      console.log('连接信息:', connectionInfo)
       connectionInfo.status = SftpConnectionStatus.CONNECTING
       connectionInfo.lastError = null
 
-      console.log('尝试连接到服务器，连接ID:', connectionId)
       const result = await invoke('connect_ssh', { id: connectionId })
-      console.log('连接结果:', result)
 
       if (result) {
         connectionInfo.status = SftpConnectionStatus.CONNECTED
@@ -134,7 +126,6 @@ class SftpManager {
         connectionInfo.status = SftpConnectionStatus.ERROR
         connectionInfo.lastError = errorMessage
       }
-      console.error('SFTP连接失败:', errorMessage)
       notification.error('连接失败', errorMessage)
       return false
     }
@@ -157,7 +148,6 @@ class SftpManager {
       return result
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('断开SFTP连接失败:', errorMessage)
       notification.error('断开连接失败', errorMessage)
       return false
     }
@@ -191,7 +181,6 @@ class SftpManager {
         let unlistenProgress = null
         let unlistenComplete = null
 
-        // 监听上传进度事件
         if (onProgress) {
           const handleProgress = (event) => {
             if (event.payload.id === connectionId) {
@@ -201,7 +190,6 @@ class SftpManager {
           unlistenProgress = await listen('upload-progress', handleProgress)
         }
 
-        // 监听上传完成事件
         const handleComplete = (event) => {
           if (event.payload.id === connectionId) {
             if (unlistenProgress) unlistenProgress()
@@ -218,21 +206,18 @@ class SftpManager {
         }
         unlistenComplete = await listen('upload-complete', handleComplete)
 
-        // 启动上传 - 不阻塞UI
         invoke('scp_upload', {
           id: connectionId,
           localPath: localPath,
           remotePath: remotePath
         }).catch((error) => {
           const errorMessage = this.parseError(error)
-          console.error('启动上传失败:', errorMessage)
           if (unlistenProgress) unlistenProgress()
           if (unlistenComplete) unlistenComplete()
           reject(new Error(errorMessage))
         })
       } catch (error) {
         const errorMessage = this.parseError(error)
-        console.error('上传文件失败:', errorMessage)
         notification.error('上传文件失败', errorMessage)
         reject(new Error(errorMessage))
       }
@@ -250,8 +235,6 @@ class SftpManager {
   async downloadFile(connectionId, remotePath, localPath, onProgress) {
     return new Promise(async (resolve, reject) => {
       try {
-        console.log('开始下载文件:', { connectionId, remotePath, localPath })
-
         const connectionInfo = this.connections.get(connectionId)
         if (!connectionInfo) {
           notification.error('连接错误', '连接不存在')
@@ -269,21 +252,16 @@ class SftpManager {
         let unlistenProgress = null
         let unlistenComplete = null
 
-        // 监听下载进度事件
         if (onProgress) {
           const handleProgress = (event) => {
-            console.log('收到进度事件:', event.payload)
             if (event.payload.id === connectionId) {
               onProgress(event.payload.progress)
             }
           }
           unlistenProgress = await listen('download-progress', handleProgress)
-          console.log('进度监听器已注册')
         }
 
-        // 监听下载完成事件
         const handleComplete = (event) => {
-          console.log('收到完成事件:', event.payload)
           if (event.payload.id === connectionId) {
             if (unlistenProgress) unlistenProgress()
             if (unlistenComplete) unlistenComplete()
@@ -298,26 +276,19 @@ class SftpManager {
           }
         }
         unlistenComplete = await listen('download-complete', handleComplete)
-        console.log('完成监听器已注册')
 
-        // 启动下载 - 不阻塞UI
-        console.log('调用scp_download命令')
         invoke('scp_download', {
           id: connectionId,
           remotePath: remotePath,
           localPath: localPath
-        }).then((result) => {
-          console.log('scp_download命令返回:', result)
         }).catch((error) => {
           const errorMessage = this.parseError(error)
-          console.error('启动下载失败:', errorMessage)
           if (unlistenProgress) unlistenProgress()
           if (unlistenComplete) unlistenComplete()
           reject(new Error(errorMessage))
         })
       } catch (error) {
         const errorMessage = this.parseError(error)
-        console.error('下载文件失败:', errorMessage)
         notification.error('下载文件失败', errorMessage)
         reject(new Error(errorMessage))
       }
@@ -343,7 +314,6 @@ class SftpManager {
         return null
       }
 
-      // 调用后端API获取文件内容
       const result = await invoke('get_sftp_file_content', {
         id: connectionId,
         remotePath: remotePath
@@ -353,7 +323,6 @@ class SftpManager {
       return result
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('获取文件内容失败:', errorMessage)
       notification.error('获取文件内容失败', errorMessage)
       return null
     }
@@ -378,7 +347,6 @@ class SftpManager {
         return []
       }
 
-      // 使用SFTP命令获取目录内容
       const result = await invoke('list_sftp_directory', {
         id: connectionId,
         remotePath: remotePath
@@ -387,7 +355,6 @@ class SftpManager {
       const parsedResult = JSON.parse(result)
       const files = parsedResult.files
 
-      // 排序：目录在前，文件在后
       files.sort((a, b) => {
         if (a.isDirectory && !b.isDirectory) return -1
         if (!a.isDirectory && b.isDirectory) return 1
@@ -398,7 +365,6 @@ class SftpManager {
       return files
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('列出远程目录失败:', errorMessage)
       notification.error('列出目录失败', errorMessage)
       return []
     }
@@ -432,7 +398,6 @@ class SftpManager {
       return true
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('创建远程目录失败:', errorMessage)
       notification.error('创建目录失败', errorMessage)
       return false
     }
@@ -471,7 +436,6 @@ class SftpManager {
       return true
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('删除远程项目失败:', errorMessage)
       notification.error('删除失败', errorMessage)
       return false
     }
@@ -495,7 +459,6 @@ class SftpManager {
         return ''
       }
 
-      // 执行命令获取用户主目录
       const result = await invoke('execute_ssh_command', {
         id: connectionId,
         command: 'echo $HOME'
@@ -505,7 +468,6 @@ class SftpManager {
       return result.trim()
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('获取远程用户主目录失败:', errorMessage)
       notification.error('获取用户主目录失败', errorMessage)
       return ''
     }
@@ -533,7 +495,6 @@ class SftpManager {
       let version = ''
 
       try {
-        // 尝试执行Windows命令
         const windowsResult = await invoke('execute_ssh_command', {
           id: connectionId,
           command: 'ver'
@@ -543,7 +504,6 @@ class SftpManager {
           os = 'windows'
           version = windowsResult.trim()
         } else {
-          // 尝试执行Linux/macOS命令
           const unixResult = await invoke('execute_ssh_command', {
             id: connectionId,
             command: 'uname -a'
@@ -555,14 +515,13 @@ class SftpManager {
           }
         }
       } catch (error) {
-        console.warn('获取系统信息失败:', error)
+        // 获取系统信息失败，使用默认值
       }
 
       connectionInfo.lastActivity = Date.now()
       return { os, version }
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('获取系统信息失败:', errorMessage)
       notification.error('获取系统信息失败', errorMessage)
       return { os: 'unknown', version: '' }
     }
@@ -588,19 +547,15 @@ class SftpManager {
 
       let drives = []
 
-      // 获取远程系统信息
       const systemInfo = await this.getRemoteSystemInfo(connectionId)
 
-      // 根据系统类型获取驱动器
       try {
         if (systemInfo.os === 'windows') {
-          // 获取Windows驱动器
           const windowsResult = await invoke('execute_ssh_command', {
             id: connectionId,
             command: 'wmic logicaldisk get caption'
           })
 
-          // 解析Windows驱动器
           if (windowsResult) {
             const lines = windowsResult.split('\n')
             for (const line of lines) {
@@ -611,14 +566,11 @@ class SftpManager {
             }
           }
         } else if (systemInfo.os === 'unix') {
-          // 获取Linux/macOS挂载点
-          // 使用更可靠的命令获取挂载点
           const unixResult = await invoke('execute_ssh_command', {
             id: connectionId,
             command: 'findmnt -n -o TARGET | grep -E "^/" | head -20'
           })
 
-          // 解析Linux/macOS挂载点
           if (unixResult) {
             const lines = unixResult.split('\n')
             for (const line of lines) {
@@ -630,14 +582,13 @@ class SftpManager {
           }
         }
       } catch (error) {
-        console.warn('获取远程驱动器失败:', error)
+        // 获取驱动器失败，使用空列表
       }
 
       connectionInfo.lastActivity = Date.now()
       return drives
     } catch (error) {
       const errorMessage = this.parseError(error)
-      console.error('获取远程驱动器失败:', errorMessage)
       notification.error('获取驱动器失败', errorMessage)
       return []
     }
@@ -672,7 +623,7 @@ class SftpManager {
       try {
         await this.disconnect(connectionId)
       } catch (error) {
-        console.error(`关闭连接 ${ connectionId } 失败:`, error)
+        // 忽略关闭连接时的错误
       }
     }
     this.connections.clear()
@@ -731,7 +682,6 @@ class SftpManager {
         if (i === attempts - 1) {
           throw error
         }
-        console.warn(`连接失败，${ this.retryDelay }ms后重试 (${ i + 1 }/${ attempts })`)
         await new Promise(resolve => setTimeout(resolve, this.retryDelay))
       }
     }

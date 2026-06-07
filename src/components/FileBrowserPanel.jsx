@@ -3,11 +3,11 @@ import { store } from '../utils/storeUtils'
 import sftpManager from '../utils/sftpUtils'
 import toast from 'react-hot-toast'
 import { msgBoxStyle } from '../style/LayoutStyle.js'
-import RemoteFileBrowser from './RemoteFileBrowser'
-import RemoteConnectionList from './RemoteConnectionList'
+import FileBrowser from './FileBrowser'
+import ConnectionList from './ConnectionList'
 import { StoreKeys } from '../utils/common.js'
 
-function Remote() {
+function FileBrowserPanel() {
   // 连接相关状态
   const [ connections, setConnections ] = useState([])
   const [ currentConnection, setCurrentConnection ] = useState(null)
@@ -192,7 +192,7 @@ function Remote() {
   }
 
   return currentConnectionId && currentConnection ? (
-    <RemoteFileBrowser
+    <FileBrowser
       currentPath={currentPath}
       files={files}
       loading={loading}
@@ -209,7 +209,7 @@ function Remote() {
       handleDisconnect={handleDisconnect}
     />
   ) : (
-    <RemoteConnectionList
+    <ConnectionList
       connections={connections}
       handleConnect={handleConnect}
       handleDeleteConnection={handleDeleteConnection}
@@ -218,4 +218,4 @@ function Remote() {
   )
 }
 
-export default Remote
+export default FileBrowserPanel

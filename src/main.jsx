@@ -16,11 +16,7 @@ document.documentElement.style.setProperty('--global-font-family', GlobalFontFam
 Promise.all([
   initStore(),
   initNotification()
-]).then(() => {
-  console.log('存储和通知初始化成功')
-}).catch(error => {
-  console.error('初始化失败:', error)
-}).finally(() => {
+]).finally(() => {
   // 无论初始化成功与否，都渲染应用
   ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>

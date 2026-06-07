@@ -6,7 +6,6 @@
     "linux"
   ],
   "windows": [
-    "main",
     "Portal"
   ],
   "permissions": [

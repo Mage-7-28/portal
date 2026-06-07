@@ -2,10 +2,11 @@ import { Col, ConfigProvider, Row, theme } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { GlobalFontFamily, StoreKeys } from './utils/common.js'
 import { Toaster } from 'react-hot-toast'
-import Remote from './components/Remote'
+import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import { store } from './utils/storeUtils.js'
 import * as dialog from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { useEffect } from 'react'
 
 function App() {
@@ -30,14 +31,25 @@ function App() {
             // 保存下载路径到store
             await store.set(StoreKeys.DOWNLOAD_PATH, result)
           } else {
-            // 如果用户取消选择，再次弹出对话框
-            checkDownloadPath()
+            // 用户取消选择，使用默认路径
+            const homeResult = await invoke('get_home_dir')
+            if (homeResult) {
+              await store.set(StoreKeys.DOWNLOAD_PATH, homeResult)
+            }
           }
         } else {
-          console.log('下载路径已存在:', downloadPath)
+          // 下载路径已存在，无需处理
         }
       } catch (error) {
-        console.error('检查下载路径失败:', error)
+        // 检查下载路径失败，使用默认路径
+        try {
+          const homeResult = await invoke('get_home_dir')
+          if (homeResult) {
+            await store.set(StoreKeys.DOWNLOAD_PATH, homeResult)
+          }
+        } catch {
+          // 无法获取默认路径，忽略错误
+        }
       }
     }
 
@@ -64,7 +76,7 @@ function App() {
     } } locale={ zhCN } componentSize={ 'middle' }>
       <Row gutter={5} style={{ padding: '0 10px' }}>
         <Col span={24}>
-          <Remote />
+          <FileBrowserPanel />
         </Col>
       </Row>
       <Toaster />
