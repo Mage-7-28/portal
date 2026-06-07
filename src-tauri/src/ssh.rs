@@ -35,16 +35,14 @@ struct ActiveSession {
 // SSH连接池
 pub struct SshConnectionPool {
     sessions: Arc<Mutex<HashMap<String, ActiveSession>>>,
-    app_handle: Arc<Mutex<Option<AppHandle>>>,
 }
 
 impl SshConnectionPool {
-    pub fn new(app_handle: Arc<Mutex<Option<AppHandle>>>) -> Self {
+    pub fn new() -> Self {
         let pool = Self {
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            app_handle,
         };
-        
+
         // 启动连接保活任务
         pool.start_keepalive();
         pool
@@ -112,7 +110,7 @@ impl SshConnectionPool {
     // 检查会话是否存活
     fn is_session_alive(&self, session: &Arc<Mutex<Session>>) -> bool {
         // 通过执行简单命令检测连接状态
-        let mut session = session.lock().unwrap();
+        let session = session.lock().unwrap();
         match session.channel_session() {
             Ok(mut channel) => {
                 match channel.exec("echo alive") {
@@ -157,15 +155,9 @@ impl SshConnectionPool {
         let mut sessions = self.sessions.lock().unwrap();
         if let Some(active) = sessions.remove(id) {
             // 优雅地关闭SSH会话
-            let mut session = active.session.lock().unwrap();
+            let session = active.session.lock().unwrap();
             let _ = session.disconnect(None, "用户主动断开连接", None);
         }
-    }
-    
-    // 获取连接状态
-    pub fn get_connection_status(&self, id: &str) -> Option<bool> {
-        let sessions = self.sessions.lock().unwrap();
-        sessions.get(id).map(|active| self.is_session_alive(&active.session))
     }
 }
 
@@ -259,7 +251,7 @@ pub fn connect_ssh(state: State<SshState>, id: String) -> Result<bool, String> {
     {
         let mut pool_guard = state.connection_pool.lock().unwrap();
         if pool_guard.is_none() {
-            *pool_guard = Some(SshConnectionPool::new(state.app_handle.clone()));
+            *pool_guard = Some(SshConnectionPool::new());
         }
     }
     
@@ -329,7 +321,7 @@ pub fn execute_ssh_command(
     let sess = pool.get_session(&id, &host, port, &username, &password)?;
 
     // 执行命令
-    let mut sess = sess.lock().unwrap();
+    let sess = sess.lock().unwrap();
     let mut channel = sess.channel_session()
         .map_err(|e| format!("创建通道失败: {}", e))?;
 
@@ -378,7 +370,7 @@ pub fn scp_upload(
             
             let sess = pool.get_session(&id_clone, &host, port, &username, &password)?;
 
-            let mut sess = sess.lock().unwrap();
+            let sess = sess.lock().unwrap();
             let sftp = sess.sftp()
                 .map_err(|e| format!("创建SFTP会话失败: {}", e))?;
 
@@ -503,7 +495,7 @@ pub fn scp_download(
             
             let sess = pool.get_session(&id_clone, &host, port, &username, &password)?;
 
-            let mut sess = sess.lock().unwrap();
+            let sess = sess.lock().unwrap();
             let sftp = sess.sftp()
                 .map_err(|e| format!("创建SFTP会话失败: {}", e))?;
 
@@ -629,7 +621,7 @@ pub fn list_sftp_directory(
     
     let sess = pool.get_session(&id, &host, port, &username, &password)?;
 
-    let mut sess = sess.lock().unwrap();
+    let sess = sess.lock().unwrap();
     let sftp = sess.sftp()
         .map_err(|e| format!("创建SFTP会话失败: {}", e))?;
 
