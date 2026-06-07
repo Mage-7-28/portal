@@ -45,17 +45,3 @@ export {
   encryptData,
   decryptData
 } from './constants'
-
-// ============================================================================
-// 以下为原有加密工具函数（已迁移至 constants.js，本文件保留避免大规模重构）
-// ============================================================================
-
-import CryptoJS from 'crypto-js'
-import {
-  ENCRYPTION_KEY,
-  encryptData,
-  decryptData
-} from './constants'
-
-// 保留原有导入引用（内部使用 constants.js 中的实现）
-export { ENCRYPTION_KEY, encryptData, decryptData }
