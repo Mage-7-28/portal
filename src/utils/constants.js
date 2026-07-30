@@ -46,17 +46,17 @@ export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
 export const MAX_CONCURRENT_TRANSFERS = 4
 
-export const THEME_PRIMARY_COLOR = '#b59b72'
+export const THEME_PRIMARY_COLOR = '#b0874c'
 export const THEME_BG_PRIMARY = '#1f1f1f'
 export const THEME_BG_SECONDARY = '#252526'
 export const THEME_BG_INPUT = '#2b2b2b'
 export const THEME_BORDER_COLOR = '#3c3f41'
-export const THEME_TEXT_PRIMARY = '#e6e3dd'
-export const THEME_TEXT_SECONDARY = '#b5b2aa'
-export const THEME_TEXT_LINK = '#c2aa7d'
+export const THEME_TEXT_PRIMARY = '#ebe8e1'
+export const THEME_TEXT_SECONDARY = '#c0bcb4'
+export const THEME_TEXT_LINK = '#d0b47d'
 export const THEME_SUCCESS = '#7ea886'
 export const THEME_WARNING = '#c5a467'
-export const THEME_DANGER = '#c27f7f'
+export const THEME_DANGER = '#d07878'
 
 export const PROGRESS_GRADIENT = {
   '0%': THEME_PRIMARY_COLOR,

@@ -21,14 +21,14 @@
   overflow: hidden;
   border-top: 1px solid #3c3f41;
   background: #252526;
-  color: #b5b2aa;
+  color: #c0bcb4;
   font-size: 11px;
   line-height: 24px;
 }
 
 .download-status-label {
   flex: 0 0 auto;
-  color: #e1ded7;
+  color: #e8e5de;
   font-weight: 600;
 }
 
@@ -58,7 +58,7 @@ body {
   padding: 0;
   margin: 0;
   background-color: #1f1f1f;
-  color: #e6e3dd;
+  color: #ebe8e1;
   overflow: hidden;
   min-height: 100%;
   font-size: 13px;
@@ -84,7 +84,7 @@ html,
   border: 1px solid #3c3f41;
   border-radius: 4px;
   background: #1f1f1f;
-  color: #e1ded7;
+  color: #e8e5de;
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
@@ -104,21 +104,21 @@ html,
 }
 
 .ant-btn-primary:not(:disabled) {
-  border-color: #a98a5a !important;
-  background: #8e7247 !important;
+  border-color: #c49d62 !important;
+  background: #b0874c !important;
   color: #ffffff !important;
   font-weight: 650;
 }
 
 .ant-btn-primary:not(:disabled):hover {
-  border-color: #b39768 !important;
-  background: #a18458 !important;
+  border-color: #d0ad73 !important;
+  background: #c19a5b !important;
   color: #ffffff !important;
 }
 
 .ant-btn-primary:not(:disabled):active {
-  border-color: #8e7247 !important;
-  background: #765d38 !important;
+  border-color: #a3793e !important;
+  background: #98733c !important;
   color: #ffffff !important;
 }
 
@@ -129,27 +129,27 @@ html,
 }
 
 .ant-btn-dangerous:not(:disabled) {
-  border-color: #8b5656 !important;
-  background: #6e4141 !important;
+  border-color: #a76565 !important;
+  background: #824949 !important;
   color: #ffffff !important;
 }
 
 .ant-btn-dangerous:not(:disabled):hover {
-  border-color: #a36c6c !important;
-  background: #805050 !important;
+  border-color: #bd7a7a !important;
+  background: #995b5b !important;
   color: #ffffff !important;
 }
 
 .ant-btn-dangerous:not(:disabled):active {
-  border-color: #754444 !important;
-  background: #593333 !important;
+  border-color: #945252 !important;
+  background: #713b3b !important;
   color: #ffffff !important;
 }
 
 .ant-btn:focus-visible,
 .ant-input:focus,
 .ant-input-affix-wrapper-focused {
-  outline: 2px solid rgba(181, 155, 114, 0.28);
+  outline: 2px solid rgba(176, 135, 76, 0.28);
   outline-offset: 1px;
   box-shadow: none !important;
 }
@@ -206,14 +206,14 @@ html,
 
 .connection-header h1 {
   margin: 0;
-  color: #e6e3dd;
+  color: #ebe8e1;
   font-size: 13px;
   font-weight: 650;
   line-height: 20px;
 }
 
-.connection-header span {
-  color: #b0aca4;
+.connection-header > div > span {
+  color: #c0bcb4;
   font-size: 10.5px;
 }
 
@@ -280,14 +280,14 @@ html,
 }
 
 .connection-row-icon {
-  color: #b59b72;
+  color: #b0874c;
   font-size: 15px;
 }
 
 .connection-row-name {
   display: block;
   overflow: hidden;
-  color: #e6e3dd;
+  color: #ebe8e1;
   font-size: 12.5px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -297,7 +297,7 @@ html,
 .connection-row-endpoint {
   display: block;
   overflow: hidden;
-  color: #b5b2aa;
+  color: #c0bcb4;
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -311,7 +311,7 @@ html,
   height: 100%;
   min-height: 160px;
   gap: 8px;
-  color: #b5b2aa;
+  color: #c0bcb4;
   font-size: 12px;
 }
 
@@ -331,7 +331,7 @@ html,
   gap: 7px;
   border-radius: 6px;
   background: rgba(31, 31, 31, 0.56);
-  color: #e1ded7;
+  color: #e8e5de;
   font-size: 11.5px;
 }
 
@@ -366,7 +366,7 @@ html,
   border-color: #3c3f41;
   border-radius: 5px;
   background: #2b2b2b;
-  color: #e1ded7;
+  color: #e8e5de;
 }
 
 .remote-path-bar {
@@ -390,7 +390,7 @@ html,
 .remote-path-icon {
   flex: 0 0 auto;
   margin-left: 9px;
-  color: #b59b72;
+  color: #b0874c;
   font-size: 13px;
 }
 
@@ -400,7 +400,7 @@ html,
   height: 28px;
   padding: 3px 7px;
   background: transparent;
-  color: #e1ded7;
+  color: #e8e5de;
   font-size: 12px;
 }
 
@@ -411,7 +411,7 @@ html,
   padding: 0;
   border-left: 1px solid #3c3f41;
   border-radius: 0;
-  color: #e1ded7;
+  color: #e8e5de;
 }
 
 .connection-toolbar {
@@ -447,7 +447,7 @@ html,
 .connection-name {
   max-width: 180px;
   overflow: hidden;
-  color: #e1ded7;
+  color: #e8e5de;
   font-size: 12px;
   font-weight: 600;
   text-overflow: ellipsis;
@@ -455,7 +455,7 @@ html,
 
 .connection-endpoint {
   overflow: hidden;
-  color: #b0aca4;
+  color: #b8b4ab;
   font-size: 11px;
   text-overflow: ellipsis;
 }
@@ -494,7 +494,7 @@ html,
   justify-content: center;
   min-height: 120px;
   gap: 7px;
-  color: #b5b2aa;
+  color: #c0bcb4;
   font-size: 11.5px;
 }
 
@@ -542,7 +542,7 @@ html,
 .file-item-name {
   display: block;
   overflow: hidden;
-  color: #e1ded7;
+  color: #e8e5de;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -560,7 +560,7 @@ html,
 
 .file-item-size {
   min-width: 66px;
-  color: #a29e95;
+  color: #b8b4ab;
   font-size: 10.5px;
   text-align: right;
 }
