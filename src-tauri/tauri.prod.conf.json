@@ -14,10 +14,10 @@
       {
         "label": "Portal",
         "title": "Portal",
-        "width": 1100,
-        "height": 700,
-        "minWidth": 820,
-        "minHeight": 520,
+        "width": 920,
+        "height": 620,
+        "minWidth": 920,
+        "minHeight": 620,
         "resizable": true,
         "visible": true,
         "devtools": false

@@ -24,8 +24,8 @@ function App() {
         }
       }
     } } locale={ zhCN } componentSize={ 'middle' }>
-      <Row gutter={5} style={{ padding: '0 10px' }}>
-        <Col span={24}>
+      <Row gutter={0} style={{ height: '100dvh', padding: 10, boxSizing: 'border-box', overflow: 'hidden' }}>
+        <Col span={24} style={{ height: '100%', minHeight: 0 }}>
           <FileBrowserPanel />
         </Col>
       </Row>

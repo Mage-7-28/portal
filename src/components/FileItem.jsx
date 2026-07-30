@@ -130,21 +130,23 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
   return (
     <div
       style={{
-        cursor: entry.isDirectory ? 'pointer' : 'default'
+        cursor: 'pointer'
       }}
-      onClick={onClick}
+      title={entry.isDirectory ? '单击进入目录' : '双击预览文件'}
+      onClick={entry.isDirectory ? onClick : undefined}
+      onDoubleClick={entry.isDirectory ? undefined : onClick}
       onKeyDown={event => {
-        if (entry.isDirectory && (event.key === 'Enter' || event.key === ' ')) {
+        if ((entry.isDirectory || !entry.isDirectory) && (event.key === 'Enter' || event.key === ' ')) {
           event.preventDefault()
           onClick()
         }
       }}
-      role={entry.isDirectory ? 'button' : undefined}
-      tabIndex={entry.isDirectory ? 0 : undefined}
+      role="button"
+      tabIndex={0}
     >
       <List.Item
         style={{
-          cursor: entry.isDirectory ? 'pointer' : 'default',
+          cursor: 'pointer',
           borderBottom: '1px solid #1E1E1E',
           padding: '12px'
         }}
@@ -161,7 +163,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
             </span>
           }
         />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }} onDoubleClick={event => event.stopPropagation()}>
           <span style={{ color: '#888888', fontSize: 12 }}>
             {entry.isDirectory ? '' : formatFileSize(entry.size)}
           </span>

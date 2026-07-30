@@ -122,8 +122,8 @@ const FileBrowser = ({
   ]
 
   return (
-    <div style={{ borderRadius: '8px', backgroundColor: '#101318', padding: 16, display: 'flex', flexDirection: 'column', minHeight: 'calc(100dvh - 24px)', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, minWidth: 0 }}>
+    <div style={{ borderRadius: '8px', backgroundColor: '#101318', padding: 16, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, maxHeight: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
+      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, minWidth: 0, flexShrink: 0 }}>
         <Tooltip title="返回上级目录">
           <Button
             onClick={handleGoBack}
@@ -190,7 +190,8 @@ const FileBrowser = ({
         marginBottom: 16,
         padding: '8px 12px',
         backgroundColor: '#1E1E1E',
-        borderRadius: '4px'
+        borderRadius: '4px',
+        flexShrink: 0
       }}>
         <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
           {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
@@ -223,7 +224,8 @@ const FileBrowser = ({
         style={{
           flex: 1,
           minHeight: 0,
-          overflow: 'auto',
+          overflowY: 'auto',
+          overflowX: 'hidden',
           backgroundColor: '#0C0D0E',
           borderRadius: '4px',
           border: '1px solid transparent'
@@ -243,7 +245,8 @@ const FileBrowser = ({
           <List
             itemLayout="horizontal"
             dataSource={files}
-            renderItem={(entry, index) => (
+            rowKey={entry => entry.path || entry.name}
+            renderItem={entry => (
               <FileItem
                 entry={entry}
                 currentPath={currentPath}

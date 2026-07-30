@@ -141,7 +141,7 @@ function FileBrowserPanel() {
 
       if (result.requiresHostKeyConfirmation) {
         const accepted = await confirm(
-          `首次连接 ${ connection.host } 时需要确认服务器指纹：\n${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }`,
+          `首次连接 ${ connection.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
           { title: '确认 SSH 主机密钥', kind: 'warning', okLabel: '信任并继续', cancelLabel: '取消' }
         )
         if (!accepted) throw new Error('已取消主机密钥确认')

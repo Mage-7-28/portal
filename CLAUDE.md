@@ -34,7 +34,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 跨平台要求
 
-远程 SFTP 路径使用 `/`；本地路径必须接受 `/` 和 `\\`，不能通过字符串字面量假设 macOS。窗口默认 1100x700，最小 820x520。Windows 驱动器枚举在 Rust 的 `cfg(target_os = "windows")` 中实现；macOS/Linux 使用 POSIX 根目录。
+远程 SFTP 路径使用 `/`；本地路径必须接受 `/` 和 `\\`，不能通过字符串字面量假设 macOS。窗口默认和最小尺寸均为 920x620。Windows 驱动器枚举在 Rust 的 `cfg(target_os = "windows")` 中实现；macOS/Linux 使用 POSIX 根目录。
 
 ## 依赖与许可证
 

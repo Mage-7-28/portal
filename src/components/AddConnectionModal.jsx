@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { Button, Form, Input, Modal, Radio, Space, Typography } from 'antd'
-import { CheckCircleOutlined, CloudServerOutlined, FileOutlined, KeyOutlined, LockOutlined, UserOutlined, WifiOutlined } from '@ant-design/icons'
+import { CheckCircleOutlined, CloudServerOutlined, ExclamationCircleOutlined, FileOutlined, KeyOutlined, LockOutlined, UserOutlined, WifiOutlined } from '@ant-design/icons'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
 import sftpManager from '../utils/sftpUtils.js'
-import { msgBoxStyle, normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY } from '../utils/constants.js'
+import { msgBoxStyle, normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
 
 const { Text } = Typography
 
@@ -18,6 +18,11 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
   const authMethod = Form.useWatch('authMethod', form) || 'password'
+  const testResultColor = testResult?.success
+    ? THEME_SUCCESS
+    : testResult?.requiresHostKeyConfirmation
+      ? THEME_WARNING
+      : THEME_DANGER
 
   useEffect(() => {
     if (!visible) {
@@ -31,21 +36,44 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
     try {
       const values = await form.validateFields()
       setTesting(true)
-      const result = await sftpManager.testConnection({
+      const config = {
         host: values.host.trim(),
         port: Number(values.port),
         username: values.username.trim(),
         password: values.password,
         authMethod: values.authMethod,
         privateKeyPath: values.privateKeyPath,
-        passphrase: values.passphrase,
-        hostKeyFingerprint: testResult?.hostKey?.fingerprint
-      })
+        passphrase: values.passphrase
+      }
+      let result = await sftpManager.testConnection(config)
       setTestResult(result)
+
+      if (result.requiresHostKeyConfirmation && result.hostKey?.fingerprint) {
+        const accepted = await dialog.confirm(
+          `首次连接 ${ config.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。信任后 Portal 会保存该指纹，后续如果指纹变化会阻止连接。`,
+          {
+            title: '确认 SSH 主机指纹',
+            kind: 'warning',
+            okLabel: '信任并继续测试',
+            cancelLabel: '取消'
+          }
+        )
+        if (!accepted) {
+          setTestResult({ ...result, trusted: false })
+          toast.error('未信任服务器指纹，连接测试已取消', { id: 'msgBoxGlobal', style: msgBoxStyle })
+          return
+        }
+
+        const trustedHostKey = result.hostKey
+        result = await sftpManager.testConnection({
+          ...config,
+          hostKeyFingerprint: trustedHostKey.fingerprint
+        })
+        setTestResult({ ...result, hostKey: result.hostKey || trustedHostKey, trusted: true })
+      }
+
       if (result.success) {
-        toast.success('连接测试成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
-      } else if (result.requiresHostKeyConfirmation) {
-        toast.success('已获取服务器指纹，保存后将用于校验', { id: 'msgBoxGlobal', style: msgBoxStyle })
+        toast.success('连接测试成功，服务器指纹已信任', { id: 'msgBoxGlobal', style: msgBoxStyle })
       } else {
         toast.error(`连接测试失败：${ result.error }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
       }
@@ -66,7 +94,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
       username: values.username.trim(),
       authMethod: values.authMethod,
       privateKeyPath: values.privateKeyPath || null,
-      hostKeyFingerprint: testResult?.hostKey?.fingerprint || null,
+      hostKeyFingerprint: testResult?.trusted ? testResult?.hostKey?.fingerprint || null : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
@@ -180,13 +208,30 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
         </Space.Compact>
 
         {testResult && (
-          <div className="connection-test-result" style={{ borderColor: testResult.success ? THEME_SUCCESS : THEME_DANGER }}>
-            <CheckCircleOutlined style={{ color: testResult.success ? THEME_SUCCESS : THEME_DANGER }} />
+          <div className="connection-test-result" style={{ borderColor: testResultColor }}>
+            {testResult.success ? (
+              <CheckCircleOutlined style={{ color: testResultColor }} />
+            ) : testResult.requiresHostKeyConfirmation ? (
+              <KeyOutlined style={{ color: testResultColor }} />
+            ) : (
+              <ExclamationCircleOutlined style={{ color: testResultColor }} />
+            )}
             <div>
-              <Text strong>{testResult.success ? '连接测试成功' : testResult.requiresHostKeyConfirmation ? '请确认服务器指纹' : '连接测试失败'}</Text>
+              <Text strong>
+                {testResult.success
+                  ? '连接测试成功，主机指纹已信任'
+                  : testResult.requiresHostKeyConfirmation
+                    ? '检测到服务器主机指纹'
+                    : '连接测试失败'}
+              </Text>
               {testResult.hostKey && (
                 <Text copyable={{ text: testResult.hostKey.fingerprint }} type="secondary" className="fingerprint-text">
                   {testResult.hostKey.algorithm} · {testResult.hostKey.fingerprint}
+                </Text>
+              )}
+              {testResult.hostKey && (
+                <Text type="secondary" className="fingerprint-help">
+                  主机指纹用于确认服务器身份；保存后下次连接会校验它，发现变化会阻止连接。
                 </Text>
               )}
               {testResult.error && <Text type="danger">{testResult.error}</Text>}

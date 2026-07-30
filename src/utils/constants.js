@@ -63,10 +63,10 @@ export const PROGRESS_GRADIENT = {
   '100%': '#68c4ff'
 }
 
-export const WINDOW_DEFAULT_WIDTH = 1100
-export const WINDOW_DEFAULT_HEIGHT = 700
-export const WINDOW_MIN_WIDTH = 820
-export const WINDOW_MIN_HEIGHT = 520
+export const WINDOW_DEFAULT_WIDTH = 920
+export const WINDOW_DEFAULT_HEIGHT = 620
+export const WINDOW_MIN_WIDTH = 920
+export const WINDOW_MIN_HEIGHT = 620
 
 export const normalizeError = (error) => {
   if (!error) return '未知错误'
