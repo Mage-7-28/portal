@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react'
-import { Progress, Typography } from 'antd'
-import { DownloadOutlined, UploadOutlined } from '@ant-design/icons'
+import React, { useState, useEffect } from 'react'
+import { Button, Progress, Typography } from 'antd'
+import { DownloadOutlined, StopOutlined, UploadOutlined } from '@ant-design/icons'
 import PubSub from 'pubsub-js'
 import { PubSubBusinessKeyEnum } from '../utils/common'
 
@@ -8,52 +8,38 @@ const { Text } = Typography
 
 const ProgressMask = () => {
   const [ maskData, setMaskData ] = useState(null)
-  const [ windowSize, setWindowSize ] = useState({
-    width: window.innerWidth,
-    height: window.innerHeight
-  })
+  const [ cancelling, setCancelling ] = useState(false)
 
   useEffect(() => {
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
       setMaskData(data)
     })
 
-    const handleResize = () => {
-      setWindowSize({
-        width: window.innerWidth,
-        height: window.innerHeight
-      })
-    }
-
-    window.addEventListener('resize', handleResize)
     return () => {
       PubSub.unsubscribe(token)
-      window.removeEventListener('resize', handleResize)
     }
   }, [])
-
-  // 响应式计算容器大小
-  const containerStyle = useMemo(() => {
-    const maxWidth = Math.min(windowSize.width * 0.8, 400)
-    const minWidth = 300
-    const width = Math.max(minWidth, maxWidth)
-
-    return {
-      ...styles.container,
-      width: `${ width }px`
-    }
-  }, [windowSize])
 
   if (!maskData) {
     return null
   }
 
   // 确保 maskData 有必要的属性
-  const { progress = 0, fileName = '', operation = 'download' } = maskData
+  const { progress = 0, fileName = '', operation = 'download', onCancel } = maskData
+
+  const handleCancel = async () => {
+    if (!onCancel || cancelling) return
+    setCancelling(true)
+    try {
+      await onCancel()
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   return (
     <div style={styles.overlay}>
-      <div style={containerStyle}>
+      <div style={styles.container}>
         <div style={styles.iconContainer}>
           <div style={styles.operationIcon}>
             {operation === 'download' ? (
@@ -75,16 +61,24 @@ const ProgressMask = () => {
         <div style={styles.progressWrapper}>
           <Progress
             percent={Math.round(progress)}
-            strokeColor={{
-              '0%': '#8B5CF6',
-              '100%': '#EC4899'
-            }}
+            strokeColor="#4f8cff"
             railColor="rgba(255, 255, 255, 0.1)"
             showInfo={false}
             size="small"
           />
           <Text style={styles.percentText}>{Math.round(progress)}%</Text>
         </div>
+        {onCancel && (
+          <Button
+            danger
+            icon={<StopOutlined />}
+            loading={cancelling}
+            onClick={handleCancel}
+            style={{ marginTop: 16 }}
+          >
+            取消传输
+          </Button>
+        )}
       </div>
     </div>
   )
@@ -106,11 +100,13 @@ const styles = {
     animation: 'fadeIn 0.2s ease-out'
   },
   container: {
-    background: 'linear-gradient(135deg, #1E293B 0%, #0F172A 100%)',
-    borderRadius: '16px',
+    background: '#1b1e24',
+    borderRadius: '8px',
     padding: '32px 36px',
+    width: 'min(400px, calc(100vw - 32px))',
+    boxSizing: 'border-box',
     textAlign: 'center',
-    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.08)',
+    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6)',
     animation: 'scaleIn 0.2s ease-out',
     border: '1px solid rgba(255, 255, 255, 0.1)'
   },
@@ -124,11 +120,11 @@ const styles = {
     width: '56px',
     height: '56px',
     borderRadius: '50%',
-    background: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)',
+    background: '#4f8cff',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    boxShadow: '0 8px 24px rgba(139, 92, 246, 0.4)'
+    boxShadow: '0 8px 24px rgba(79, 140, 255, 0.35)'
   },
   icon: {
     fontSize: '24px',
@@ -140,7 +136,7 @@ const styles = {
     color: '#ffffff',
     marginBottom: '8px',
     display: 'block',
-    letterSpacing: '0.3px'
+    letterSpacing: 0
   },
   fileName: {
     fontSize: '13px',
@@ -158,12 +154,10 @@ const styles = {
   percentText: {
     fontSize: '24px',
     fontWeight: '700',
-    background: 'linear-gradient(135deg, #8B5CF6 0%, #EC4899 100%)',
-    WebkitBackgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
+    color: '#8ab4ff',
     marginTop: '12px',
     display: 'block',
-    textShadow: '0 0 15px rgba(139, 92, 246, 0.3)'
+    textShadow: 'none'
   }
 }
 

@@ -19,7 +19,36 @@ body {
   background-color: rgb(30, 31, 34);
   color: #d8dada;
   overflow: hidden;
+  min-height: 100%;
   font-family: var(--global-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif), sans-serif;
+}
+
+html,
+#root {
+  width: 100%;
+  min-height: 100%;
+  height: 100%;
+}
+
+.file-preview {
+  margin: 0;
+  max-height: min(65vh, 640px);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  border: 1px solid #343a46;
+  border-radius: 4px;
+  background: #111318;
+  color: #f5f7fa;
+  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .ant-popover {
@@ -86,4 +115,14 @@ body {
 .ant-pagination {
   display: flex;
   gap: 3px;
+}
+
+@media (max-width: 680px) {
+  .ant-space-compact {
+    flex-wrap: wrap;
+  }
+
+  .ant-space-compact > .ant-form-item {
+    min-width: 100%;
+  }
 }

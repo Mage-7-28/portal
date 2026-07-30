@@ -1,46 +1,24 @@
-# 依赖许可证声明
+# 依赖与许可证
 
-本项目使用了以下第三方库，它们各自使用不同的许可证：
+Portal 本身采用 MIT 许可证。依赖清单由 `license-checker` 生成并记录在
+[`license-report.csv`](./license-report.csv) 中；发布包时应同时保留各依赖的版权和许可证声明。
 
-## MIT 许可证
+## 前端运行时
 
-- React
-- Ant Design
-- Vite
-- Axios
-- dayjs
-- decimal.js
-- file-saver
-- lodash-es
-- pubsub-js
-- react-dnd
-- react-dnd-html5-backend
-- sass
-- valtio
-- eslint 及其插件
-- @ant-design/icons
-- @ant-design/happy-work-theme
-- @vitejs/plugin-react
+- React、React DOM、Ant Design、Ant Design Icons、Vite、Valtio、PubSubJS、react-hot-toast：MIT
+- Tauri API 与 Tauri 官方插件：MIT OR Apache-2.0
 
-## MIT OR Apache-2.0 许可证
+## Rust 运行时
 
-- @tauri-apps/api
-- @tauri-apps/cli
-- @tauri-apps/plugin-clipboard-manager
-- @tauri-apps/plugin-dialog
-- @tauri-apps/plugin-global-shortcut
-- @tauri-apps/plugin-notification
-- @tauri-apps/plugin-opener
-- @tauri-apps/plugin-store
+- Tauri、serde、serde_json、dirs、thiserror、ssh2：均为 MIT、Apache-2.0 或双许可证选项
+- ssh2 使用的 libssh2/OpenSSL 等系统库须按照目标平台的发行包和构建链要求提供对应声明
 
-## BSD-3-Clause 许可证
+MIT 允许将这些宽松许可证依赖用于 MIT 项目。Apache-2.0 和 BSD-3-Clause
+并不等同于 MIT，但属于与 MIT 项目兼容的宽松许可证；不得移除其版权、许可证和免责声明。
+新增依赖必须先确认许可证、NOTICE 要求和目标平台可用性，并更新本文件及
+`license-report.csv`，禁止引入 GPL/AGPL 等强传染性许可证。
 
-- highlight.js
-- license-checker
+## 凭据处理
 
-## Apache-2.0 许可证
-
-- less
-- ssh2-sftp-client
-
-所有依赖的许可证都与 MIT 许可证兼容，本项目使用 MIT 许可证进行开源。
+连接配置只保存主机、端口、用户名、认证方式和已确认的 SSH 主机指纹。密码、私钥口令
+只保存在当前进程内存中，不写入 Tauri Store，也不应提交到 Gitee 或其他代码仓库。

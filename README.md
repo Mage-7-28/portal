@@ -1,85 +1,60 @@
-# 传送门 (Portal)
-一个简洁易用的跨平台文件传输工具，专为MacOS用户打造。
+# 传送门（Portal）
 
-📖 项目背景
-作为一名刚毕业的Java开发人员，我在使用MacOS时发现，之前在Windows系统中习惯使用的scp文件传输工具在MacOS上使用体验有所不同。为了解决这个问题，同时也是为了锻炼自己的全栈开发能力，我利用空闲时间开发了这个文件传输工具——「传送门」。
+Portal 是一个基于 Tauri 2、React 和 Rust `ssh2` 的跨平台 SFTP 桌面工具，面向需要在本地与远程服务器之间浏览和传输文件的开发者。
 
-✨ 核心功能
-- 文件拖拽上传下载：支持通过拖拽文件实现本地与服务器之间的快速传输
-- 目录浏览：直观的文件目录浏览界面，支持本地和服务器文件系统的导航
-- 现代化界面：采用深色主题设计，符合现代开发工具的视觉风格
-- 服务器连接存储：支持保存多个服务器连接配置，方便快速切换
-- 文件上传下载进度：文件传输过程中显示详细的进度条，实时了解传输状态
-- 创建或删除文件/文件夹：支持在本地和服务器上创建或删除文件和文件夹
-- 文件复制，移动：支持文件的复制和移动操作
-- 文件列表刷新，手动修改文件路径：支持手动刷新文件列表和修改文件路径
-- 文件夹的拖拽上传下载：支持整个文件夹的批量传输
-- 文件预览，编辑：支持常见文件格式的预览和简单编辑
-- 跨平台支持：目前仅支持MacOS，后续将考虑Windows平台
+项目主页：<https://gitee.com/Mage-7-28/portal>
 
-📦 安装和使用
-前置要求
-- Node.js 22.x 或更高版本
-- pnpm 10.x 或更高版本
+## 功能
 
-安装步骤
-1. 克隆项目代码
-   ```bash
-   git clone https://github.com/Mage-7-28/portal.git
-   cd portal
-   ```
+- SSH 密码、私钥和 SSH Agent 认证
+- 首次连接显示并校验服务器 SHA-256 主机指纹（TOFU）
+- 远程目录浏览、路径跳转、返回上级和刷新
+- 文件预览、新建目录、重命名、删除
+- 多文件上传、下载、实时进度和取消
+- 临时文件 + 原子替换，避免中断传输留下半成品
+- macOS、Windows、Linux 原生窗口和路径处理
+- 连接配置可持久化，密码和私钥口令仅保存在当前运行内存中
 
-2. 安装依赖
-   ```bash
-   pnpm install
-   ```
+## 开发环境
 
-3. 启动开发服务器
-   ```bash
-   pnpm run dev
-   ```
+- Node.js 22 或更高版本
+- pnpm 10 或更高版本
+- Rust stable、Cargo 和 Tauri 2 系统依赖
 
-📁 项目结构
-```
-portal/
-├── src/                # React应用代码
-│   ├── assets/         # 静态资源
-│   ├── App.jsx         # 应用主组件
-│   ├── main.jsx        # 渲染进程入口
-│   └── App.css         # 样式文件
-├── src-tauri/          # Tauri相关代码
-│   ├── capabilities/   # 能力配置
-│   ├── icons/          # 应用图标
-│   ├── src/            # Rust代码
-│   │   ├── lib.rs      # 库文件
-│   │   └── main.rs     # 主进程
-│   ├── Cargo.toml      # Rust依赖配置
-│   └── tauri.conf.json # Tauri配置
-├── public/             # 静态资源
-├── package.json        # 项目配置和依赖
-├── vite.config.js      # Vite配置
-└── README.md           # 项目说明文档
-```
-
-🏗️ 开发和构建
-开发
 ```bash
-pnpm run dev
+git clone https://gitee.com/Mage-7-28/portal.git
+cd portal
+pnpm install
+pnpm run tauri:dev
 ```
 
-构建
+只调试前端时可以运行 `pnpm run dev`，默认地址为 `http://localhost:1420`。
+
+## 构建
+
+请在目标平台的原生工具链上构建，以获得正确的系统依赖、签名和安装包格式：
+
 ```bash
-# 构建MacOS版本
-pnpm run tauri:dmg
-
-# 构建Windows版本
-pnpm run tauri:win32
+pnpm run tauri:dmg       # macOS
+pnpm run tauri:windows   # Windows x64
+pnpm run tauri:linux     # Linux deb + AppImage
+pnpm run tauri:build     # 当前平台默认目标
 ```
 
-🤝 贡献指南
-欢迎对项目提出改进建议或提交代码！如果你有任何问题或建议，都可以通过Issue或Pull Request的方式与我交流。
+Windows 交叉编译需要安装 `x86_64-pc-windows-msvc` target 和 Visual Studio Build Tools；Linux 构建需要 Tauri 文档列出的 WebKitGTK、GTK 和 AppImage 依赖。发布前应在三种系统分别验证文件对话框、键盘快捷键、路径分隔符、通知权限和 SSH Agent。
 
-📄 许可证
-本项目采用MIT许可证，详见LICENSE文件。
+## 质量检查
 
-传送门 - 连接本地与服务器的桥梁，让文件传输变得简单高效！
+```bash
+pnpm lint
+pnpm build
+cargo check --manifest-path src-tauri/Cargo.toml
+```
+
+## 安全说明
+
+Portal 不接受任意远程 shell 命令，文件操作全部通过 SFTP 专用接口完成。首次连接必须确认主机指纹；指纹变化会阻止连接。请勿把密码、私钥或私钥口令写入连接配置、日志、截图或 Gitee Issue。
+
+## 许可证
+
+本项目采用 MIT License，见 [`LICENSE`](./LICENSE)。第三方依赖及其许可证见 [`DEPENDENCIES.md`](./DEPENDENCIES.md) 和 [`license-report.csv`](./license-report.csv)。

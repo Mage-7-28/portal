@@ -14,16 +14,17 @@
       {
         "label": "Portal",
         "title": "Portal",
-        "width": 500,
-        "height": 600,
-        "minWidth": 500,
-        "minHeight": 600,
+        "width": 1100,
+        "height": 700,
+        "minWidth": 820,
+        "minHeight": 520,
+        "resizable": true,
         "visible": true,
         "devtools": false
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
     }
   },
   "bundle": {

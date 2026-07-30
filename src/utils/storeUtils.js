@@ -1,238 +1,124 @@
 import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
-import { encryptData, decryptData } from './constants'
 
 /**
- * 响应式状态管理工具类
- * 基于 Tauri Store 和 Valtio 实现
+ * Small serialized wrapper around Tauri Store.
+ * Secrets are deliberately not handled here; credentials stay in process
+ * memory and are never written to the Tauri Store.
  */
 export class ReactiveStore {
   constructor(storePath = 'store.json') {
-    // 初始化响应式状态
     this.state = proxy({})
-    // 存储路径
     this.storePath = storePath
-    // 标记是否已加载
     this.loaded = false
-    // Store 实例
     this.store = null
+    this.initPromise = null
+    this.writeQueue = Promise.resolve()
   }
 
-  /**
-   * 初始化 Store
-   */
   async init() {
-    try {
-      this.store = await load(this.storePath, { autoSave: true })
-    } catch (error) {
-      console.error('Store 初始化失败:', error)
+    if (this.store) return this.store
+    if (!this.initPromise) {
+      this.initPromise = load(this.storePath, { autoSave: false })
+        .then(store => {
+          this.store = store
+          return store
+        })
+        .finally(() => {
+          this.initPromise = null
+        })
     }
+    return this.initPromise
   }
 
-  /**
-   * 加载存储数据到响应式状态
-   */
   async load() {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      // 从 Store 中获取所有数据
-      const keys = await this.store.keys()
-      for (const key of keys) {
-        const encryptedValue = await this.store.get(key)
-        if (encryptedValue) {
-          // 解密数据
-          const value = decryptData(encryptedValue)
-          if (value !== null) {
-            this.state[key] = value
-          }
-        }
-      }
-      this.loaded = true
-    } catch (error) {
-      console.error('加载存储失败:', error)
+    const store = await this.init()
+    const keys = await store.keys()
+    for (const key of keys) {
+      const value = await store.get(key)
+      if (value !== undefined) this.state[key] = value
     }
+    this.loaded = true
   }
 
-  /**
-   * 设置值（支持对象）
-   * @param {string} key - 键
-   * @param {any} value - 值（可以是对象）
-   */
+  enqueueWrite(operation) {
+    // A failed write must not permanently block all later settings changes.
+    this.writeQueue = this.writeQueue.catch(() => undefined).then(operation)
+    return this.writeQueue
+  }
+
   async set(key, value) {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      // 更新响应式状态
-      this.state[key] = value
-      // 加密数据
-      const encryptedValue = encryptData(value)
-      if (encryptedValue) {
-        // 更新 Store
-        await this.store.set(key, encryptedValue)
-        // 保存到磁盘
-        await this.save()
-      }
-    } catch (error) {
-      console.error('设置值失败:', error)
-    }
+    const store = await this.init()
+    this.state[key] = value
+    return this.enqueueWrite(async () => {
+      await store.set(key, value)
+      await store.save()
+    })
   }
 
-  /**
-   * 获取值
-   * @param {string} key - 键
-   * @returns {Promise<any>} 值
-   */
   async get(key) {
     try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      // 从 Store 中获取加密值
-      const encryptedValue = await this.store.get(key)
-      if (encryptedValue) {
-        // 解密数据
-        const value = decryptData(encryptedValue)
-        // 更新响应式状态
-        this.state[key] = value
-        return value
-      }
-      // 没有值时返回 null
-      this.state[key] = null
-      return null
+      const store = await this.init()
+      const value = await store.get(key)
+      this.state[key] = value ?? null
+      return value ?? null
     } catch (error) {
-      console.error('获取值失败:', error)
-      // 失败时返回内存中的值
-      return this.state[key]
+      console.error(`读取本地数据失败 [${ key }]`, error)
+      return this.state[key] ?? null
     }
   }
 
-  /**
-   * 删除值
-   * @param {string} key - 键
-   */
   async delete(key) {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      // 从响应式状态中删除
-      delete this.state[key]
-      // 从 Store 中删除
-      await this.store.delete(key)
-      // 保存到磁盘
-      await this.save()
-    } catch (error) {
-      console.error('删除值失败:', error)
-    }
+    const store = await this.init()
+    delete this.state[key]
+    return this.enqueueWrite(async () => {
+      await store.delete(key)
+      await store.save()
+    })
   }
 
-  /**
-   * 清空所有数据
-   */
   async clear() {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      // 清空响应式状态
-      Object.keys(this.state).forEach(key => {
-        delete this.state[key]
-      })
-      // 清空 Store
-      const keys = await this.store.keys()
-      for (const key of keys) {
-        await this.store.delete(key)
-      }
-      // 保存到磁盘
-      await this.save()
-    } catch (error) {
-      console.error('清空存储失败:', error)
-    }
+    const store = await this.init()
+    Object.keys(this.state).forEach(key => delete this.state[key])
+    return this.enqueueWrite(async () => {
+      await store.clear()
+      await store.save()
+    })
   }
 
-  /**
-   * 保存数据到磁盘
-   */
   async save() {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      await this.store.save()
-    } catch (error) {
-      console.error('保存存储失败:', error)
-    }
+    const store = await this.init()
+    return this.enqueueWrite(() => store.save())
   }
 
-  /**
-   * 获取所有键
-   * @returns {Promise<string[]>} 键列表
-   */
   async keys() {
     try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      return await this.store.keys()
+      const store = await this.init()
+      return store.keys()
     } catch (error) {
-      console.error('获取键列表失败:', error)
+      console.error('读取本地数据键失败', error)
       return []
     }
   }
 
-  /**
-   * 检查键是否存在
-   * @param {string} key - 键
-   * @returns {Promise<boolean>} 是否存在
-   */
   async has(key) {
-    try {
-      // 确保 Store 已初始化
-      if (!this.store) {
-        await this.init()
-      }
-
-      const keys = await this.store.keys()
-      return keys.includes(key)
-    } catch (error) {
-      console.error('检查键存在失败:', error)
-      return false
-    }
+    return (await this.keys()).includes(key)
   }
 }
 
-// 创建全局实例
 export const store = new ReactiveStore()
 
-// 导出自定义 Hook，用于在 React 组件中使用响应式状态
-export const useStore = () => {
-  return useSnapshot(store.state)
-}
+export const useStore = () => useSnapshot(store.state)
 
-// 导出工具函数
 export const useStoreValue = (key) => {
   const snapshot = useSnapshot(store.state)
   return snapshot[key]
 }
 
-// 初始化函数，在应用启动时调用
 export const initStore = async () => {
-  await store.load()
+  try {
+    await store.load()
+  } catch (error) {
+    console.error('本地数据初始化失败', error)
+  }
 }

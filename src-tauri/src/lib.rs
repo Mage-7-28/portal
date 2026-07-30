@@ -86,16 +86,15 @@ fn list_drives() -> Result<Vec<String>, String> {
             );
 
             if len > 0 {
-                let mut i = 0;
-                while i < len as usize {
+                let mut start = 0;
+                for i in 0..len as usize {
                     if buffer[i] == 0 {
-                        if i > 0 {
-                            let drive = OsString::from_wide(&buffer[..i]);
+                        if i > start {
+                            let drive = OsString::from_wide(&buffer[start..i]);
                             drives.push(drive.to_string_lossy().to_string());
                         }
-                        break;
+                        start = i + 1;
                     }
-                    i += 1;
                 }
             }
 
@@ -131,36 +130,43 @@ pub fn run() {
             list_drives,
             ssh::test_sftp_connection,
             ssh::add_ssh_connection,
+            ssh::set_ssh_host_key,
             ssh::list_ssh_connections,
             ssh::connect_ssh,
             ssh::disconnect_ssh,
-            ssh::execute_ssh_command,
             ssh::scp_upload,
             ssh::scp_download,
             ssh::list_sftp_directory,
-            ssh::remove_ssh_connection
+            ssh::remove_ssh_connection,
+            ssh::get_sftp_file_content,
+            ssh::sftp_mkdir,
+            ssh::sftp_delete,
+            ssh::sftp_rename,
+            ssh::get_sftp_user_home,
+            ssh::cancel_transfer
         ])
         .setup(|app| {
             // 设置AppHandle到SshState中
             let app_handle = app.app_handle();
             let state = app.state::<ssh::SshState>();
             *state.app_handle.lock().unwrap() = Some(app_handle.clone());
-            
+
             #[cfg(desktop)]
             {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
-                
+
                 // 创建菜单项
                 let about_item = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
                 let separator = PredefinedMenuItem::separator(app)?;
-                let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some("Cmd+Q"))?;
-                
+                let quit_shortcut = if cfg!(target_os = "macos") { "Cmd+Q" } else { "Ctrl+Q" };
+                let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some(quit_shortcut))?;
+
                 // 创建子菜单
                 let file_submenu = Submenu::new(app, "文件", true)?;
                 file_submenu.append(&about_item)?;
                 file_submenu.append(&separator)?;
                 file_submenu.append(&quit_item)?;
-                
+
                 // 创建编辑子菜单，使用原生菜单项
                 let edit_submenu = Submenu::new(app, "编辑", true)?;
                 edit_submenu.append(&PredefinedMenuItem::undo(app, None)?)?;
@@ -168,15 +174,15 @@ pub fn run() {
                 edit_submenu.append(&separator)?;
                 edit_submenu.append(&PredefinedMenuItem::copy(app, None)?)?;
                 edit_submenu.append(&PredefinedMenuItem::paste(app, None)?)?;
-                
+
                 // 创建主菜单
                 let menu = Menu::new(app)?;
                 menu.append(&file_submenu)?;
                 menu.append(&edit_submenu)?;
-                
+
                 // 设置应用菜单
                 app.set_menu(menu)?;
-                
+
                 // 绑定菜单事件
                 app.on_menu_event(|app, event| {
                     match event.id().as_ref() {
@@ -189,71 +195,16 @@ pub fn run() {
                                 .buttons(MessageDialogButtons::OkCustom("确定".to_string()))
                                 .show(|_| {});
                         }
-                        "quit" => {
-                            // 显示退出确认对话框
-                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                            app.dialog()
-                                .message("确定要退出应用吗？")
-                                .title("退出确认")
-                                .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
-                                .show(|confirmed| {
-                                    if confirmed {
-                                        std::process::exit(0);
-                                    }
-                                });
-                        }
+                        "quit" => app.exit(0),
 
                         _ => {}
                     }
                 });
-                
-                // 处理窗口关闭事件
-                if let Some(window) = app.get_webview_window("Portal") {
-                    let window_clone = window.clone();
-                    window.on_window_event(move |event| match event {
-                        tauri::WindowEvent::CloseRequested { api, .. } => {
-                            // 阻止窗口关闭
-                            api.prevent_close();
-                            
-                            // 显示退出确认对话框
-                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                            window_clone.dialog()
-                                .message("确定要退出应用吗？")
-                                .title("退出确认")
-                                .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
-                                .show(|confirmed| {
-                                    if confirmed {
-                                        std::process::exit(0);
-                                    }
-                                });
-                        }
-                        _ => {}
-                    });
-                }
+
             }
             Ok(())
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| match event {
-            tauri::RunEvent::ExitRequested { api, .. } => {
-                // 阻止默认退出行为
-                api.prevent_exit();
-                
-                // 显示退出确认对话框
-                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                app.dialog()
-                    .message("确定要退出应用吗？")
-                    .title("退出确认")
-                    .buttons(MessageDialogButtons::OkCancelCustom("确定".to_string(), "取消".to_string()))
-                    .show(|confirmed| {
-                        if confirmed {
-                            // 强制退出应用
-                            std::process::exit(0);
-                        }
-                        // 点击取消时，什么都不做，窗口保持打开状态
-                    });
-            }
-            _ => {}
-        });
+        .run(|_, _| {});
 }

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Button, List, Tooltip } from 'antd'
 import { DeleteOutlined, PlusOutlined, EditOutlined } from '@ant-design/icons'
 import AddConnectionModal from './AddConnectionModal'
@@ -14,17 +14,9 @@ const ConnectionList = ({
 }) => {
   // 弹窗状态
   const [ addModalVisible, setAddModalVisible ] = useState(false)
-  // 连接按钮loading状态
-  const [ connectLoading, setConnectLoading ] = useState(false)
-  const [ id, setId ] = useState('')
+  const [ connectingId, setConnectingId ] = useState(null)
   // 下载路径
   const [ downloadPath, setDownloadPath ] = useState('')
-
-  // 当连接列表变化时重置loading状态
-  useEffect(() => {
-    setConnectLoading(false)
-    setId('')
-  }, [connections])
 
   // 加载下载路径
   useEffect(() => {
@@ -144,7 +136,7 @@ const ConnectionList = ({
                 }}
                 actions={[
                   <Button
-                    key={item.id + connectLoading}
+                    key={`${ item.id }-connect`}
                     type="primary"
                     size="small"
                     style={{
@@ -153,24 +145,21 @@ const ConnectionList = ({
                       color: '#ffffff',
                       fontSize: '12px'
                     }}
-                    onClick={() => {
-                      setConnectLoading(true)
-                      setId(item.id)
-                      setTimeout(async () => {
+                    onClick={async () => {
+                      setConnectingId(item.id)
+                      try {
                         await handleConnect(item)
-                        setTimeout(() => {
-                          setAddModalVisible(false)
-                          setId('')
-                        }, 100)
-                      }, 100)
+                      } finally {
+                        setConnectingId(null)
+                      }
                     }}
-                    disabled={connectLoading && id !== item.id}
-                    loading={connectLoading && id === item.id}
+                    disabled={connectingId !== null && connectingId !== item.id}
+                    loading={connectingId === item.id}
                   >
                     连接
                   </Button>,
                   <Button
-                    key={item.id + connectLoading}
+                    key={`${ item.id }-delete`}
                     danger
                     size="small"
                     icon={<DeleteOutlined />}
@@ -178,7 +167,7 @@ const ConnectionList = ({
                       fontSize: '12px'
                     }}
                     onClick={() => handleDeleteConnection(item.id)}
-                    disabled={connectLoading}
+                    disabled={connectingId !== null}
                   >
                     删除
                   </Button>

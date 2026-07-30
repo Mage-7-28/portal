@@ -1,31 +1,17 @@
-/**
- * 业务常量与工具函数
- * @deprecated 请优先从 ./constants.js 导入常量，本文件保留用于向后兼容
- *
- * 新代码请直接导入：
- *   import { StoreKeys, GlobalFontFamily, formatFileSize } from './constants'
- */
-
-// ============================================================================
-// 从 constants.js 重导出所有常量（保持向后兼容）
-// ============================================================================
-
+// Backwards-compatible re-export. New code should import from constants.js.
 export {
   GlobalFontFamily,
   StoreKeys,
+  StoreVersion,
   PubSubBusinessKeyEnum,
   FileSizeUnits,
   formatFileSize,
   SftpConnectionStatus,
-  layoutStyle,
-  msgBoxStyle,
-  headerStyle,
-  contentStyle,
-  footerStyle,
+  TransferStatus,
   CONNECTION_TIMEOUT_MS,
   TRANSFER_BUFFER_SIZE,
   PROGRESS_UPDATE_INTERVAL_MS,
-  UI_DELAY_MS,
+  MAX_CONCURRENT_TRANSFERS,
   THEME_PRIMARY_COLOR,
   THEME_BG_PRIMARY,
   THEME_BG_SECONDARY,
@@ -35,13 +21,17 @@ export {
   THEME_TEXT_SECONDARY,
   THEME_TEXT_LINK,
   THEME_SUCCESS,
+  THEME_WARNING,
   THEME_DANGER,
   PROGRESS_GRADIENT,
   WINDOW_DEFAULT_WIDTH,
   WINDOW_DEFAULT_HEIGHT,
   WINDOW_MIN_WIDTH,
   WINDOW_MIN_HEIGHT,
-  ENCRYPTION_KEY,
-  encryptData,
-  decryptData
-} from './constants'
+  normalizeError,
+  layoutStyle,
+  msgBoxStyle,
+  headerStyle,
+  contentStyle,
+  footerStyle
+} from './constants.js'

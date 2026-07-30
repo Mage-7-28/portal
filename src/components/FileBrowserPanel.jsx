@@ -1,220 +1,355 @@
-import React, { useEffect, useState } from 'react'
-import { store } from '../utils/storeUtils'
-import sftpManager from '../utils/sftpUtils'
+import React, { useEffect, useRef, useState } from 'react'
+import { confirm } from '@tauri-apps/plugin-dialog'
+import { Modal } from 'antd'
 import toast from 'react-hot-toast'
-import { msgBoxStyle } from '../style/LayoutStyle.js'
-import FileBrowser from './FileBrowser'
-import ConnectionList from './ConnectionList'
-import { StoreKeys } from '../utils/common.js'
+import { store } from '../utils/storeUtils.js'
+import sftpManager from '../utils/sftpUtils.js'
+import { StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
+import FileBrowser from './FileBrowser.jsx'
+import ConnectionList from './ConnectionList.jsx'
+import PasswordPromptModal from './PasswordPromptModal.jsx'
+
+const normalizeProfile = (profile, index) => {
+  if (!profile || typeof profile !== 'object' || !profile.host || !profile.username) return null
+  return {
+    id: profile.id || `legacy-${ profile.host }-${ profile.port || 22 }-${ profile.username }-${ index }`,
+    name: profile.name || `${ profile.username }@${ profile.host }`,
+    host: profile.host,
+    port: Number(profile.port) || 22,
+    username: profile.username,
+    authMethod: profile.authMethod || 'password',
+    privateKeyPath: profile.privateKeyPath || null,
+    hostKeyFingerprint: profile.hostKeyFingerprint || null,
+    createdAt: profile.createdAt || new Date().toISOString(),
+    updatedAt: profile.updatedAt || profile.createdAt || new Date().toISOString()
+  }
+}
+
+const sortProfiles = (profiles) => [...profiles].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+
+const normalizeRemotePath = (path) => {
+  const normalized = String(path || '/').trim().replaceAll('\\', '/')
+  const driveOnly = /^([A-Za-z]):$/.exec(normalized)
+  if (driveOnly) return `${ driveOnly[1] }:/`
+  return normalized || '/'
+}
+
+const joinRemotePath = (base, name) => {
+  const normalizedBase = normalizeRemotePath(base)
+  if (normalizedBase === '/') return `/${ name }`
+  return `${ normalizedBase.replace(/\/+$/, '') }/${ name }`
+}
+
+const parentRemotePath = (path) => {
+  const normalized = normalizeRemotePath(path)
+  if (normalized === '/') return '/'
+  if (/^[A-Za-z]:\/?$/.test(normalized)) return normalized.slice(0, 2) + '/'
+  const withoutTrailingSlash = normalized.replace(/\/+$/, '')
+  const parent = withoutTrailingSlash.slice(0, withoutTrailingSlash.lastIndexOf('/'))
+  if (/^[A-Za-z]:$/.test(parent)) return `${ parent }/`
+  return parent || '/'
+}
+
+const deriveRemoteDrives = (path) => {
+  const match = /^([A-Za-z]):(?:[/\\]|$)/.exec(path || '')
+  return match ? [`${ match[1] }:/`] : []
+}
 
 function FileBrowserPanel() {
-  // 连接相关状态
   const [ connections, setConnections ] = useState([])
+  const [ credentials, setCredentials ] = useState(new Map())
   const [ currentConnection, setCurrentConnection ] = useState(null)
   const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
-
-  // 文件浏览相关状态
   const [ currentPath, setCurrentPath ] = useState('/')
   const [ files, setFiles ] = useState([])
   const [ loading, setLoading ] = useState(false)
-  const [ drives, setDrives ] = useState([])
+  const [ error, setError ] = useState(null)
   const [ homeDir, setHomeDir ] = useState('')
+  const [ drives, setDrives ] = useState([])
+  const [ passwordPrompt, setPasswordPrompt ] = useState(null)
+  const [ passwordLoading, setPasswordLoading ] = useState(false)
+  const [ preview, setPreview ] = useState(null)
+  const [ previewLoading, setPreviewLoading ] = useState(false)
+  const requestId = useRef(0)
 
-  // 初始化：加载历史连接
   useEffect(() => {
-    loadConnections()
+    void loadConnections()
   }, [])
 
-  // 加载存储的连接列表
-  const loadConnections = async () => { // 从存储中加载连接列表
-    const savedConnections = await store.get(StoreKeys.SSH_CONNECTIONS) || []
-    // 按创建时间排序，最新的在前面
-    savedConnections.sort((a, b) => {
-      return new Date(b.createdAt) - new Date(a.createdAt)
-    })
-    setConnections(savedConnections)
-  }
-
-  // 保存连接列表到 store
-  const saveConnections = async (newConnections) => {
-    // 按创建时间排序，最新的在前面
-    newConnections.sort((a, b) => {
-      return new Date(b.createdAt) - new Date(a.createdAt)
-    })
-    await store.set(StoreKeys.SSH_CONNECTIONS, newConnections)
-    setConnections(newConnections)
-  }
-
-  // 删除连接
-  const handleDeleteConnection = async (connectionId) => {
-    // 尝试从后端删除
-    // await sftpManager.disconnect(connectionId)
-
-    // 从前端状态中删除
-    const newConnections = connections.filter(c => c.id !== connectionId)
-    await saveConnections(newConnections)
-
-    toast.success('连接删除成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
-  }
-
-  // 连接到远程服务器
-  const handleConnect = async (connection) => {
-    setLoading(true)
-
-    setTimeout(async () => {
-      // 确保port是数字类型
-      const port = parseInt(connection.port)
-
-      // 创建连接
-      const connectionId = await sftpManager.createConnection({
-        host: connection.host,
-        port: port,
-        username: connection.username,
-        password: connection.password
-      })
-
-      // 连接到服务器
-      await sftpManager.connect(connectionId)
-
-      // 获取用户主目录
-      const homeDir = await sftpManager.getRemoteUserHome(connectionId)
-
-      // 获取远程服务器驱动器
-      const driveList = await sftpManager.getRemoteDrives(connectionId)
-
-      // 更新状态
-      setCurrentConnection(connection)
-      setCurrentConnectionId(connectionId)
-      setCurrentPath(homeDir) // 默认进入用户主目录
-      setHomeDir(homeDir)
-      setDrives(driveList)
-
-      // 等待状态更新后再加载目录
-      setTimeout(async () => {
-        await loadRemoteDirectory(homeDir, connectionId)
-      }, 100)
-
-      toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
-      setLoading(false)
-    }, 100)
-  }
-
-  // 断开连接
-  const handleDisconnect = async () => {
-    if (currentConnectionId) {
-      await sftpManager.disconnect(currentConnectionId)
+  const loadConnections = async () => {
+    const saved = await store.get(StoreKeys.SSH_CONNECTIONS)
+    const profiles = Array.isArray(saved)
+      ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
+      : []
+    setConnections(profiles)
+    if (JSON.stringify(saved || []) !== JSON.stringify(profiles)) {
+      await store.set(StoreKeys.SSH_CONNECTIONS, profiles)
     }
+  }
 
+  const saveConnections = async (profiles) => {
+    const sorted = sortProfiles(profiles)
+    await store.set(StoreKeys.SSH_CONNECTIONS, sorted)
+    setConnections(sorted)
+  }
+
+  const handleAddConnection = async (profile, credentialsForProfile) => {
+    const next = [ profile, ...connections.filter(item => item.id !== profile.id) ]
+    await saveConnections(next)
+    setCredentials(previous => {
+      const updated = new Map(previous)
+      updated.set(profile.id, credentialsForProfile || { password: '', passphrase: '' })
+      return updated
+    })
+  }
+
+  const handleDeleteConnection = async (connectionId) => {
+    if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
+    if (currentConnectionId === connectionId) await handleDisconnect()
+    await sftpManager.removeConnection(connectionId).catch(() => undefined)
+    await saveConnections(connections.filter(connection => connection.id !== connectionId))
+    setCredentials(previous => {
+      const updated = new Map(previous)
+      updated.delete(connectionId)
+      return updated
+    })
+    toast.success('连接已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+  }
+
+  const updateProfile = async (connectionId, changes) => {
+    const next = connections.map(profile => profile.id === connectionId
+      ? { ...profile, ...changes, updatedAt: new Date().toISOString() }
+      : profile)
+    await saveConnections(next)
+    return next.find(profile => profile.id === connectionId)
+  }
+
+  const connectWithPassword = async (connection, credentialsForProfile) => {
+    setPasswordLoading(true)
+    setLoading(true)
+    const credentialsValue = typeof credentialsForProfile === 'string'
+      ? { password: credentialsForProfile, passphrase: '' }
+      : (credentialsForProfile || { password: '', passphrase: '' })
+    try {
+      setCredentials(previous => {
+        const updated = new Map(previous)
+        updated.set(connection.id, credentialsValue)
+        return updated
+      })
+      const connectionId = await sftpManager.createConnection({ ...connection, ...credentialsValue })
+      let result = await sftpManager.connect(connectionId)
+
+      if (result.requiresHostKeyConfirmation) {
+        const accepted = await confirm(
+          `首次连接 ${ connection.host } 时需要确认服务器指纹：\n${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }`,
+          { title: '确认 SSH 主机密钥', kind: 'warning', okLabel: '信任并继续', cancelLabel: '取消' }
+        )
+        if (!accepted) throw new Error('已取消主机密钥确认')
+        await sftpManager.updateHostKey(connectionId, result.hostKey.fingerprint)
+        await updateProfile(connection.id, { hostKeyFingerprint: result.hostKey.fingerprint })
+        result = await sftpManager.connect(connectionId)
+      }
+
+      if (!result.connected) throw new Error('服务器连接失败')
+      const home = await sftpManager.getRemoteUserHome(connectionId)
+      const profile = {
+        ...(connections.find(item => item.id === connection.id) || connection),
+        hostKeyFingerprint: result.hostKey?.fingerprint || connection.hostKeyFingerprint
+      }
+      setCurrentConnection(profile)
+      setCurrentConnectionId(connectionId)
+      setHomeDir(home || '/')
+      setDrives(deriveRemoteDrives(home || '/'))
+      setCurrentPath(home || '/')
+      await loadRemoteDirectory(home || '/', connectionId)
+      toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      setPasswordPrompt(null)
+    } catch (error) {
+      await sftpManager.removeConnection(connection.id).catch(() => undefined)
+      toast.error(`连接失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } finally {
+      setLoading(false)
+      setPasswordLoading(false)
+    }
+  }
+
+  const handleConnect = async (connection) => {
+    const credentialsValue = credentials.get(connection.id) || { password: '', passphrase: '' }
+    if ((connection.authMethod === 'password' && !credentialsValue.password)
+      || (connection.authMethod === 'key' && !credentials.has(connection.id))) {
+      setPasswordPrompt(connection)
+      return
+    }
+    await connectWithPassword(connection, credentialsValue)
+  }
+
+  const handleDisconnect = async () => {
+    requestId.current += 1
+    if (currentConnectionId) await sftpManager.disconnect(currentConnectionId).catch(() => undefined)
     setCurrentConnection(null)
     setCurrentConnectionId(null)
     setCurrentPath('/')
     setFiles([])
     setHomeDir('')
     setDrives([])
-    toast.success('已断开连接', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    setError(null)
+    setPreview(null)
+    setPreviewLoading(false)
+    setLoading(false)
   }
 
-  // 加载远程目录内容
-  const loadRemoteDirectory = async (path, connId = currentConnectionId) => {
+  const loadRemoteDirectory = async (path, connectionId = currentConnectionId) => {
+    if (!connectionId) {
+      setError('尚未连接服务器')
+      return
+    }
+    const normalizedPath = normalizeRemotePath(path)
+    const currentRequest = ++requestId.current
     setLoading(true)
-
-    setTimeout(async () => {
-      // 检查连接状态
-      if (!connId) {
-        notification.error('连接错误', '未连接到服务器')
-        return
+    setError(null)
+    try {
+      const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath)
+      if (currentRequest !== requestId.current) return
+      setFiles(result)
+      setCurrentPath(normalizedPath)
+    } catch (requestError) {
+      if (currentRequest === requestId.current) {
+        setFiles([])
+        setError(normalizeError(requestError))
       }
-
-      // 使用SFTP工具类获取目录内容
-      const files = await sftpManager.listRemoteDirectory(connId, path)
-
-      setFiles(files)
-      setCurrentPath(path)
-      setLoading(false)
-    }, 100)
-  }
-
-  // 处理地址栏变化
-  const handlePathChange = (e) => {
-    setCurrentPath(e.target.value)
-  }
-
-  // 处理地址栏回车
-  const handlePathSubmit = async (e) => {
-    if (e.key === 'Enter' && currentConnectionId) {
-      await loadRemoteDirectory(currentPath)
+    } finally {
+      if (currentRequest === requestId.current) setLoading(false)
     }
   }
 
-  // 处理刷新
-  const handleRefresh = async () => {
-    if (currentConnectionId) {
-      await loadRemoteDirectory(currentPath)
+  const handlePathSubmit = (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void loadRemoteDirectory(event.currentTarget.value.trim() || '/')
     }
   }
 
-  // 处理文件/目录点击
   const handleItemClick = async (entry) => {
-    if (entry.isDirectory && currentConnectionId) {
-      setLoading(true)
-      setTimeout(async () => {
-        const newPath = currentPath.endsWith('/')
-          ? currentPath + entry.name
-          : currentPath + '/' + entry.name
-        await loadRemoteDirectory(newPath)
-      }, 100)
+    if (entry.isDirectory) {
+      await loadRemoteDirectory(joinRemotePath(currentPath, entry.name))
+      return
+    }
+    setPreviewLoading(true)
+    try {
+      const bytes = await sftpManager.getRemoteFileContent(currentConnectionId, joinRemotePath(currentPath, entry.name))
+      const content = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+      setPreview({ name: entry.name, content })
+    } catch (previewError) {
+      toast.error(`预览失败：${ normalizeError(previewError) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } finally {
+      setPreviewLoading(false)
     }
   }
 
-  // 处理返回上一级
-  const handleGoBack = async () => {
+  const handleGoBack = () => {
     if (currentPath === '/' || !currentConnectionId) return
-
-    setLoading(true)
-    setTimeout(async () => {
-      const lastSlashIndex = currentPath.lastIndexOf('/')
-      if (lastSlashIndex > 0) {
-        const parentPath = currentPath.substring(0, lastSlashIndex) || '/'
-        await loadRemoteDirectory(parentPath)
-      } else {
-        await loadRemoteDirectory('/')
-      }
-    }, 100)
+    void loadRemoteDirectory(parentRemotePath(currentPath))
   }
 
-  // 处理驱动器选择
-  const handleDriveSelect = async (drive) => {
-    setCurrentPath(drive)
-    setLoading(true)
-    setTimeout(async () => {
-      await loadRemoteDirectory(drive)
-    }, 100)
+  const handleRefresh = () => void loadRemoteDirectory(currentPath)
+
+  const handleCreateDirectory = async (name) => {
+    const targetPath = joinRemotePath(currentPath, name)
+    await sftpManager.createRemoteDirectory(currentConnectionId, targetPath)
+    await loadRemoteDirectory(currentPath)
   }
 
-  return currentConnectionId && currentConnection ? (
-    <FileBrowser
-      currentPath={currentPath}
-      files={files}
-      loading={loading}
-      currentConnection={currentConnection}
-      currentConnectionId={currentConnectionId}
-      homeDir={homeDir}
-      drives={drives}
-      handleGoBack={handleGoBack}
-      handlePathChange={handlePathChange}
-      handlePathSubmit={handlePathSubmit}
-      handleRefresh={handleRefresh}
-      handleItemClick={handleItemClick}
-      handleDriveSelect={handleDriveSelect}
-      handleDisconnect={handleDisconnect}
-    />
-  ) : (
-    <ConnectionList
-      connections={connections}
-      handleConnect={handleConnect}
-      handleDeleteConnection={handleDeleteConnection}
-      onAddSuccess={loadConnections}
-    />
+  const handleDeleteItem = async (entry) => {
+    const accepted = await confirm(`确定删除“${ entry.name }”吗？`, {
+      title: '删除远程项目',
+      kind: 'warning',
+      okLabel: '删除',
+      cancelLabel: '取消'
+    })
+    if (!accepted) return
+    await sftpManager.deleteRemoteItem(currentConnectionId, joinRemotePath(currentPath, entry.name), entry.isDirectory)
+    await loadRemoteDirectory(currentPath)
+    toast.success('已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+  }
+
+  const handleRenameItem = async (entry, name) => {
+    const trimmedName = name.trim()
+    if (!trimmedName || trimmedName === entry.name) return
+    await sftpManager.renameRemoteItem(
+      currentConnectionId,
+      joinRemotePath(currentPath, entry.name),
+      joinRemotePath(currentPath, trimmedName)
+    )
+    await loadRemoteDirectory(currentPath)
+    toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
+  }
+
+  if (currentConnectionId && currentConnection) {
+    return (
+      <>
+        <FileBrowser
+          currentPath={currentPath}
+          files={files}
+          loading={loading}
+          error={error}
+          currentConnection={currentConnection}
+          currentConnectionId={currentConnectionId}
+          homeDir={homeDir}
+          drives={drives}
+          handleGoBack={handleGoBack}
+          handlePathChange={event => setCurrentPath(event.target.value)}
+          handlePathSubmit={handlePathSubmit}
+          handleRefresh={handleRefresh}
+          handleItemClick={handleItemClick}
+          handleCreateDirectory={handleCreateDirectory}
+          handleDeleteItem={handleDeleteItem}
+          handleRenameItem={handleRenameItem}
+          handleDriveSelect={path => void loadRemoteDirectory(path)}
+          handleDisconnect={handleDisconnect}
+        />
+        <Modal
+          title={`预览：${ preview?.name || '' }`}
+          open={Boolean(preview) || previewLoading}
+          onCancel={() => setPreview(null)}
+          footer={null}
+          width="min(900px, calc(100vw - 32px))"
+          destroyOnHidden
+        >
+          {previewLoading ? '读取中...' : <pre className="file-preview">{preview?.content}</pre>}
+        </Modal>
+        <PasswordPromptModal
+          visible={Boolean(passwordPrompt)}
+          connection={passwordPrompt}
+          loading={passwordLoading}
+          onCancel={() => setPasswordPrompt(null)}
+          onSubmit={({ password }) => passwordPrompt && connectWithPassword(
+            passwordPrompt,
+            passwordPrompt.authMethod === 'key' ? { passphrase: password } : { password }
+          )}
+        />
+      </>
+    )
+  }
+
+  return (
+    <>
+      <ConnectionList
+        connections={connections}
+        handleConnect={handleConnect}
+        handleDeleteConnection={handleDeleteConnection}
+        onAddSuccess={handleAddConnection}
+      />
+      <PasswordPromptModal
+        visible={Boolean(passwordPrompt)}
+        connection={passwordPrompt}
+        loading={passwordLoading}
+        onCancel={() => setPasswordPrompt(null)}
+        onSubmit={({ password }) => passwordPrompt && connectWithPassword(
+          passwordPrompt,
+          passwordPrompt.authMethod === 'key' ? { passphrase: password } : { password }
+        )}
+      />
+    </>
   )
 }
 

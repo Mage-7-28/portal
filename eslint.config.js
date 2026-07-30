@@ -18,8 +18,15 @@ export default [
         }
       },
       globals: {
-        browser: true,
-        node: true
+        browser: 'readonly',
+        node: 'readonly',
+        clearTimeout: 'readonly',
+        console: 'readonly',
+        crypto: 'readonly',
+        document: 'readonly',
+        setTimeout: 'readonly',
+        TextDecoder: 'readonly',
+        window: 'readonly'
       }
     },
     plugins: {
@@ -61,6 +68,7 @@ export default [
       'no-multi-spaces': [ 'error', { 'exceptions': { 'Property': false }, 'ignoreEOLComments': false }], // 禁止使用多个空格
       'no-irregular-whitespace': [ 'error', { 'skipTemplates': true }], // 禁止不规则的空白
       'no-extra-semi': 'error', // 禁用不必要的分号
+      'no-undef': 'error', // 防止运行时引用未声明变量
       'react/prop-types': 'off', // 关闭prop-types检查
       'no-unused-vars': 'off', // 允许未使用的变量
       'react/react-in-jsx-scope': 'off', // 关闭React导入检查
