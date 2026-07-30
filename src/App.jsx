@@ -4,7 +4,7 @@ import zhCN from 'antd/locale/zh_CN'
 import { listen } from '@tauri-apps/api/event'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
-import { GlobalFontFamily, msgBoxStyle, normalizeError, StoreKeys, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from './utils/common.js'
+import { GlobalFontFamily, msgBoxStyle, normalizeError, StoreKeys, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR_FALLBACK, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from './utils/common.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { Toaster } from 'react-hot-toast'
 import FileBrowserPanel from './components/FileBrowserPanel'
@@ -55,7 +55,7 @@ function App() {
   return (
     <ConfigProvider theme={ {
       token: {
-        colorPrimary: THEME_PRIMARY_COLOR,
+        colorPrimary: THEME_PRIMARY_COLOR_FALLBACK,
         colorBgBase: THEME_BG_PRIMARY,
         colorBgContainer: THEME_BG_SECONDARY,
         colorBgElevated: THEME_BG_INPUT,
@@ -86,17 +86,19 @@ function App() {
       }
     } } locale={ zhCN } componentSize="small">
       <div className="app-shell">
-        <div className="app-content">
-          <FileBrowserPanel />
-        </div>
-        <div
-          className="download-status"
-          title={downloadPath || '尚未设置下载地址，首次下载时会提示选择'}
-        >
-          <span className="download-status-label">下载地址</span>
-          <span className="download-status-path">
-            {downloadPath || '尚未设置（首次下载时选择）'}
-          </span>
+        <div className="app-frame">
+          <div className="app-content">
+            <FileBrowserPanel />
+          </div>
+          <div
+            className="download-status"
+            title={downloadPath || '尚未设置下载地址，首次下载时会提示选择'}
+          >
+            <span className="download-status-label">下载地址</span>
+            <span className="download-status-path">
+              {downloadPath || '尚未设置（首次下载时选择）'}
+            </span>
+          </div>
         </div>
       </div>
       <Toaster />

@@ -46,7 +46,11 @@ export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
 export const MAX_CONCURRENT_TRANSFERS = 4
 
-export const THEME_PRIMARY_COLOR = '#b0874c'
+// LAB is used by the browser-facing accent styles. Ant Design's FastColor
+// palette generator currently accepts RGB/HSL/hex values only, so it needs
+// the equivalent sRGB fallback when generating derived theme tokens.
+export const THEME_PRIMARY_COLOR = 'lab(68.9646% 33.16 32.3692)'
+export const THEME_PRIMARY_COLOR_FALLBACK = '#eb9070'
 export const THEME_BG_PRIMARY = '#1f1f1f'
 export const THEME_BG_SECONDARY = '#252526'
 export const THEME_BG_INPUT = '#2b2b2b'

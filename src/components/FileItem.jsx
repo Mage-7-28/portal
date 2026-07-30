@@ -123,7 +123,9 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
     }
   }
 
-  const submitRename = async () => {
+  const submitRename = async (event) => {
+    event?.preventDefault()
+    event?.stopPropagation()
     const name = renameValue.trim()
     if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return
     setRenaming(true)
@@ -144,7 +146,10 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
       onClick={entry.isDirectory ? onClick : undefined}
       onDoubleClick={entry.isDirectory ? undefined : onClick}
       onKeyDown={event => {
-        if ((entry.isDirectory || !entry.isDirectory) && (event.key === 'Enter' || event.key === ' ')) {
+        // Keyboard activation belongs to the row itself. Events from action
+        // buttons and the rename modal must never activate the row.
+        if (event.target !== event.currentTarget) return
+        if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           onClick()
         }
@@ -216,12 +221,19 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
       <div
         onClick={event => event.stopPropagation()}
         onDoubleClick={event => event.stopPropagation()}
+        onMouseDown={event => event.stopPropagation()}
+        onPointerDown={event => event.stopPropagation()}
+        onKeyDown={event => event.stopPropagation()}
+        onKeyUp={event => event.stopPropagation()}
       >
         <Modal
           rootClassName="compact-modal"
           title={`重命名 ${ entry.name }`}
           open={renameOpen}
-          onCancel={() => setRenameOpen(false)}
+          onCancel={event => {
+            event?.stopPropagation()
+            setRenameOpen(false)
+          }}
           onOk={submitRename}
           okText="保存"
           cancelText="取消"
@@ -231,9 +243,14 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
         >
           <Input
             autoFocus
+            autoCapitalize="none"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
             value={renameValue}
             onChange={event => setRenameValue(event.target.value)}
-            onPressEnter={submitRename}
+            onKeyDown={event => event.stopPropagation()}
+            onKeyUp={event => event.stopPropagation()}
           />
         </Modal>
       </div>

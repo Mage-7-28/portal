@@ -7,9 +7,23 @@
   box-sizing: border-box;
 }
 
+.app-frame {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid #3c3f41;
+  border-radius: 8px;
+  background: #1f1f1f;
+}
+
 .app-content {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .download-status {
@@ -20,6 +34,7 @@
   padding: 0 8px;
   overflow: hidden;
   border-top: 1px solid #3c3f41;
+  border-radius: 0 0 7px 7px;
   background: #252526;
   color: #c0bcb4;
   font-size: 11px;
@@ -104,21 +119,23 @@ html,
 }
 
 .ant-btn-primary:not(:disabled) {
-  border-color: #c49d62 !important;
-  background: #b0874c !important;
+  border-color: #f0aa90 !important;
+  border-color: lab(73.5% 30 30) !important;
+  background: #eb9070 !important;
+  background: lab(68.9646% 33.16 32.3692) !important;
   color: #ffffff !important;
   font-weight: 650;
 }
 
 .ant-btn-primary:not(:disabled):hover {
-  border-color: #d0ad73 !important;
-  background: #c19a5b !important;
+  border-color: #f6b79b !important;
+  background: #f0a184 !important;
   color: #ffffff !important;
 }
 
 .ant-btn-primary:not(:disabled):active {
-  border-color: #a3793e !important;
-  background: #98733c !important;
+  border-color: #d27c60 !important;
+  background: #d27c60 !important;
   color: #ffffff !important;
 }
 
@@ -149,7 +166,7 @@ html,
 .ant-btn:focus-visible,
 .ant-input:focus,
 .ant-input-affix-wrapper-focused {
-  outline: 2px solid rgba(176, 135, 76, 0.28);
+  outline: 2px solid rgba(235, 144, 112, 0.32);
   outline-offset: 1px;
   box-shadow: none !important;
 }
@@ -280,7 +297,8 @@ html,
 }
 
 .connection-row-icon {
-  color: #b0874c;
+  color: #eb9070;
+  color: lab(68.9646% 33.16 32.3692);
   font-size: 15px;
 }
 
@@ -344,8 +362,8 @@ html,
   padding: 8px;
   overflow: hidden;
   box-sizing: border-box;
-  border: 1px solid #3c3f41;
-  border-radius: 6px;
+  border: 0;
+  border-radius: 0;
   background: #1f1f1f;
 }
 
@@ -390,7 +408,8 @@ html,
 .remote-path-icon {
   flex: 0 0 auto;
   margin-left: 9px;
-  color: #b0874c;
+  color: #eb9070;
+  color: lab(68.9646% 33.16 32.3692);
   font-size: 13px;
 }
 

@@ -253,7 +253,8 @@ const FileBrowser = ({
           value={directoryName}
           placeholder="文件夹名称"
           onChange={event => setDirectoryName(event.target.value)}
-          onPressEnter={submitDirectory}
+          onKeyDown={event => event.stopPropagation()}
+          onKeyUp={event => event.stopPropagation()}
         />
       </Modal>
     </div>
