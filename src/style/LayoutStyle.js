@@ -6,9 +6,9 @@ export const layoutStyle = {
 }
 
 export const msgBoxStyle = {
-  background: 'rgb(30, 31, 34)',
-  color: 'rgba(255, 255, 255, 0.85)',
-  border: '1px solid #36383a',
+  background: '#252526',
+  color: '#e1ded7',
+  border: '1px solid #3c3f41',
   fontSize: '12px'
 }
 

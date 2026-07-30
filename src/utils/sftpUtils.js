@@ -1,4 +1,5 @@
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, normalizeError } from './constants.js'
 
 const randomId = (prefix) => {
@@ -148,7 +149,6 @@ class SftpManager {
   async transfer(direction, connectionId, options) {
     const info = this.requireConnected(connectionId)
     const transferId = randomId(direction)
-    const { listen } = await import('@tauri-apps/api/event')
     const progressEvent = `${ direction }-progress`
     const completeEvent = `${ direction }-complete`
     options.onTransferId?.(transferId)

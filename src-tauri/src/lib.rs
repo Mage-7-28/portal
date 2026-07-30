@@ -2,7 +2,7 @@
 mod ssh;
 
 use std::path::Path;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[tauri::command]
 fn greet(name: &str) -> String {
@@ -160,6 +160,8 @@ pub fn run() {
                 let separator = PredefinedMenuItem::separator(app)?;
                 let quit_shortcut = if cfg!(target_os = "macos") { "Cmd+Q" } else { "Ctrl+Q" };
                 let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some(quit_shortcut))?;
+                let download_path_item =
+                    MenuItem::with_id(app, "download-path", "选择下载路径", true, None::<&str>)?;
 
                 // 创建子菜单
                 let file_submenu = Submenu::new(app, "文件", true)?;
@@ -175,10 +177,15 @@ pub fn run() {
                 edit_submenu.append(&PredefinedMenuItem::copy(app, None)?)?;
                 edit_submenu.append(&PredefinedMenuItem::paste(app, None)?)?;
 
+                // macOS 菜单栏的顶层项目使用 Submenu，确保下载路径入口可见。
+                let download_path_submenu = Submenu::new(app, "下载路径", true)?;
+                download_path_submenu.append(&download_path_item)?;
+
                 // 创建主菜单
                 let menu = Menu::new(app)?;
                 menu.append(&file_submenu)?;
                 menu.append(&edit_submenu)?;
+                menu.append(&download_path_submenu)?;
 
                 // 设置应用菜单
                 app.set_menu(menu)?;
@@ -196,6 +203,9 @@ pub fn run() {
                                 .show(|_| {});
                         }
                         "quit" => app.exit(0),
+                        "download-path" => {
+                            let _ = app.emit("menu-download-path", ());
+                        }
 
                         _ => {}
                     }

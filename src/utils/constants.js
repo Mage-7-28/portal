@@ -1,6 +1,6 @@
 import PubSub from 'pubsub-js'
 
-export const GlobalFontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif'
+export const GlobalFontFamily = '"Lora Variable", "Lora", "Source Serif Pro", "Source Serif 4", "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR", "Source Han Serif SC", "Source Han Serif TC", "Source Han Serif", "Songti SC", "STSong", "STSongti-SC-Regular", "PingFang SC", "SimSun", "NSimSun", "宋体", "FangSong", "仿宋", "KaiTi", "楷体", Georgia, "Times New Roman", Cambria, "Liberation Serif", ui-serif, serif'
 
 export const StoreKeys = {
   DOWNLOAD_PATH: 'download_path',
@@ -46,21 +46,21 @@ export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
 export const MAX_CONCURRENT_TRANSFERS = 4
 
-export const THEME_PRIMARY_COLOR = '#4f8cff'
-export const THEME_BG_PRIMARY = '#111318'
-export const THEME_BG_SECONDARY = '#1b1e24'
-export const THEME_BG_INPUT = '#242832'
-export const THEME_BORDER_COLOR = '#343a46'
-export const THEME_TEXT_PRIMARY = '#f5f7fa'
-export const THEME_TEXT_SECONDARY = '#a4adbd'
-export const THEME_TEXT_LINK = '#8ab4ff'
-export const THEME_SUCCESS = '#47c68a'
-export const THEME_WARNING = '#e5ac4f'
-export const THEME_DANGER = '#ef6b73'
+export const THEME_PRIMARY_COLOR = '#b59b72'
+export const THEME_BG_PRIMARY = '#1f1f1f'
+export const THEME_BG_SECONDARY = '#252526'
+export const THEME_BG_INPUT = '#2b2b2b'
+export const THEME_BORDER_COLOR = '#3c3f41'
+export const THEME_TEXT_PRIMARY = '#e6e3dd'
+export const THEME_TEXT_SECONDARY = '#b5b2aa'
+export const THEME_TEXT_LINK = '#c2aa7d'
+export const THEME_SUCCESS = '#7ea886'
+export const THEME_WARNING = '#c5a467'
+export const THEME_DANGER = '#c27f7f'
 
 export const PROGRESS_GRADIENT = {
   '0%': THEME_PRIMARY_COLOR,
-  '100%': '#68c4ff'
+  '100%': '#c4aa78'
 }
 
 export const WINDOW_DEFAULT_WIDTH = 920

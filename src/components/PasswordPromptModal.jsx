@@ -11,16 +11,17 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading 
 
   return (
     <Modal
+      rootClassName="compact-modal"
       title={`输入 ${ connection?.name || '服务器' } 的${ connection?.authMethod === 'key' ? '私钥口令' : '密码' }`}
       open={visible}
       onCancel={onCancel}
       footer={null}
       centered
-      width="min(400px, calc(100vw - 32px))"
+      width="min(360px, calc(100vw - 24px))"
       destroyOnHidden
     >
-      <Form form={form} layout="vertical" onFinish={onSubmit}>
-        <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中" style={{ marginBottom: 12 }}>
+      <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>
+        <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中">
           <Input value={connection?.username || ''} readOnly prefix={<LockOutlined />} />
         </Form.Item>
         <Form.Item

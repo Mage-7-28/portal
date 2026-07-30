@@ -139,9 +139,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
 
   return (
     <div
-      style={{
-        cursor: 'pointer'
-      }}
+      className="file-item-row"
       title={entry.isDirectory ? '单击进入目录' : '双击预览文件'}
       onClick={entry.isDirectory ? onClick : undefined}
       onDoubleClick={entry.isDirectory ? undefined : onClick}
@@ -155,31 +153,29 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
       tabIndex={0}
     >
       <List.Item
-        style={{
-          cursor: 'pointer',
-          borderBottom: '1px solid #1E1E1E',
-          padding: '12px'
-        }}
+        className="file-list-item"
       >
         <List.Item.Meta
+          className="file-item-meta"
           avatar={
             entry.isDirectory ?
-              <FolderOutlined style={{ color: '#4EC9B0' }} /> :
-              <FileOutlined style={{ color: '#ffffff' }} />
+              <FolderOutlined className="file-type-icon is-directory" /> :
+              <FileOutlined className="file-type-icon" />
           }
           title={
-            <span style={{ color: entry.isDirectory ? '#4EC9B0' : '#ffffff' }}>
+            <span className={`file-item-name${ entry.isDirectory ? ' is-directory' : '' }`}>
               {entry.name}
             </span>
           }
         />
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }} onDoubleClick={event => event.stopPropagation()}>
-          <span style={{ color: '#888888', fontSize: 12 }}>
+        <div className="file-item-actions" onDoubleClick={event => event.stopPropagation()}>
+          <span className="file-item-size">
             {entry.isDirectory ? '' : formatFileSize(entry.size)}
           </span>
           {!entry.isDirectory && (
             <Tooltip title="下载文件">
               <Button
+                className="compact-icon-button"
                 size="small"
                 icon={<DownloadOutlined />}
                 loading={downloading}
@@ -191,6 +187,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
           )}
           <Tooltip title="重命名">
             <Button
+              className="compact-icon-button"
               size="small"
               icon={<EditOutlined />}
               aria-label={`重命名 ${ entry.name }`}
@@ -203,6 +200,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
           </Tooltip>
           <Tooltip title="删除">
             <Button
+              className="compact-icon-button"
               danger
               size="small"
               icon={<DeleteOutlined />}
@@ -220,6 +218,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
         onDoubleClick={event => event.stopPropagation()}
       >
         <Modal
+          rootClassName="compact-modal"
           title={`重命名 ${ entry.name }`}
           open={renameOpen}
           onCancel={() => setRenameOpen(false)}
@@ -227,6 +226,7 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
           okText="保存"
           cancelText="取消"
           confirmLoading={renaming}
+          width="min(360px, calc(100vw - 24px))"
           destroyOnHidden
         >
           <Input

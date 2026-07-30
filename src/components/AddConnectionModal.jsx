@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Input, Modal, Radio, Space, Typography } from 'antd'
+import { Button, Form, Input, Modal, Radio, Typography } from 'antd'
 import { CheckCircleOutlined, CloudServerOutlined, ExclamationCircleOutlined, FileOutlined, KeyOutlined, LockOutlined, UserOutlined, WifiOutlined } from '@ant-design/icons'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import toast from 'react-hot-toast'
@@ -110,15 +110,17 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
 
   return (
     <Modal
+      rootClassName="compact-modal"
       title="新建 SSH 连接"
       open={visible}
       onCancel={onCancel}
       centered
       footer={null}
-      width="min(480px, calc(100vw - 32px))"
+      width="min(440px, calc(100vw - 24px))"
       destroyOnHidden
     >
       <Form
+        className="compact-form"
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
@@ -133,12 +135,11 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
           <Input placeholder="例如：生产服务器" autoFocus />
         </Form.Item>
 
-        <Space.Compact block>
+        <div className="form-row form-row-host">
           <Form.Item
             name="host"
             label={<span><CloudServerOutlined /> 主机地址</span>}
             rules={[{ required: true, whitespace: true, message: '请输入主机地址' }]}
-            style={{ flex: 1 }}
           >
             <Input placeholder="example.com 或 192.168.1.10" />
           </Form.Item>
@@ -149,9 +150,9 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
             rules={[{ required: true, type: 'number', min: 1, max: 65535, message: '端口范围为 1-65535' }]}
             getValueFromEvent={event => Number(event.target.value)}
           >
-            <Input type="number" min={1} max={65535} style={{ width: 110 }} />
+            <Input type="number" min={1} max={65535} />
           </Form.Item>
-        </Space.Compact>
+        </div>
 
         <Form.Item name="authMethod" label="认证方式" initialValue="password">
           <Radio.Group optionType="button" buttonStyle="solid">
@@ -172,7 +173,9 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
                 readOnly
                 placeholder="选择 ~/.ssh/id_ed25519"
                 addonAfter={<Button
+                  className="compact-icon-button"
                   type="text"
+                  size="small"
                   icon={<FileOutlined />}
                   aria-label="选择私钥文件"
                   onClick={async () => {
@@ -188,12 +191,11 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
           </>
         )}
 
-        <Space.Compact block>
+        <div className="form-row">
           <Form.Item
             name="username"
             label={<span><UserOutlined /> 用户名</span>}
             rules={[{ required: true, whitespace: true, message: '请输入用户名' }]}
-            style={{ flex: 1 }}
           >
             <Input placeholder="root" />
           </Form.Item>
@@ -201,11 +203,10 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
             name="password"
             label={<span><LockOutlined /> 密码</span>}
             rules={[{ required: true, message: '请输入密码' }]}
-            style={{ flex: 1 }}
           >
             <Input.Password placeholder="仅保存在当前会话" autoComplete="current-password" />
           </Form.Item>}
-        </Space.Compact>
+        </div>
 
         {testResult && (
           <div className="connection-test-result" style={{ borderColor: testResultColor }}>
@@ -239,7 +240,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
           </div>
         )}
 
-        <Text type="secondary" style={{ display: 'block', marginBottom: 16, color: THEME_TEXT_SECONDARY }}>
+        <Text type="secondary" className="credential-note" style={{ color: THEME_TEXT_SECONDARY }}>
           <KeyOutlined /> 密码和私钥口令不会写入本地配置文件，只在本次运行期间保留。
         </Text>
 

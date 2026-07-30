@@ -16,7 +16,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 ## 目录职责
 
 - `src/components/FileBrowserPanel.jsx`：连接、目录、预览和远程文件操作的页面状态控制器。
-- `src/components/ConnectionList.jsx`、`AddConnectionModal.jsx`：连接配置和认证方式输入。
+- `src/components/ConnectionList.jsx`、`AddConnectionModal.jsx`：连接配置和认证方式输入；下载路径由原生菜单触发维护，窗口底部持续显示当前路径。
 - `src/components/FileBrowser.jsx`、`FileItem.jsx`：目录工具栏、上传、预览入口和项目操作。
 - `src/utils/sftpUtils.js`：Tauri invoke/event 的单例封装，严格区分 disconnected/connecting/connected/error 状态。
 - `src/utils/storeUtils.js`：串行写入 Tauri Store。只保存非敏感连接配置和下载目录，凭据不落盘。

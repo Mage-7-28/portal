@@ -68,6 +68,7 @@ function FileBrowserPanel() {
   const [ drives, setDrives ] = useState([])
   const [ passwordPrompt, setPasswordPrompt ] = useState(null)
   const [ passwordLoading, setPasswordLoading ] = useState(false)
+  const [ connectingId, setConnectingId ] = useState(null)
   const [ preview, setPreview ] = useState(null)
   const [ previewLoading, setPreviewLoading ] = useState(false)
   const requestId = useRef(0)
@@ -125,6 +126,7 @@ function FileBrowserPanel() {
   }
 
   const connectWithPassword = async (connection, credentialsForProfile) => {
+    setConnectingId(connection.id)
     setPasswordLoading(true)
     setLoading(true)
     const credentialsValue = typeof credentialsForProfile === 'string'
@@ -170,13 +172,17 @@ function FileBrowserPanel() {
     } finally {
       setLoading(false)
       setPasswordLoading(false)
+      setConnectingId(null)
     }
   }
 
   const handleConnect = async (connection) => {
+    if (connectingId) return
+    setConnectingId(connection.id)
     const credentialsValue = credentials.get(connection.id) || { password: '', passphrase: '' }
     if ((connection.authMethod === 'password' && !credentialsValue.password)
       || (connection.authMethod === 'key' && !credentials.has(connection.id))) {
+      setConnectingId(null)
       setPasswordPrompt(connection)
       return
     }
@@ -350,6 +356,7 @@ function FileBrowserPanel() {
         handleConnect={handleConnect}
         handleDeleteConnection={handleDeleteConnection}
         onAddSuccess={handleAddConnection}
+        connectingId={connectingId}
       />
       <PasswordPromptModal
         visible={Boolean(passwordPrompt)}

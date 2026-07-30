@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Button, Progress, Typography } from 'antd'
 import { DownloadOutlined, StopOutlined, UploadOutlined } from '@ant-design/icons'
 import PubSub from 'pubsub-js'
-import { PubSubBusinessKeyEnum } from '../utils/common'
+import { PubSubBusinessKeyEnum, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
 
 const { Text } = Typography
 
@@ -61,8 +61,8 @@ const ProgressMask = () => {
         <div style={styles.progressWrapper}>
           <Progress
             percent={Math.round(progress)}
-            strokeColor="#4f8cff"
-            railColor="rgba(255, 255, 255, 0.1)"
+            strokeColor={THEME_PRIMARY_COLOR}
+            railColor={THEME_BORDER_COLOR}
             showInfo={false}
             size="small"
           />
@@ -70,11 +70,12 @@ const ProgressMask = () => {
         </div>
         {onCancel && (
           <Button
+            size="small"
             danger
             icon={<StopOutlined />}
             loading={cancelling}
             onClick={handleCancel}
-            style={{ marginTop: 16 }}
+            style={{ marginTop: 10 }}
           >
             取消传输
           </Button>
@@ -91,8 +92,8 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    backdropFilter: 'blur(8px)',
+    backgroundColor: 'rgba(7, 9, 12, 0.74)',
+    backdropFilter: 'blur(4px)',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
@@ -100,51 +101,51 @@ const styles = {
     animation: 'fadeIn 0.2s ease-out'
   },
   container: {
-    background: '#1b1e24',
+    background: '#252526',
     borderRadius: '8px',
-    padding: '32px 36px',
-    width: 'min(400px, calc(100vw - 32px))',
+    padding: '20px 24px',
+    width: 'min(340px, calc(100vw - 24px))',
     boxSizing: 'border-box',
     textAlign: 'center',
-    boxShadow: '0 20px 60px rgba(0, 0, 0, 0.6)',
+    boxShadow: '0 16px 42px rgba(0, 0, 0, 0.48)',
     animation: 'scaleIn 0.2s ease-out',
-    border: '1px solid rgba(255, 255, 255, 0.1)'
+    border: `1px solid ${ THEME_BORDER_COLOR }`
   },
   iconContainer: {
-    margin: '0 auto 24px',
+    margin: '0 auto 12px',
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center'
   },
   operationIcon: {
-    width: '56px',
-    height: '56px',
-    borderRadius: '50%',
-    background: '#4f8cff',
+    width: '40px',
+    height: '40px',
+    borderRadius: '8px',
+    background: THEME_PRIMARY_COLOR,
     display: 'flex',
     justifyContent: 'center',
     alignItems: 'center',
-    boxShadow: '0 8px 24px rgba(79, 140, 255, 0.35)'
+    boxShadow: 'none'
   },
   icon: {
-    fontSize: '24px',
-    color: '#ffffff'
+    fontSize: '18px',
+    color: THEME_TEXT_PRIMARY
   },
   title: {
-    fontSize: '18px',
+    fontSize: '15px',
     fontWeight: '600',
-    color: '#ffffff',
-    marginBottom: '8px',
+    color: THEME_TEXT_PRIMARY,
+    marginBottom: '4px',
     display: 'block',
     letterSpacing: 0
   },
   fileName: {
-    fontSize: '13px',
-    color: 'rgba(255, 255, 255, 0.6)',
-    marginBottom: '24px',
+    fontSize: '12px',
+    color: THEME_TEXT_SECONDARY,
+    marginBottom: '14px',
     display: 'block',
     maxWidth: '90%',
-    margin: '0 auto 24px',
+    margin: '0 auto 14px',
     lineHeight: '1.4'
   },
   progressWrapper: {
@@ -152,10 +153,10 @@ const styles = {
     padding: '0 4px'
   },
   percentText: {
-    fontSize: '24px',
+    fontSize: '18px',
     fontWeight: '700',
-    color: '#8ab4ff',
-    marginTop: '12px',
+    color: THEME_TEXT_LINK,
+    marginTop: '6px',
     display: 'block',
     textShadow: 'none'
   }

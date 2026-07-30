@@ -1,6 +1,6 @@
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Spin, Tooltip } from 'antd'
-import { DisconnectOutlined, DownOutlined, FolderAddOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
+import { DisconnectOutlined, DownOutlined, FolderAddOutlined, FolderOpenOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
 import FileItem from './FileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
@@ -122,91 +122,70 @@ const FileBrowser = ({
   ]
 
   return (
-    <div style={{ borderRadius: '8px', backgroundColor: '#101318', padding: 16, display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, maxHeight: '100%', overflow: 'hidden', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16, minWidth: 0, flexShrink: 0 }}>
+    <div className="file-browser">
+      <div className="path-toolbar">
         <Tooltip title="返回上级目录">
           <Button
+            className="toolbar-icon-button"
+            size="small"
             onClick={handleGoBack}
             icon={<UpOutlined />}
             aria-label="返回上级目录"
-            style={{
-              backgroundColor: '#2B2D30',
-              border: '1px solid #3E4148',
-              color: '#ffffff',
-              borderTopRightRadius: 0,
-              borderBottomRightRadius: 0
-            }}
           />
         </Tooltip>
 
-        <Input
-          value={currentPath}
-          onChange={handlePathChange}
-          onPressEnter={handlePathSubmit}
-          aria-label="远程路径"
-          style={{
-            flex: 1,
-            backgroundColor: '#2B2D30',
-            border: '1px solid #3E4148',
-            borderLeft: 'none',
-            borderRight: 'none',
-            color: '#ffffff'
-          }}
-        />
-
-        <Dropdown menu={{ items: menuItems }} trigger={['click']}>
-          <Button icon={<DownOutlined />} aria-label="快速定位目录"
-            style={{
-              backgroundColor: '#2B2D30',
-              border: '1px solid #3E4148',
-              borderLeft: 'none',
-              borderRight: 'none',
-              color: '#ffffff'
-            }}
+        <div
+          className="remote-path-bar"
+        >
+          <FolderOpenOutlined className="remote-path-icon" />
+          <Input
+            className="remote-path-input"
+            variant="borderless"
+            value={currentPath}
+            onChange={handlePathChange}
+            onPressEnter={handlePathSubmit}
+            aria-label="远程路径"
           />
-        </Dropdown>
+
+          <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+            <Button
+              className="path-menu-button"
+              type="text"
+              size="small"
+              icon={<DownOutlined />}
+              aria-label="快速定位目录"
+            />
+          </Dropdown>
+        </div>
 
         <Tooltip title="刷新目录">
           <Button
+            className="toolbar-icon-button"
+            size="small"
             onClick={handleRefresh}
             icon={<ReloadOutlined />}
             aria-label="刷新目录"
-            style={{
-              backgroundColor: '#2B2D30',
-              border: '1px solid #3E4148',
-              borderLeft: 'none',
-              color: '#ffffff',
-              borderTopLeftRadius: 0,
-              borderBottomLeftRadius: 0
-            }}
           />
         </Tooltip>
       </div>
 
-      <div style={{
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 16,
-        padding: '8px 12px',
-        backgroundColor: '#1E1E1E',
-        borderRadius: '4px',
-        flexShrink: 0
-      }}>
-        <span style={{ color: '#4EC9B0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {currentConnection?.name || '未知'} ({currentConnection?.host || '未知'}:{currentConnection?.port || '未知'})
-        </span>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <Button icon={<UploadOutlined />} onClick={handleUpload}
-            style={{
-              backgroundColor: '#2B2D30',
-              border: '1px solid #3E4148',
-              color: '#ffffff'
-            }}
-          >
+      <div className="connection-toolbar">
+        <div
+          className="connection-summary"
+          title={`${ currentConnection?.name || '未知' } (${ currentConnection?.host || '未知' }:${ currentConnection?.port || '未知' })`}
+        >
+          <span className="connection-status-dot" aria-hidden="true" />
+          <span className="connection-name">{currentConnection?.name || '未知'}</span>
+          <span className="connection-endpoint">
+            {currentConnection?.host || '未知'}:{currentConnection?.port || '未知'}
+          </span>
+        </div>
+        <div className="connection-actions">
+          <Button size="small" icon={<UploadOutlined />} onClick={handleUpload}>
             上传
           </Button>
           <Button
+            size="small"
             icon={<FolderAddOutlined />}
             onClick={() => setDirectoryModalOpen(true)}
             aria-label="新建文件夹"
@@ -214,6 +193,7 @@ const FileBrowser = ({
             新建文件夹
           </Button>
           <Button
+            size="small"
             danger
             icon={<DisconnectOutlined />}
             onClick={() => handleDisconnect()}
@@ -224,28 +204,22 @@ const FileBrowser = ({
       </div>
 
       <div
-        style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-          overflowX: 'hidden',
-          backgroundColor: '#0C0D0E',
-          borderRadius: '4px',
-          border: '1px solid transparent'
-        }}
+        className="file-list-shell"
       >
         {error ? (
-          <Alert type="error" showIcon message="目录加载失败" description={error} style={{ margin: 16 }} />
+          <Alert type="error" showIcon message="目录加载失败" description={error} className="file-list-alert" />
         ) : loading ? (
-          <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '200px' }}>
-            <Spin tip="加载中..." />
+          <div className="file-list-state">
+            <Spin size="small" />
+            <span>加载中...</span>
           </div>
         ) : files.length === 0 ? (
-          <div style={{ padding: '40px', textAlign: 'center', color: '#888888' }}>
+          <div className="file-list-state">
             该目录为空
           </div>
         ) : (
           <List
+            className="file-list"
             itemLayout="horizontal"
             dataSource={files}
             rowKey={entry => entry.path || entry.name}
@@ -263,6 +237,7 @@ const FileBrowser = ({
         )}
       </div>
       <Modal
+        rootClassName="compact-modal"
         title="新建远程文件夹"
         open={directoryModalOpen}
         onCancel={() => setDirectoryModalOpen(false)}
@@ -270,6 +245,7 @@ const FileBrowser = ({
         okText="创建"
         cancelText="取消"
         confirmLoading={directorySubmitting}
+        width="min(360px, calc(100vw - 24px))"
         destroyOnHidden
       >
         <Input
