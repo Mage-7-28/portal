@@ -105,7 +105,7 @@ function FileBrowserPanel() {
 
   const handleDeleteConnection = async (connectionId) => {
     if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
-    if (currentConnectionId === connectionId) await handleDisconnect()
+    if (currentConnectionId === connectionId) await handleDisconnect({ skipConfirm: true })
     await sftpManager.removeConnection(connectionId).catch(() => undefined)
     await saveConnections(connections.filter(connection => connection.id !== connectionId))
     setCredentials(previous => {
@@ -183,7 +183,19 @@ function FileBrowserPanel() {
     await connectWithPassword(connection, credentialsValue)
   }
 
-  const handleDisconnect = async () => {
+  const handleDisconnect = async ({ skipConfirm = false } = {}) => {
+    if (currentConnectionId && !skipConfirm) {
+      const accepted = await confirm(
+        `确定断开与“${ currentConnection?.name || currentConnection?.host || '当前服务器' }”的连接吗？`,
+        {
+          title: '断开连接',
+          kind: 'warning',
+          okLabel: '断开',
+          cancelLabel: '取消'
+        }
+      )
+      if (!accepted) return
+    }
     requestId.current += 1
     if (currentConnectionId) await sftpManager.disconnect(currentConnectionId).catch(() => undefined)
     setCurrentConnection(null)

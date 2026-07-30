@@ -43,6 +43,16 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
     }
     const remotePath = joinRemotePath(currentPath, entry.name)
     const localPath = joinLocalPath(downloadPath, entry.name)
+    const accepted = await confirm(
+      `确定下载“${ entry.name }”吗？\n\n保存到：${ localPath }`,
+      {
+        title: '确认下载',
+        kind: 'warning',
+        okLabel: '下载',
+        cancelLabel: '取消'
+      }
+    )
+    if (!accepted) return
     let overwrite = false
     let transferId = null
     try {
@@ -205,23 +215,28 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
           </Tooltip>
         </div>
       </List.Item>
-      <Modal
-        title={`重命名 ${ entry.name }`}
-        open={renameOpen}
-        onCancel={() => setRenameOpen(false)}
-        onOk={submitRename}
-        okText="保存"
-        cancelText="取消"
-        confirmLoading={renaming}
-        destroyOnHidden
+      <div
+        onClick={event => event.stopPropagation()}
+        onDoubleClick={event => event.stopPropagation()}
       >
-        <Input
-          autoFocus
-          value={renameValue}
-          onChange={event => setRenameValue(event.target.value)}
-          onPressEnter={submitRename}
-        />
-      </Modal>
+        <Modal
+          title={`重命名 ${ entry.name }`}
+          open={renameOpen}
+          onCancel={() => setRenameOpen(false)}
+          onOk={submitRename}
+          okText="保存"
+          cancelText="取消"
+          confirmLoading={renaming}
+          destroyOnHidden
+        >
+          <Input
+            autoFocus
+            value={renameValue}
+            onChange={event => setRenameValue(event.target.value)}
+            onPressEnter={submitRename}
+          />
+        </Modal>
+      </div>
     </div>
   )
 }

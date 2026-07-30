@@ -213,7 +213,10 @@ const FileBrowser = ({
           >
             新建文件夹
           </Button>
-          <Button danger icon={<DisconnectOutlined />} onClick={handleDisconnect}
+          <Button
+            danger
+            icon={<DisconnectOutlined />}
+            onClick={() => handleDisconnect()}
           >
             断开连接
           </Button>
