@@ -1,0 +1,44 @@
+import React, { useEffect } from 'react'
+import { Button, Form, Input, Modal } from 'antd'
+import { LockOutlined } from '@ant-design/icons'
+
+const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading }) => {
+  const [form] = Form.useForm()
+
+  useEffect(() => {
+    if (!visible) form.resetFields()
+  }, [ form, visible ])
+
+  return (
+    <Modal
+      title={`输入 ${ connection?.name || '服务器' } 的${ connection?.authMethod === 'key' ? '私钥口令' : '密码' }`}
+      open={visible}
+      onCancel={onCancel}
+      footer={null}
+      centered
+      width="min(400px, calc(100vw - 32px))"
+      destroyOnHidden
+    >
+      <Form form={form} layout="vertical" onFinish={onSubmit}>
+        <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中" style={{ marginBottom: 12 }}>
+          <Input value={connection?.username || ''} readOnly prefix={<LockOutlined />} />
+        </Form.Item>
+        <Form.Item
+          name="password"
+          label={connection?.authMethod === 'key' ? '私钥口令' : '密码'}
+          rules={connection?.authMethod === 'key'
+            ? []
+            : [{ required: true, message: '请输入密码' }]}
+        >
+          <Input.Password autoFocus placeholder={connection?.authMethod === 'key' ? '无口令私钥可留空' : '请输入密码'} autoComplete="current-password" />
+        </Form.Item>
+        <div className="modal-actions">
+          <Button onClick={onCancel}>取消</Button>
+          <Button type="primary" htmlType="submit" loading={loading}>连接</Button>
+        </div>
+      </Form>
+    </Modal>
+  )
+}
+
+export default PasswordPromptModal
