@@ -184,11 +184,12 @@ class SftpManager {
     return true
   }
 
-  async uploadFile(connectionId, localPath, remotePath, onProgress, onTransferId) {
+  async uploadFile(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId) {
     return this.transfer('upload', connectionId, {
       localPath,
       remotePath,
       onProgress,
+      overwrite,
       onTransferId
     })
   }
@@ -250,7 +251,8 @@ class SftpManager {
           id: connectionId,
           localPath: options.localPath,
           remotePath: options.remotePath,
-          transferId
+          transferId,
+          overwrite: options.overwrite
         }
         : {
           id: connectionId,

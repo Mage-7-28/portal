@@ -48,10 +48,109 @@
 }
 
 .download-status-path {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.transfer-inline-status {
+  display: flex;
+  flex: 0 1 min(520px, 55%);
+  align-items: center;
+  min-width: 300px;
+  gap: 7px;
+  height: 22px;
+  margin-left: 10px;
+  overflow: hidden;
+  color: #d8d3c9;
+  line-height: 1;
+}
+
+.transfer-inline-operation,
+.transfer-inline-position,
+.transfer-inline-percent,
+.transfer-inline-pending {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.transfer-inline-operation {
+  color: #e8e5de;
+  font-weight: 600;
+}
+
+.transfer-inline-position {
+  color: #aaa69d;
+  font-variant-numeric: tabular-nums;
+}
+
+.transfer-inline-file {
+  min-width: 72px;
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-inline-progress {
+  flex: 1 1 90px;
+  min-width: 64px;
+  line-height: 1;
+}
+
+.transfer-inline-progress .ant-progress-inner {
+  height: 6px;
+  overflow: hidden;
+  border: 1px solid #4a443b;
+  border-radius: 999px;
+  background: #35322d;
+}
+
+.transfer-inline-progress .ant-progress-bg {
+  height: 100% !important;
+  border-radius: 999px;
+  background: lab(68.9646% 33.16 32.3692) !important;
+  box-shadow: none;
+}
+
+.transfer-inline-percent {
+  min-width: 34px;
+  color: #e0b59b;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.transfer-inline-pending {
+  color: #aaa69d;
+}
+
+.transfer-inline-cancel.ant-btn {
+  display: inline-flex;
+  width: 22px;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: #d07878;
+}
+
+@media (max-width: 760px) {
+  .transfer-inline-status {
+    flex-basis: 50%;
+    min-width: 210px;
+    gap: 5px;
+  }
+
+  .transfer-inline-file {
+    max-width: 90px;
+  }
+
+  .transfer-inline-pending {
+    display: none;
+  }
 }
 
 .content-text-align-justify {

@@ -31,6 +31,8 @@ const LIBSSH2_ERROR_BAD_SOCKET: i32 = -45;
 const LIBSSH2_ERROR_EAGAIN: i32 = -37;
 const LIBSSH2_FX_NO_CONNECTION: i32 = 6;
 const LIBSSH2_FX_CONNECTION_LOST: i32 = 7;
+const LIBSSH2_FX_FAILURE: i32 = 4;
+const LIBSSH2_FX_OP_UNSUPPORTED: i32 = 8;
 
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "code", content = "message")]
@@ -410,6 +412,69 @@ fn mark_ssh_error_if_connection_lost(state: &SshState, id: &str, error: &ssh2::E
 fn mark_io_error_if_connection_lost(state: &SshState, id: &str, error: &std::io::Error) {
     if is_io_connection_loss(error) {
         mark_connection_disconnected(state, id, error.to_string());
+    }
+}
+
+fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
+    matches!(
+        error.code(),
+        ErrorCode::SFTP(LIBSSH2_FX_FAILURE | LIBSSH2_FX_OP_UNSUPPORTED)
+    )
+}
+
+fn rename_remote_file(
+    sftp: &Sftp,
+    source_path: &Path,
+    target_path: &Path,
+    overwrite: bool,
+) -> Result<(), ssh2::Error> {
+    let preferred_flags = if overwrite {
+        RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE
+    } else {
+        RenameFlags::ATOMIC | RenameFlags::NATIVE
+    };
+
+    match sftp.rename(source_path, target_path, Some(preferred_flags)) {
+        Ok(()) => Ok(()),
+        Err(error) if !is_rename_compatibility_error(&error) => Err(error),
+        // Some SFTP servers reject ATOMIC/NATIVE even though they support a
+        // regular overwrite rename. Retry with only the required flag first.
+        Err(error) if !overwrite => sftp
+            .rename(source_path, target_path, Some(RenameFlags::empty()))
+            .map_err(|fallback_error| {
+                if is_rename_compatibility_error(&fallback_error) {
+                    error
+                } else {
+                    fallback_error
+                }
+            }),
+        Err(error) => match sftp.rename(source_path, target_path, Some(RenameFlags::OVERWRITE)) {
+            Ok(()) => Ok(()),
+            Err(fallback_error) if !is_rename_compatibility_error(&fallback_error) => {
+                Err(fallback_error)
+            }
+            Err(fallback_error) => {
+                if sftp
+                    .stat(target_path)
+                    .map(|stat| stat.is_dir())
+                    .unwrap_or(true)
+                {
+                    return Err(fallback_error);
+                }
+                // Older servers sometimes cannot overwrite through rename at
+                // all. This final fallback is only used after explicit
+                // overwrite semantics were requested for a non-directory.
+                sftp.unlink(target_path)
+                    .and_then(|_| sftp.rename(source_path, target_path, Some(RenameFlags::empty())))
+                    .map_err(|fallback_error| {
+                        if is_rename_compatibility_error(&fallback_error) {
+                            error
+                        } else {
+                            fallback_error
+                        }
+                    })
+            }
+        },
     }
 }
 
@@ -837,15 +902,11 @@ pub fn sftp_rename(
     overwrite: Option<bool>,
 ) -> Result<bool, SshError> {
     let sftp = sftp_for(&state, &id)?;
-    let flags = if overwrite.unwrap_or(false) {
-        RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE
-    } else {
-        RenameFlags::ATOMIC | RenameFlags::NATIVE
-    };
-    sftp.rename(
+    rename_remote_file(
+        &sftp,
         Path::new(&source_path),
         Path::new(&target_path),
-        Some(flags),
+        overwrite.unwrap_or(false),
     )
     .map_err(|error| {
         mark_ssh_error_if_connection_lost(&state, &id, &error);
@@ -900,6 +961,7 @@ fn run_upload(
     transfer_id: &str,
     local_path: &str,
     remote_path: &str,
+    overwrite: bool,
 ) -> Result<String, SshError> {
     let session = session
         .lock()
@@ -954,10 +1016,11 @@ fn run_upload(
             SshError::FileOperationFailed(error.to_string())
         })?;
         drop(remote_file);
-        sftp.rename(
+        rename_remote_file(
+            &sftp,
             Path::new(&temporary_path),
             Path::new(remote_path),
-            Some(RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE),
+            overwrite,
         )
         .map_err(|error| {
             mark_ssh_error_if_connection_lost(state, &connection.id, &error);
@@ -1069,6 +1132,7 @@ pub fn scp_upload(
     local_path: String,
     remote_path: String,
     transfer_id: Option<String>,
+    overwrite: Option<bool>,
 ) -> Result<String, SshError> {
     let transfer_id = transfer_id.unwrap_or_else(|| format!("upload-{}", uuid_fallback()));
     let connection = connection_info(&state, &id, true)?;
@@ -1084,6 +1148,7 @@ pub fn scp_upload(
             &transfer_id_for_thread,
             &local_path,
             &remote_path,
+            overwrite.unwrap_or(false),
         );
         let cancelled = matches!(result, Err(SshError::TransferCancelled));
         emit_event(
@@ -1203,6 +1268,22 @@ mod tests {
         assert!(!is_connection_loss(&ssh2::Error::new(
             ErrorCode::SFTP(2),
             "no such file"
+        )));
+    }
+
+    #[test]
+    fn identifies_sftp_rename_capability_failures() {
+        assert!(is_rename_compatibility_error(&ssh2::Error::new(
+            ErrorCode::SFTP(LIBSSH2_FX_FAILURE),
+            "failure"
+        )));
+        assert!(is_rename_compatibility_error(&ssh2::Error::new(
+            ErrorCode::SFTP(LIBSSH2_FX_OP_UNSUPPORTED),
+            "operation unsupported"
+        )));
+        assert!(!is_rename_compatibility_error(&ssh2::Error::new(
+            ErrorCode::SFTP(3),
+            "permission denied"
         )));
     }
 }

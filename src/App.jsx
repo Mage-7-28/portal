@@ -98,11 +98,11 @@ function App() {
             <span className="download-status-path">
               {downloadPath || '尚未设置（首次下载时选择）'}
             </span>
+            <ProgressMask />
           </div>
         </div>
       </div>
       <Toaster />
-      <ProgressMask />
     </ConfigProvider>
   )
 }

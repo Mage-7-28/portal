@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Button, Progress, Typography } from 'antd'
+import { Button, Progress, Tooltip, Typography } from 'antd'
 import { DownloadOutlined, StopOutlined, UploadOutlined } from '@ant-design/icons'
 import PubSub from 'pubsub-js'
 import { PubSubBusinessKeyEnum, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
@@ -25,7 +25,15 @@ const ProgressMask = () => {
   }
 
   // 确保 maskData 有必要的属性
-  const { progress = 0, fileName = '', operation = 'download', onCancel } = maskData
+  const {
+    progress = 0,
+    fileName = '',
+    operation = 'download',
+    queueIndex = 0,
+    queueTotal = 1,
+    pendingCount = 0,
+    onCancel
+  } = maskData
 
   const handleCancel = async () => {
     if (!onCancel || cancelling) return
@@ -35,6 +43,40 @@ const ProgressMask = () => {
     } finally {
       setCancelling(false)
     }
+  }
+
+  if (operation === 'upload') {
+    return (
+      <div className="transfer-inline-status" title={`上传中：${ fileName }`}>
+        <span className="transfer-inline-operation">上传中</span>
+        <span className="transfer-inline-position">{queueIndex + 1}/{queueTotal}</span>
+        <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>
+        <Progress
+          className="transfer-inline-progress"
+          percent={Math.round(progress)}
+          strokeColor={THEME_PRIMARY_COLOR}
+          railColor={THEME_BORDER_COLOR}
+          showInfo={false}
+          size="small"
+        />
+        <span className="transfer-inline-percent">{Math.round(progress)}%</span>
+        <span className="transfer-inline-pending">待上传 {pendingCount} 个</span>
+        {onCancel && (
+          <Tooltip title="取消上传">
+            <Button
+              className="transfer-inline-cancel"
+              type="text"
+              size="small"
+              danger
+              icon={<StopOutlined />}
+              loading={cancelling}
+              onClick={handleCancel}
+              aria-label="取消上传"
+            />
+          </Tooltip>
+        )}
+      </div>
+    )
   }
 
   return (

@@ -4,7 +4,7 @@ import { DisconnectOutlined, DownOutlined, FolderAddOutlined, FolderOpenOutlined
 import FileItem from './FileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { PubSubBusinessKeyEnum } from '../utils/common'
+import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 
@@ -47,6 +47,7 @@ const FileBrowser = ({
     }
   }
   const handleUpload = async () => {
+    let uploadQueue = []
     try {
       const result = await dialog.open({
         title: '选择要上传的文件',
@@ -54,11 +55,30 @@ const FileBrowser = ({
         directory: false
       })
       const paths = result ? (Array.isArray(result) ? result : [result]) : []
-      for (const localPath of paths) {
-        const fileName = localPath.split(/[\\/]/).pop()
-        if (!fileName) continue
+      uploadQueue = paths
+        .map(localPath => ({
+          localPath,
+          fileName: localPath.split(/[\\/]/).pop()
+        }))
+        .filter(item => item.fileName)
+
+      for (const [ queueIndex, { localPath, fileName }] of uploadQueue.entries()) {
+        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        let transferId = null
+        let overwrite = false
+        const publishProgress = progress => {
+          PubSubBusinessKeyEnum.SEND_MASK({
+            progress,
+            fileName,
+            operation: 'upload',
+            queueIndex,
+            queueTotal: uploadQueue.length,
+            pendingCount: Math.max(uploadQueue.length - queueIndex - 1, 0),
+            onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
+          })
+        }
         if (files.some(entry => entry.name === fileName)) {
-          const overwrite = await confirm(`远程目录中已存在“${ fileName }”，是否覆盖？`, {
+          overwrite = await confirm(`远程目录中已存在“${ fileName }”，是否覆盖？`, {
             title: '确认覆盖',
             kind: 'warning',
             okLabel: '覆盖',
@@ -67,40 +87,28 @@ const FileBrowser = ({
           if (!overwrite) continue
         }
         const remotePath = `${ currentPath.replace(/\/+$/, '') || '' }/${ fileName }` || `/${ fileName }`
-        let transferId = null
-        PubSubBusinessKeyEnum.SEND_MASK({
-          progress: 0,
-          fileName,
-          operation: 'upload',
-          onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
-        })
+        publishProgress(0)
         try {
           await sftpManager.uploadFile(currentConnectionId, localPath, remotePath, progress => {
-            PubSubBusinessKeyEnum.SEND_MASK({
-              progress: Math.round(progress),
-              fileName,
-              operation: 'upload',
-              onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
-            })
-          }, id => {
+            publishProgress(Math.round(progress))
+          }, overwrite, id => {
             transferId = id
-            PubSubBusinessKeyEnum.SEND_MASK({
-              progress: 0,
-              fileName,
-              operation: 'upload',
-              onCancel: () => sftpManager.cancelTransfer(transferId)
-            })
+            publishProgress(0)
           })
           notification.success('上传成功', `文件 ${ fileName } 上传成功`)
         } catch (error) {
           notification.error('上传失败', `文件 ${ fileName } 上传失败：${ error.message || error.toString() || '未知错误' }`)
-        } finally {
-          PubSubBusinessKeyEnum.SEND_MASK(null)
+          if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
         }
       }
-      if (paths.length > 0) handleRefresh()
+      if (uploadQueue.length > 0
+        && sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
+        handleRefresh()
+      }
     } catch (error) {
       notification.error('上传文件失败', error.message || error.toString() || '未知错误')
+    } finally {
+      if (uploadQueue.length > 0) PubSubBusinessKeyEnum.SEND_MASK(null)
     }
   }
 
