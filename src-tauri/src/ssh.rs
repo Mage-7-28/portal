@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -29,6 +29,7 @@ const LIBSSH2_ERROR_SOCKET_TIMEOUT: i32 = -30;
 const LIBSSH2_ERROR_SOCKET_RECV: i32 = -43;
 const LIBSSH2_ERROR_BAD_SOCKET: i32 = -45;
 const LIBSSH2_ERROR_EAGAIN: i32 = -37;
+const LIBSSH2_FX_NO_SUCH_FILE: i32 = 2;
 const LIBSSH2_FX_NO_CONNECTION: i32 = 6;
 const LIBSSH2_FX_CONNECTION_LOST: i32 = 7;
 const LIBSSH2_FX_FAILURE: i32 = 4;
@@ -141,6 +142,18 @@ pub struct RemoteEntry {
     pub size: u64,
     pub modified_at: Option<u64>,
     pub permissions: Option<u32>,
+}
+
+struct FolderUploadFile {
+    local_path: PathBuf,
+    relative_path: PathBuf,
+}
+
+struct FolderUploadPlan {
+    directories: Vec<PathBuf>,
+    files: Vec<FolderUploadFile>,
+    total_bytes: u64,
+    skipped_entries: usize,
 }
 
 struct OpenSession {
@@ -422,6 +435,126 @@ fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
     )
 }
 
+fn is_sftp_missing_path(error: &ssh2::Error) -> bool {
+    matches!(error.code(), ErrorCode::SFTP(LIBSSH2_FX_NO_SUCH_FILE))
+}
+
+fn join_remote_path(base_path: &str, relative_path: &Path) -> Result<String, SshError> {
+    let mut remote_path = base_path.trim_end_matches('/').to_string();
+    if remote_path.is_empty() {
+        remote_path.push('/');
+    }
+
+    for component in relative_path.components() {
+        let Component::Normal(segment) = component else {
+            if matches!(component, Component::CurDir) {
+                continue;
+            }
+            return Err(SshError::FileOperationFailed(
+                "本地目录包含不安全的相对路径".to_string(),
+            ));
+        };
+        let segment = segment.to_str().ok_or_else(|| {
+            SshError::FileOperationFailed("本地文件名不是有效的 UTF-8 文本".to_string())
+        })?;
+
+        if remote_path != "/" {
+            remote_path.push('/');
+        }
+        remote_path.push_str(segment);
+    }
+    Ok(remote_path)
+}
+
+fn display_relative_path(relative_path: &Path) -> String {
+    relative_path
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(segment) => Some(segment.to_string_lossy().to_string()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, SshError> {
+    let root_metadata = fs::symlink_metadata(local_root)
+        .map_err(|error| SshError::FileOperationFailed(format!("无法读取本地文件夹: {error}")))?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(SshError::FileOperationFailed(
+            "请选择一个普通本地文件夹，符号链接不支持直接上传".to_string(),
+        ));
+    }
+
+    let mut plan = FolderUploadPlan {
+        directories: Vec::new(),
+        files: Vec::new(),
+        total_bytes: 0,
+        skipped_entries: 0,
+    };
+    let mut pending_directories = vec![local_root.to_path_buf()];
+
+    while let Some(directory) = pending_directories.pop() {
+        let mut entries = fs::read_dir(&directory)
+            .map_err(|error| {
+                SshError::FileOperationFailed(format!(
+                    "无法读取本地文件夹“{}”: {error}",
+                    directory.display()
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                SshError::FileOperationFailed(format!(
+                    "无法读取本地文件夹“{}”: {error}",
+                    directory.display()
+                ))
+            })?;
+        entries.sort_by_key(|entry| entry.file_name());
+
+        for entry in entries {
+            let local_path = entry.path();
+            let relative_path = local_path
+                .strip_prefix(local_root)
+                .map_err(|error| {
+                    SshError::FileOperationFailed(format!("无法计算本地相对路径: {error}"))
+                })?
+                .to_path_buf();
+            let metadata = fs::symlink_metadata(&local_path).map_err(|error| {
+                SshError::FileOperationFailed(format!(
+                    "无法读取本地文件“{}”: {error}",
+                    local_path.display()
+                ))
+            })?;
+
+            if metadata.file_type().is_symlink() {
+                plan.skipped_entries += 1;
+            } else if metadata.is_dir() {
+                plan.directories.push(relative_path);
+                pending_directories.push(local_path);
+            } else if metadata.is_file() {
+                let size = metadata.len();
+                plan.total_bytes = plan.total_bytes.saturating_add(size);
+                plan.files.push(FolderUploadFile {
+                    local_path,
+                    relative_path,
+                });
+            } else {
+                plan.skipped_entries += 1;
+            }
+        }
+    }
+
+    plan.directories.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    plan.files
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(plan)
+}
+
 fn rename_remote_file(
     sftp: &Sftp,
     source_path: &Path,
@@ -498,6 +631,49 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
         mark_ssh_error_if_connection_lost(state, id, &error);
         SshError::SftpFailed(error.to_string())
     })
+}
+
+fn ensure_remote_directory(
+    state: &SshState,
+    connection_id: &str,
+    sftp: &Sftp,
+    remote_path: &str,
+    allow_existing: bool,
+) -> Result<(), SshError> {
+    match sftp.stat(Path::new(remote_path)) {
+        Ok(stat) if stat.is_dir() && allow_existing => Ok(()),
+        Ok(stat) if stat.is_dir() => Err(SshError::FileOperationFailed(format!(
+            "远程文件夹已存在: {remote_path}"
+        ))),
+        Ok(_) => Err(SshError::FileOperationFailed(format!(
+            "远程路径存在同名文件: {remote_path}"
+        ))),
+        Err(error) if is_sftp_missing_path(&error) => {
+            match sftp.mkdir(Path::new(remote_path), 0o755) {
+                Ok(()) => Ok(()),
+                Err(mkdir_error) => match sftp.stat(Path::new(remote_path)) {
+                    // Another client may have created the directory between stat
+                    // and mkdir. A confirmed merge can safely continue.
+                    Ok(stat) if stat.is_dir() && allow_existing => Ok(()),
+                    Ok(stat) if stat.is_dir() => Err(SshError::FileOperationFailed(format!(
+                        "远程文件夹已存在: {remote_path}"
+                    ))),
+                    Ok(_) => Err(SshError::FileOperationFailed(format!(
+                        "远程路径存在同名文件: {remote_path}"
+                    ))),
+                    Err(stat_error) => {
+                        mark_ssh_error_if_connection_lost(state, connection_id, &mkdir_error);
+                        mark_ssh_error_if_connection_lost(state, connection_id, &stat_error);
+                        Err(SshError::FileOperationFailed(mkdir_error.to_string()))
+                    }
+                },
+            }
+        }
+        Err(error) => {
+            mark_ssh_error_if_connection_lost(state, connection_id, &error);
+            Err(SshError::FileOperationFailed(error.to_string()))
+        }
+    }
 }
 
 fn transfer_slot(state: &SshState) -> Result<(), SshError> {
@@ -954,6 +1130,125 @@ fn transfer_progress(
     );
 }
 
+fn folder_upload_progress(
+    state: &SshState,
+    transfer_id: &str,
+    connection_id: &str,
+    file_name: &str,
+    file_index: usize,
+    file_total: usize,
+    current: u64,
+    total: u64,
+    completed_bytes: u64,
+    total_bytes: u64,
+) {
+    let progress = if total == 0 {
+        100
+    } else {
+        ((current.saturating_mul(100)) / total).min(100)
+    };
+    let overall_progress = if total_bytes == 0 {
+        if file_total == 0 {
+            100
+        } else {
+            ((file_index.saturating_mul(100)) / file_total).min(100) as u64
+        }
+    } else {
+        (((completed_bytes.saturating_add(current)).saturating_mul(100)) / total_bytes).min(100)
+    };
+    emit_event(
+        &state.app_handle,
+        "upload-progress",
+        json!({
+            "id": connection_id,
+            "transferId": transfer_id,
+            "progress": progress,
+            "current": current,
+            "total": total,
+            "fileName": file_name,
+            "fileIndex": file_index,
+            "fileTotal": file_total,
+            "overallProgress": overall_progress,
+            "completedBytes": completed_bytes.saturating_add(current),
+            "totalBytes": total_bytes
+        }),
+    );
+}
+
+fn upload_file_to_sftp<F>(
+    state: &SshState,
+    connection: &SshConnection,
+    sftp: &Sftp,
+    transfer_id: &str,
+    local_path: &Path,
+    remote_path: &str,
+    overwrite: bool,
+    mut report_progress: F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, u64),
+{
+    let local_file = File::open(local_path)
+        .map_err(|error| SshError::FileOperationFailed(format!("无法打开本地文件: {error}")))?;
+    let total = local_file
+        .metadata()
+        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
+        .len();
+    let temporary_path = format!("{remote_path}.portal-part-{transfer_id}");
+    let mut remote_file = sftp.create(Path::new(&temporary_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
+    let mut reader = BufReader::new(local_file);
+    let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
+    let mut current = 0u64;
+    report_progress(current, total);
+
+    let write_result = (|| -> Result<(), SshError> {
+        loop {
+            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+                return Err(SshError::TransferCancelled);
+            }
+            let count = reader
+                .read(&mut buffer)
+                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            if count == 0 {
+                break;
+            }
+            remote_file.write_all(&buffer[..count]).map_err(|error| {
+                mark_io_error_if_connection_lost(state, &connection.id, &error);
+                SshError::FileOperationFailed(error.to_string())
+            })?;
+            current += count as u64;
+            report_progress(current, total);
+        }
+        remote_file.flush().map_err(|error| {
+            mark_io_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?;
+        Ok(())
+    })();
+    drop(remote_file);
+
+    let result = write_result.and_then(|_| {
+        rename_remote_file(
+            sftp,
+            Path::new(&temporary_path),
+            Path::new(remote_path),
+            overwrite,
+        )
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })
+    });
+
+    if result.is_err() {
+        let _ = sftp.unlink(Path::new(&temporary_path));
+    }
+    result.map(|_| total)
+}
+
 fn run_upload(
     state: &SshState,
     connection: &SshConnection,
@@ -971,37 +1266,16 @@ fn run_upload(
         SshError::SftpFailed(error.to_string())
     })?;
     drop(session);
-    let local_file = File::open(local_path)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法打开本地文件: {error}")))?;
-    let total = local_file
-        .metadata()
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
-        .len();
-    let temporary_path = format!("{remote_path}.portal-part-{transfer_id}");
-    let mut remote_file = sftp.create(Path::new(&temporary_path)).map_err(|error| {
-        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
-    let mut reader = BufReader::new(local_file);
-    let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
-    let mut current = 0u64;
 
-    let result = (|| -> Result<(), SshError> {
-        loop {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
-                return Err(SshError::TransferCancelled);
-            }
-            let count = reader
-                .read(&mut buffer)
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-            if count == 0 {
-                break;
-            }
-            remote_file.write_all(&buffer[..count]).map_err(|error| {
-                mark_io_error_if_connection_lost(state, &connection.id, &error);
-                SshError::FileOperationFailed(error.to_string())
-            })?;
-            current += count as u64;
+    upload_file_to_sftp(
+        state,
+        connection,
+        &sftp,
+        transfer_id,
+        Path::new(local_path),
+        remote_path,
+        overwrite,
+        |current, total| {
             transfer_progress(
                 state,
                 "upload-progress",
@@ -1010,29 +1284,108 @@ fn run_upload(
                 current,
                 total,
             );
+        },
+    )
+    .map(|_| "上传成功".to_string())
+}
+
+fn run_upload_directory(
+    state: &SshState,
+    connection: &SshConnection,
+    session: &Arc<Mutex<Session>>,
+    transfer_id: &str,
+    local_path: &str,
+    remote_path: &str,
+    overwrite: bool,
+) -> Result<String, SshError> {
+    let plan = collect_folder_upload_plan(Path::new(local_path))?;
+    if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        return Err(SshError::TransferCancelled);
+    }
+
+    let session = session
+        .lock()
+        .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
+    drop(session);
+
+    ensure_remote_directory(state, &connection.id, &sftp, remote_path, overwrite)?;
+    for relative_path in &plan.directories {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
         }
-        remote_file.flush().map_err(|error| {
-            mark_io_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?;
-        drop(remote_file);
-        rename_remote_file(
+        let remote_directory = join_remote_path(remote_path, relative_path)?;
+        ensure_remote_directory(state, &connection.id, &sftp, &remote_directory, true).map_err(
+            |error| {
+                SshError::FileOperationFailed(format!(
+                    "创建远程文件夹“{}”失败: {error}",
+                    display_relative_path(relative_path)
+                ))
+            },
+        )?;
+    }
+
+    let file_total = plan.files.len();
+    let mut completed_bytes = 0u64;
+    for (file_index, file) in plan.files.iter().enumerate() {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
+        }
+        let remote_file_path = join_remote_path(remote_path, &file.relative_path)?;
+        let display_path = display_relative_path(&file.relative_path);
+        let uploaded_size = upload_file_to_sftp(
+            state,
+            connection,
             &sftp,
-            Path::new(&temporary_path),
-            Path::new(remote_path),
+            transfer_id,
+            &file.local_path,
+            &remote_file_path,
             overwrite,
+            |current, total| {
+                folder_upload_progress(
+                    state,
+                    transfer_id,
+                    &connection.id,
+                    &display_path,
+                    file_index,
+                    file_total,
+                    current,
+                    total,
+                    completed_bytes,
+                    plan.total_bytes,
+                );
+            },
         )
         .map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
+            if matches!(&error, SshError::TransferCancelled) {
+                error
+            } else {
+                SshError::FileOperationFailed(format!("上传“{display_path}”失败: {error}"))
+            }
         })?;
-        Ok(())
-    })();
-
-    if result.is_err() {
-        let _ = sftp.unlink(Path::new(&temporary_path));
+        completed_bytes = completed_bytes.saturating_add(uploaded_size);
     }
-    result.map(|_| "上传成功".to_string())
+
+    let skipped_note = if plan.skipped_entries == 0 {
+        String::new()
+    } else {
+        format!("，已跳过 {} 个符号链接或特殊文件", plan.skipped_entries)
+    };
+    if file_total == 0 {
+        Ok(format!(
+            "文件夹上传成功：已创建 {} 个文件夹{}",
+            plan.directories.len().saturating_add(1),
+            skipped_note
+        ))
+    } else {
+        Ok(format!(
+            "文件夹上传成功：{} 个文件{}",
+            file_total, skipped_note
+        ))
+    }
 }
 
 fn run_download(
@@ -1168,6 +1521,49 @@ pub fn scp_upload(
 }
 
 #[tauri::command]
+pub fn sftp_upload_directory(
+    state: State<SshState>,
+    id: String,
+    local_path: String,
+    remote_path: String,
+    transfer_id: Option<String>,
+    overwrite: Option<bool>,
+) -> Result<String, SshError> {
+    let transfer_id = transfer_id.unwrap_or_else(|| format!("folder-upload-{}", uuid_fallback()));
+    let connection = connection_info(&state, &id, true)?;
+    let session = session_for(&state, &id)?;
+    transfer_slot(&state)?;
+    let state_handle = state.inner().clone();
+    let transfer_id_for_thread = transfer_id.clone();
+    let overwrite = overwrite.unwrap_or(false);
+    thread::spawn(move || {
+        let result = run_upload_directory(
+            &state_handle,
+            &connection,
+            &session,
+            &transfer_id_for_thread,
+            &local_path,
+            &remote_path,
+            overwrite,
+        );
+        let cancelled = matches!(result, Err(SshError::TransferCancelled));
+        emit_event(
+            &state_handle.app_handle,
+            "upload-complete",
+            json!({
+                "id": connection.id,
+                "transferId": transfer_id_for_thread,
+                "success": result.is_ok(),
+                "cancelled": cancelled,
+                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+            }),
+        );
+        finish_transfer(&state_handle, &transfer_id_for_thread);
+    });
+    Ok("文件夹上传已开始".to_string())
+}
+
+#[tauri::command]
 pub fn scp_download(
     state: State<SshState>,
     id: String,
@@ -1285,5 +1681,50 @@ mod tests {
             ErrorCode::SFTP(3),
             "permission denied"
         )));
+    }
+
+    #[test]
+    fn joins_folder_upload_paths_without_parent_components() {
+        assert_eq!(
+            join_remote_path("/", Path::new("nested/file.txt")).unwrap(),
+            "/nested/file.txt"
+        );
+        assert_eq!(
+            join_remote_path("C:/upload/", Path::new("nested/file.txt")).unwrap(),
+            "C:/upload/nested/file.txt"
+        );
+        assert!(join_remote_path("/upload", Path::new("../escape")).is_err());
+    }
+
+    #[test]
+    fn collects_nested_files_and_empty_directories_for_folder_upload() {
+        let root = std::env::temp_dir().join(format!(
+            "portal-folder-upload-plan-{}-{}",
+            std::process::id(),
+            uuid_fallback()
+        ));
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::create_dir_all(root.join("empty")).unwrap();
+        fs::write(root.join("root.txt"), b"abc").unwrap();
+        fs::write(root.join("nested").join("child.txt"), b"hello").unwrap();
+
+        let plan = collect_folder_upload_plan(&root).unwrap();
+        let directories = plan
+            .directories
+            .iter()
+            .map(|path| display_relative_path(path))
+            .collect::<Vec<_>>();
+        let files = plan
+            .files
+            .iter()
+            .map(|file| display_relative_path(&file.relative_path))
+            .collect::<Vec<_>>();
+
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(directories, vec!["empty", "nested"]);
+        assert_eq!(files, vec!["nested/child.txt", "root.txt"]);
+        assert_eq!(plan.total_bytes, 8);
+        assert_eq!(plan.skipped_entries, 0);
     }
 }

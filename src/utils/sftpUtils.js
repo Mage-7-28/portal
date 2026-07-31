@@ -194,6 +194,16 @@ class SftpManager {
     })
   }
 
+  async uploadDirectory(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId) {
+    return this.transfer('upload-directory', connectionId, {
+      localPath,
+      remotePath,
+      onProgress,
+      overwrite,
+      onTransferId
+    })
+  }
+
   async downloadFile(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId) {
     return this.transfer('download', connectionId, {
       remotePath,
@@ -207,8 +217,9 @@ class SftpManager {
   async transfer(direction, connectionId, options) {
     const info = this.requireConnected(connectionId)
     const transferId = randomId(direction)
-    const progressEvent = `${ direction }-progress`
-    const completeEvent = `${ direction }-complete`
+    const isUpload = direction === 'upload' || direction === 'upload-directory'
+    const progressEvent = isUpload ? 'upload-progress' : 'download-progress'
+    const completeEvent = isUpload ? 'upload-complete' : 'download-complete'
     options.onTransferId?.(transferId)
     let unlistenProgress
     let unlistenComplete
@@ -245,8 +256,12 @@ class SftpManager {
       // Register listeners before invoking the worker to avoid losing a fast completion event.
       if (options.onProgress) unlistenProgress = await listen(progressEvent, progressHandler)
       unlistenComplete = await listen(completeEvent, completeHandler)
-      const command = direction === 'upload' ? 'scp_upload' : 'scp_download'
-      await this.invokeRemote(connectionId, command, direction === 'upload'
+      const command = direction === 'upload'
+        ? 'scp_upload'
+        : direction === 'upload-directory'
+          ? 'sftp_upload_directory'
+          : 'scp_download'
+      await this.invokeRemote(connectionId, command, isUpload
         ? {
           id: connectionId,
           localPath: options.localPath,

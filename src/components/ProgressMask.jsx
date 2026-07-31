@@ -32,6 +32,7 @@ const ProgressMask = () => {
     queueIndex = 0,
     queueTotal = 1,
     pendingCount = 0,
+    overallProgress,
     onCancel
   } = maskData
 
@@ -45,10 +46,15 @@ const ProgressMask = () => {
     }
   }
 
-  if (operation === 'upload') {
+  if (operation === 'upload' || operation === 'upload-directory') {
+    const isDirectoryUpload = operation === 'upload-directory'
+    const operationLabel = isDirectoryUpload ? '上传文件夹' : '上传中'
+    const pendingLabel = isDirectoryUpload && Number.isFinite(overallProgress)
+      ? `总进度 ${ Math.round(overallProgress) }% · 待上传 ${ pendingCount } 个`
+      : `待上传 ${ pendingCount } 个`
     return (
-      <div className="transfer-inline-status" title={`上传中：${ fileName }`}>
-        <span className="transfer-inline-operation">上传中</span>
+      <div className="transfer-inline-status" title={`${ operationLabel }：${ fileName }`}>
+        <span className="transfer-inline-operation">{operationLabel}</span>
         <span className="transfer-inline-position">{queueIndex + 1}/{queueTotal}</span>
         <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>
         <Progress
@@ -60,7 +66,7 @@ const ProgressMask = () => {
           size="small"
         />
         <span className="transfer-inline-percent">{Math.round(progress)}%</span>
-        <span className="transfer-inline-pending">待上传 {pendingCount} 个</span>
+        <span className="transfer-inline-pending">{pendingLabel}</span>
         {onCancel && (
           <Tooltip title="取消上传">
             <Button

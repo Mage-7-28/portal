@@ -1,12 +1,19 @@
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Spin, Tooltip } from 'antd'
-import { DisconnectOutlined, DownOutlined, FolderAddOutlined, FolderOpenOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
+import { DisconnectOutlined, DownOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
 import FileItem from './FileItem'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
+
+const localPathName = (path) => String(path || '')
+  .replace(/[\\/]+$/, '')
+  .split(/[\\/]/)
+  .pop() || ''
+
+const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
 const FileBrowser = ({
   currentPath,
@@ -31,6 +38,7 @@ const FileBrowser = ({
   const [ directoryModalOpen, setDirectoryModalOpen ] = React.useState(false)
   const [ directoryName, setDirectoryName ] = React.useState('')
   const [ directorySubmitting, setDirectorySubmitting ] = React.useState(false)
+  const [ folderUploading, setFolderUploading ] = React.useState(false)
 
   const submitDirectory = async () => {
     const name = directoryName.trim()
@@ -58,7 +66,7 @@ const FileBrowser = ({
       uploadQueue = paths
         .map(localPath => ({
           localPath,
-          fileName: localPath.split(/[\\/]/).pop()
+          fileName: localPathName(localPath)
         }))
         .filter(item => item.fileName)
 
@@ -86,7 +94,7 @@ const FileBrowser = ({
           })
           if (!overwrite) continue
         }
-        const remotePath = `${ currentPath.replace(/\/+$/, '') || '' }/${ fileName }` || `/${ fileName }`
+        const remotePath = joinRemotePath(currentPath, fileName)
         publishProgress(0)
         try {
           await sftpManager.uploadFile(currentConnectionId, localPath, remotePath, progress => {
@@ -109,6 +117,90 @@ const FileBrowser = ({
       notification.error('上传文件失败', error.message || error.toString() || '未知错误')
     } finally {
       if (uploadQueue.length > 0) PubSubBusinessKeyEnum.SEND_MASK(null)
+    }
+  }
+
+  const handleUploadDirectory = async () => {
+    if (folderUploading) return
+
+    let folderName = ''
+    try {
+      const selected = await dialog.open({
+        title: '选择要上传的文件夹',
+        multiple: false,
+        directory: true
+      })
+      if (typeof selected !== 'string' || !selected) return
+
+      folderName = localPathName(selected)
+      if (!folderName) {
+        throw new Error('无法识别所选文件夹名称')
+      }
+
+      const existing = files.find(entry => entry.name === folderName)
+      if (existing && !existing.isDirectory) {
+        notification.error('上传文件夹失败', `远程目录中已存在同名文件：${ folderName }`)
+        return
+      }
+
+      let overwrite = false
+      if (existing) {
+        overwrite = await confirm(
+          `远程目录中已存在“${ folderName }”，是否合并上传并覆盖其中的同名文件？`,
+          {
+            title: '确认合并文件夹',
+            kind: 'warning',
+            okLabel: '合并并覆盖',
+            cancelLabel: '取消'
+          }
+        )
+        if (!overwrite) return
+      }
+
+      const remotePath = joinRemotePath(currentPath, folderName)
+      let transferId = null
+      const publishProgress = (progress, payload = {}) => {
+        const fileTotal = Number(payload.fileTotal) || 0
+        const fileIndex = Number(payload.fileIndex) || 0
+        PubSubBusinessKeyEnum.SEND_MASK({
+          progress,
+          overallProgress: Number.isFinite(Number(payload.overallProgress))
+            ? Number(payload.overallProgress)
+            : undefined,
+          fileName: payload.fileName || folderName,
+          operation: 'upload-directory',
+          queueIndex: fileTotal > 0 ? Math.min(fileIndex, fileTotal - 1) : 0,
+          queueTotal: fileTotal || 1,
+          pendingCount: fileTotal > 0 ? Math.max(fileTotal - fileIndex - 1, 0) : 0,
+          onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
+        })
+      }
+
+      setFolderUploading(true)
+      publishProgress(0)
+      const message = await sftpManager.uploadDirectory(
+        currentConnectionId,
+        selected,
+        remotePath,
+        (progress, payload) => publishProgress(Math.round(progress), payload),
+        overwrite,
+        id => {
+          transferId = id
+          publishProgress(0)
+        }
+      )
+      notification.success('文件夹上传成功', message || `文件夹 ${ folderName } 上传成功`)
+      if (sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
+        handleRefresh()
+      }
+    } catch (error) {
+      notification.error(
+        '上传文件夹失败',
+        `文件夹 ${ folderName || '所选文件夹' } 上传失败：${ error.message || error.toString() || '未知错误' }`
+      )
+    } finally {
+      setFolderUploading(false)
+      PubSubBusinessKeyEnum.SEND_MASK(null)
     }
   }
 
@@ -191,6 +283,14 @@ const FileBrowser = ({
         <div className="connection-actions">
           <Button size="small" icon={<UploadOutlined />} onClick={handleUpload}>
             上传
+          </Button>
+          <Button
+            size="small"
+            icon={<FolderOutlined />}
+            loading={folderUploading}
+            onClick={handleUploadDirectory}
+          >
+            上传文件夹
           </Button>
           <Button
             size="small"
