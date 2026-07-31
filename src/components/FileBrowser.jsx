@@ -28,6 +28,15 @@ const mergeUploadItems = (previous, items) => {
   ]
 }
 
+const isPositionInsideElement = (position, element) => {
+  if (!position || !element || typeof window === 'undefined') return false
+  const rect = element.getBoundingClientRect()
+  const scale = window.devicePixelRatio || 1
+  const x = Number(position.x) / scale
+  const y = Number(position.y) / scale
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+}
+
 const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
 const FileBrowser = ({
@@ -58,7 +67,10 @@ const FileBrowser = ({
   const [ uploadPicking, setUploadPicking ] = React.useState(null)
   const [ uploadSubmitting, setUploadSubmitting ] = React.useState(false)
   const [ uploadDragActive, setUploadDragActive ] = React.useState(false)
+  const [ directoryDropActive, setDirectoryDropActive ] = React.useState(false)
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
+  const fileListDropRef = React.useRef(null)
+  const startUploadQueueRef = React.useRef(null)
 
   const submitDirectory = async () => {
     const name = directoryName.trim()
@@ -109,7 +121,7 @@ const FileBrowser = ({
   }
 
   const handleDroppedPaths = React.useCallback(async (paths) => {
-    if (!uploadModalOpen || uploadSubmitting || uploadDropProcessing || !paths?.length) return
+    if (uploadSubmitting || uploadDropProcessing || !paths?.length) return
     setUploadDropProcessing(true)
     try {
       const entries = await invoke('inspect_local_paths', { paths })
@@ -120,8 +132,10 @@ const FileBrowser = ({
           kind: entry.isDirectory ? 'directory' : 'file'
         }))
         .filter(item => item.fileName && typeof item.localPath === 'string')
-      if (items.length > 0) {
+      if (items.length > 0 && uploadModalOpen) {
         setUploadItems(previous => mergeUploadItems(previous, items))
+      } else if (items.length > 0) {
+        await startUploadQueueRef.current?.(items)
       }
     } catch (error) {
       notification.error('添加拖拽内容失败', error.message || error.toString() || '无法读取拖拽路径')
@@ -131,11 +145,6 @@ const FileBrowser = ({
   }, [ uploadDropProcessing, uploadModalOpen, uploadSubmitting ])
 
   React.useEffect(() => {
-    if (!uploadModalOpen) {
-      setUploadDragActive(false)
-      return undefined
-    }
-
     let disposed = false
     let unlisten
     const registerDragDrop = async () => {
@@ -144,11 +153,21 @@ const FileBrowser = ({
           if (disposed) return
           const payload = event.payload
           if (payload.type === 'enter' || payload.type === 'over') {
-            setUploadDragActive(true)
+            if (uploadModalOpen) {
+              setUploadDragActive(true)
+              setDirectoryDropActive(false)
+            } else {
+              setUploadDragActive(false)
+              setDirectoryDropActive(isPositionInsideElement(payload.position, fileListDropRef.current))
+            }
           } else if (payload.type === 'leave') {
             setUploadDragActive(false)
+            setDirectoryDropActive(false)
           } else if (payload.type === 'drop') {
             setUploadDragActive(false)
+            const isDirectoryDrop = isPositionInsideElement(payload.position, fileListDropRef.current)
+            setDirectoryDropActive(false)
+            if (!uploadModalOpen && !isDirectoryDrop) return
             void handleDroppedPaths(payload.paths)
           }
         })
@@ -167,6 +186,7 @@ const FileBrowser = ({
       disposed = true
       unlisten?.()
       setUploadDragActive(false)
+      setDirectoryDropActive(false)
     }
   }, [ handleDroppedPaths, uploadModalOpen ])
 
@@ -286,6 +306,8 @@ const FileBrowser = ({
     }
   }
 
+  startUploadQueueRef.current = startUploadQueue
+
   const menuItems = [
     {
       key: 'home',
@@ -386,7 +408,8 @@ const FileBrowser = ({
       </div>
 
       <div
-        className="file-list-shell"
+        ref={fileListDropRef}
+        className={`file-list-shell${ directoryDropActive ? ' is-upload-drop-target' : '' }`}
       >
         {error ? (
           <Alert type="error" showIcon message="目录加载失败" description={error} className="file-list-alert" />

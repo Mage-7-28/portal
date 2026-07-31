@@ -762,6 +762,12 @@ html,
   background: #171717;
 }
 
+.file-list-shell.is-upload-drop-target {
+  border-color: #b47b58;
+  background: #201e1b;
+  box-shadow: inset 0 0 0 1px rgba(192, 138, 102, 0.26);
+}
+
 .file-list-alert {
   margin: 10px;
 }
