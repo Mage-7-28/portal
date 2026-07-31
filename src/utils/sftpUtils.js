@@ -12,9 +12,66 @@ const randomId = (prefix) => {
 class SftpManager {
   constructor() {
     this.connections = new Map()
+    this.connectionLostListeners = new Set()
     this.defaultTimeout = CONNECTION_TIMEOUT_MS
     this.retryAttempts = 3
     this.retryDelay = 1000
+    this.connectionEventUnlisten = null
+    void this.listenForConnectionLoss()
+  }
+
+  async listenForConnectionLoss() {
+    try {
+      this.connectionEventUnlisten = await listen('ssh-disconnected', event => {
+        this.handleConnectionLoss(event.payload || {})
+      })
+    } catch {
+      // The manager is also used by browser-side tooling where Tauri events
+      // are unavailable. Remote command errors still use the local fallback.
+    }
+  }
+
+  subscribeConnectionLost(listener) {
+    this.connectionLostListeners.add(listener)
+    return () => this.connectionLostListeners.delete(listener)
+  }
+
+  handleConnectionLoss(payload = {}) {
+    const connectionId = payload.id
+    if (!connectionId) return
+    this.markConnectionLost(connectionId, payload.reason || 'SSH 连接已断开')
+  }
+
+  markConnectionLost(connectionId, reason) {
+    const info = this.connections.get(connectionId)
+    if (!info) return false
+    const wasActive = info.status === SftpConnectionStatus.CONNECTED
+      || info.status === SftpConnectionStatus.CONNECTING
+      || info.status === SftpConnectionStatus.RECONNECTING
+    const message = normalizeError(reason)
+    const connectionMessage = this.isConnectionLossError(reason)
+      ? '服务器无响应或网络已断开，请重新连接'
+      : message
+    info.status = SftpConnectionStatus.DISCONNECTED
+    info.lastError = message
+    if (!wasActive) return false
+    const event = { id: connectionId, reason: connectionMessage }
+    this.connectionLostListeners.forEach(listener => listener(event))
+    return true
+  }
+
+  isConnectionLossError(error) {
+    const message = normalizeError(error).toLowerCase()
+    return /(socket|broken pipe|connection (?:lost|reset|aborted|closed|not connected)|network|timed out|timeout|连接(?:不存在|未建立|已断开|已关闭|丢失|超时)|套接字|网络)/i.test(message)
+  }
+
+  async invokeRemote(connectionId, command, args) {
+    try {
+      return await invoke(command, args)
+    } catch (error) {
+      if (this.isConnectionLossError(error)) this.markConnectionLost(connectionId, error)
+      throw error
+    }
   }
 
   async testConnection(config, timeout = this.defaultTimeout) {
@@ -171,7 +228,11 @@ class SftpManager {
         } else if (payload.success) {
           resolveCompletion(payload.message)
         } else {
-          rejectCompletion(new Error(payload.message || '传输失败'))
+          const transferError = new Error(payload.message || '传输失败')
+          if (this.isConnectionLossError(transferError)) {
+            this.markConnectionLost(connectionId, transferError)
+          }
+          rejectCompletion(transferError)
         }
       }
       const progressHandler = (event) => {
@@ -184,7 +245,7 @@ class SftpManager {
       if (options.onProgress) unlistenProgress = await listen(progressEvent, progressHandler)
       unlistenComplete = await listen(completeEvent, completeHandler)
       const command = direction === 'upload' ? 'scp_upload' : 'scp_download'
-      await invoke(command, direction === 'upload'
+      await this.invokeRemote(connectionId, command, direction === 'upload'
         ? {
           id: connectionId,
           localPath: options.localPath,
@@ -234,7 +295,7 @@ class SftpManager {
           onProgress(payload.progress, payload)
         })
       }
-      const result = await invoke('get_sftp_file_content', {
+      const result = await this.invokeRemote(connectionId, 'get_sftp_file_content', {
         id: connectionId,
         remotePath,
         previewId: previewId || null
@@ -247,7 +308,7 @@ class SftpManager {
 
   async listRemoteDirectory(connectionId, remotePath) {
     const info = this.requireConnected(connectionId)
-    const files = await invoke('list_sftp_directory', { id: connectionId, remotePath })
+    const files = await this.invokeRemote(connectionId, 'list_sftp_directory', { id: connectionId, remotePath })
     info.lastActivity = Date.now()
     return files.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1
@@ -258,25 +319,25 @@ class SftpManager {
 
   async createRemoteDirectory(connectionId, remotePath) {
     this.requireConnected(connectionId)
-    await invoke('sftp_mkdir', { id: connectionId, remotePath })
+    await this.invokeRemote(connectionId, 'sftp_mkdir', { id: connectionId, remotePath })
     return true
   }
 
   async deleteRemoteItem(connectionId, remotePath, isDirectory = false) {
     this.requireConnected(connectionId)
-    await invoke('sftp_delete', { id: connectionId, remotePath, isDirectory })
+    await this.invokeRemote(connectionId, 'sftp_delete', { id: connectionId, remotePath, isDirectory })
     return true
   }
 
   async renameRemoteItem(connectionId, sourcePath, targetPath, overwrite = false) {
     this.requireConnected(connectionId)
-    await invoke('sftp_rename', { id: connectionId, sourcePath, targetPath, overwrite })
+    await this.invokeRemote(connectionId, 'sftp_rename', { id: connectionId, sourcePath, targetPath, overwrite })
     return true
   }
 
   async getRemoteUserHome(connectionId) {
     const info = this.requireConnected(connectionId)
-    const home = await invoke('get_sftp_user_home', { id: connectionId })
+    const home = await this.invokeRemote(connectionId, 'get_sftp_user_home', { id: connectionId })
     info.lastActivity = Date.now()
     return home
   }
@@ -288,7 +349,7 @@ class SftpManager {
 
   async getRemoteDrives(connectionId) {
     const info = this.requireConnected(connectionId)
-    const home = await invoke('get_sftp_user_home', { id: connectionId })
+    const home = await this.invokeRemote(connectionId, 'get_sftp_user_home', { id: connectionId })
     info.lastActivity = Date.now()
     const match = /^([A-Za-z]):(?:[/\\]|$)/.exec(home || '')
     return match ? [`${ match[1] }:/`] : []
@@ -300,6 +361,19 @@ class SftpManager {
 
   getConnectionInfo(connectionId) {
     return this.connections.get(connectionId) || null
+  }
+
+  async checkConnection(connectionId) {
+    this.requireConnected(connectionId)
+    try {
+      const result = await invoke('check_ssh_connection', { id: connectionId })
+      const info = this.connections.get(connectionId)
+      if (info) info.lastActivity = Date.now()
+      return Boolean(result)
+    } catch (error) {
+      if (this.isConnectionLossError(error)) this.markConnectionLost(connectionId, error)
+      throw error
+    }
   }
 
   async closeAllConnections() {

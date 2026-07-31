@@ -134,6 +134,7 @@ pub fn run() {
             ssh::list_ssh_connections,
             ssh::connect_ssh,
             ssh::disconnect_ssh,
+            ssh::check_ssh_connection,
             ssh::scp_upload,
             ssh::scp_download,
             ssh::list_sftp_directory,

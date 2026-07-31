@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::json;
-use ssh2::{HashType, RenameFlags, Session, Sftp};
+use ssh2::{ErrorCode, HashType, RenameFlags, Session, Sftp};
 use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 
@@ -19,6 +19,18 @@ const TRANSFER_BUFFER_SIZE: usize = 64 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u32 = 30;
 const MAX_CONCURRENT_TRANSFERS: usize = 4;
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
+
+// Transport/SFTP codes from libssh2-sys. They are kept local to avoid adding
+// a second direct dependency when ssh2 already supplies the raw values.
+const LIBSSH2_ERROR_SOCKET_SEND: i32 = -7;
+const LIBSSH2_ERROR_TIMEOUT: i32 = -9;
+const LIBSSH2_ERROR_SOCKET_DISCONNECT: i32 = -13;
+const LIBSSH2_ERROR_SOCKET_TIMEOUT: i32 = -30;
+const LIBSSH2_ERROR_SOCKET_RECV: i32 = -43;
+const LIBSSH2_ERROR_BAD_SOCKET: i32 = -45;
+const LIBSSH2_ERROR_EAGAIN: i32 = -37;
+const LIBSSH2_FX_NO_CONNECTION: i32 = 6;
+const LIBSSH2_FX_CONNECTION_LOST: i32 = 7;
 
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "code", content = "message")]
@@ -325,6 +337,82 @@ fn emit_event(
     }
 }
 
+// libssh2 exposes transport failures through numeric error codes. Keep the
+// list deliberately narrow so file/path/permission errors remain recoverable
+// without throwing the user back to the connection list.
+fn is_connection_loss(error: &ssh2::Error) -> bool {
+    match error.code() {
+        ErrorCode::Session(code) => matches!(
+            code,
+            LIBSSH2_ERROR_SOCKET_SEND
+                | LIBSSH2_ERROR_TIMEOUT
+                | LIBSSH2_ERROR_SOCKET_DISCONNECT
+                | LIBSSH2_ERROR_SOCKET_TIMEOUT
+                | LIBSSH2_ERROR_SOCKET_RECV
+                | LIBSSH2_ERROR_BAD_SOCKET
+        ),
+        ErrorCode::SFTP(code) => {
+            matches!(code, LIBSSH2_FX_NO_CONNECTION | LIBSSH2_FX_CONNECTION_LOST)
+        }
+    }
+}
+
+fn is_io_connection_loss(error: &std::io::Error) -> bool {
+    let transport_kind = matches!(
+        error.kind(),
+        std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::NotConnected
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+    );
+    let message = error.to_string().to_ascii_lowercase();
+    transport_kind
+        || message.contains("socket")
+        || message.contains("connection lost")
+        || message.contains("connection disconnected")
+        || message.contains("sftp(6)")
+        || message.contains("sftp(7)")
+}
+
+fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
+    let was_connected = state
+        .connections
+        .write()
+        .unwrap()
+        .get_mut(id)
+        .map(|connection| {
+            let was_connected = connection.connected;
+            connection.connected = false;
+            was_connected
+        })
+        .unwrap_or(false);
+
+    // Dropping the cached session closes the broken transport. Active
+    // transfer tasks may still hold their own Arc until they finish.
+    state.connection_pool.write().unwrap().remove(id);
+    if was_connected {
+        emit_event(
+            &state.app_handle,
+            "ssh-disconnected",
+            json!({ "id": id, "reason": reason }),
+        );
+    }
+}
+
+fn mark_ssh_error_if_connection_lost(state: &SshState, id: &str, error: &ssh2::Error) {
+    if is_connection_loss(error) {
+        mark_connection_disconnected(state, id, error.to_string());
+    }
+}
+
+fn mark_io_error_if_connection_lost(state: &SshState, id: &str, error: &std::io::Error) {
+    if is_io_connection_loss(error) {
+        mark_connection_disconnected(state, id, error.to_string());
+    }
+}
+
 fn session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshError> {
     let _ = connection_info(state, id, true)?;
     state
@@ -341,9 +429,10 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    session
-        .sftp()
-        .map_err(|error| SshError::SftpFailed(error.to_string()))
+    session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, id, &error);
+        SshError::SftpFailed(error.to_string())
+    })
 }
 
 fn transfer_slot(state: &SshState) -> Result<(), SshError> {
@@ -543,6 +632,29 @@ pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshErr
 }
 
 #[tauri::command]
+pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
+    let session = session_for(&state, &id)?;
+    let result = session
+        .lock()
+        .map_err(|_| SshError::ConnectionFailed("会话锁已损坏".to_string()))?
+        .keepalive_send();
+
+    match result {
+        Ok(_) => Ok(true),
+        // A non-blocking keepalive can temporarily report EAGAIN. The next
+        // probe will retry; it is not evidence that the SSH connection died.
+        Err(error) if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN)) => Ok(true),
+        Err(error) => {
+            let message = error.to_string();
+            if is_connection_loss(&error) {
+                mark_connection_disconnected(&state, &id, message.clone());
+            }
+            Err(SshError::ConnectionFailed(message))
+        }
+    }
+}
+
+#[tauri::command]
 pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
     remove_cached_session(&state, &id);
     Ok(state.connections.write().unwrap().remove(&id).is_some())
@@ -555,9 +667,10 @@ pub fn list_sftp_directory(
     remote_path: String,
 ) -> Result<Vec<RemoteEntry>, SshError> {
     let sftp = sftp_for(&state, &id)?;
-    let entries = sftp
-        .readdir(Path::new(&remote_path))
-        .map_err(|error| SshError::ReadDirFailed(error.to_string()))?;
+    let entries = sftp.readdir(Path::new(&remote_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(&state, &id, &error);
+        SshError::ReadDirFailed(error.to_string())
+    })?;
 
     let mut files = Vec::with_capacity(entries.len());
     for (path, stat) in entries {
@@ -625,12 +738,16 @@ fn read_sftp_file_content(
     preview_id: Option<String>,
 ) -> Result<Vec<u8>, SshError> {
     let sftp = sftp_for(state, &id)?;
-    let mut file = sftp
-        .open(Path::new(&remote_path))
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    let mut file = sftp.open(Path::new(&remote_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
     let size = file
         .stat()
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?
         .size
         .unwrap_or(0);
     if size > MAX_PREVIEW_BYTES {
@@ -643,9 +760,10 @@ fn read_sftp_file_content(
     preview_progress(state, &id, preview_id.as_deref(), current, size);
     // Read in chunks so the UI can receive progress events during slow SFTP reads.
     loop {
-        let read = reader
-            .read(&mut buffer)
-            .map_err(|error| SshError::ReadFailed(error.to_string()))?;
+        let read = reader.read(&mut buffer).map_err(|error| {
+            mark_io_error_if_connection_lost(state, &id, &error);
+            SshError::ReadFailed(error.to_string())
+        })?;
         if read == 0 {
             break;
         }
@@ -683,7 +801,10 @@ pub fn sftp_mkdir(
 ) -> Result<bool, SshError> {
     let sftp = sftp_for(&state, &id)?;
     sftp.mkdir(Path::new(&remote_path), 0o755)
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(&state, &id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?;
     Ok(true)
 }
 
@@ -700,7 +821,10 @@ pub fn sftp_delete(
     } else {
         sftp.unlink(Path::new(&remote_path))
     }
-    .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    .map_err(|error| {
+        mark_ssh_error_if_connection_lost(&state, &id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
     Ok(true)
 }
 
@@ -723,7 +847,10 @@ pub fn sftp_rename(
         Path::new(&target_path),
         Some(flags),
     )
-    .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    .map_err(|error| {
+        mark_ssh_error_if_connection_lost(&state, &id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
     Ok(true)
 }
 
@@ -732,7 +859,10 @@ pub fn get_sftp_user_home(state: State<SshState>, id: String) -> Result<String, 
     let sftp = sftp_for(&state, &id)?;
     Ok(sftp
         .realpath(Path::new("."))
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(&state, &id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?
         .to_string_lossy()
         .to_string())
 }
@@ -774,9 +904,10 @@ fn run_upload(
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session
-        .sftp()
-        .map_err(|error| SshError::SftpFailed(error.to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
     drop(session);
     let local_file = File::open(local_path)
         .map_err(|error| SshError::FileOperationFailed(format!("无法打开本地文件: {error}")))?;
@@ -785,9 +916,10 @@ fn run_upload(
         .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
         .len();
     let temporary_path = format!("{remote_path}.portal-part-{transfer_id}");
-    let mut remote_file = sftp
-        .create(Path::new(&temporary_path))
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    let mut remote_file = sftp.create(Path::new(&temporary_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
     let mut reader = BufReader::new(local_file);
     let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0u64;
@@ -803,9 +935,10 @@ fn run_upload(
             if count == 0 {
                 break;
             }
-            remote_file
-                .write_all(&buffer[..count])
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            remote_file.write_all(&buffer[..count]).map_err(|error| {
+                mark_io_error_if_connection_lost(state, &connection.id, &error);
+                SshError::FileOperationFailed(error.to_string())
+            })?;
             current += count as u64;
             transfer_progress(
                 state,
@@ -816,16 +949,20 @@ fn run_upload(
                 total,
             );
         }
-        remote_file
-            .flush()
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        remote_file.flush().map_err(|error| {
+            mark_io_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?;
         drop(remote_file);
         sftp.rename(
             Path::new(&temporary_path),
             Path::new(remote_path),
             Some(RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE),
         )
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?;
         Ok(())
     })();
 
@@ -847,16 +984,21 @@ fn run_download(
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session
-        .sftp()
-        .map_err(|error| SshError::SftpFailed(error.to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
     drop(session);
-    let mut remote_file = sftp
-        .open(Path::new(remote_path))
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    let mut remote_file = sftp.open(Path::new(remote_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
     let total = remote_file
         .stat()
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?
         .size
         .unwrap_or(0);
     let target = PathBuf::from(local_path);
@@ -881,9 +1023,10 @@ fn run_download(
             if is_cancelled(&state.cancelled_transfers, transfer_id) {
                 return Err(SshError::TransferCancelled);
             }
-            let count = remote_file
-                .read(&mut buffer)
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            let count = remote_file.read(&mut buffer).map_err(|error| {
+                mark_io_error_if_connection_lost(state, &connection.id, &error);
+                SshError::FileOperationFailed(error.to_string())
+            })?;
             if count == 0 {
                 break;
             }
@@ -1045,5 +1188,21 @@ mod tests {
             connected: false,
         };
         assert!(validate_connection(&connection).is_err());
+    }
+
+    #[test]
+    fn distinguishes_transport_loss_from_sftp_path_errors() {
+        assert!(is_connection_loss(&ssh2::Error::new(
+            ErrorCode::Session(-13),
+            "socket disconnected"
+        )));
+        assert!(is_connection_loss(&ssh2::Error::new(
+            ErrorCode::SFTP(7),
+            "connection lost"
+        )));
+        assert!(!is_connection_loss(&ssh2::Error::new(
+            ErrorCode::SFTP(2),
+            "no such file"
+        )));
     }
 }

@@ -532,8 +532,8 @@ html,
 }
 
 .remote-path-bar:focus-within {
-  border-color: #a48960;
-  box-shadow: none;
+  border-color: #b18c68;
+  box-shadow: 0 0 0 1px rgba(177, 140, 104, 0.16);
 }
 
 .remote-path-icon {
@@ -552,6 +552,15 @@ html,
   background: transparent;
   color: #e8e5de;
   font-size: 12px;
+}
+
+/* The path bar owns the focus treatment; avoid a second ring on its input. */
+.remote-path-input.ant-input:focus,
+.remote-path-input.ant-input:focus-visible,
+.remote-path-input.ant-input-focused {
+  outline: none !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
 }
 
 .path-menu-button.ant-btn {

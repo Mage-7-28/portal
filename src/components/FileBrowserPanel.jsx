@@ -1,10 +1,10 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { Modal, Progress } from 'antd'
 import toast from 'react-hot-toast'
 import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
-import { StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
+import { SftpConnectionStatus, StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
 import { formatFileSize } from '../utils/common.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
@@ -79,14 +79,15 @@ function FileBrowserPanel() {
   const requestId = useRef(0)
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
+  const activeConnectionIdRef = useRef(null)
 
-  const releasePreviewUrl = () => {
+  const releasePreviewUrl = useCallback(() => {
     if (!previewUrlRef.current) return
     window.URL.revokeObjectURL(previewUrlRef.current)
     previewUrlRef.current = null
-  }
+  }, [])
 
-  const closePreview = () => {
+  const closePreview = useCallback(() => {
     previewRequestId.current += 1
     releasePreviewUrl()
     setPreview(null)
@@ -94,13 +95,69 @@ function FileBrowserPanel() {
     setPreviewProgress(null)
     setPreviewLoading(false)
     setPreviewStage('reading')
-  }
+  }, [releasePreviewUrl])
+
+  const resetRemoteView = useCallback(() => {
+    activeConnectionIdRef.current = null
+    requestId.current += 1
+    setCurrentConnection(null)
+    setCurrentConnectionId(null)
+    setCurrentPath('/')
+    setFiles([])
+    setHomeDir('')
+    setDrives([])
+    setError(null)
+    closePreview()
+    setLoading(false)
+  }, [closePreview])
 
   useEffect(() => {
     void loadConnections()
   }, [])
 
-  useEffect(() => () => releasePreviewUrl(), [])
+  useEffect(() => () => releasePreviewUrl(), [releasePreviewUrl])
+
+  useEffect(() => {
+    activeConnectionIdRef.current = currentConnectionId
+  }, [currentConnectionId])
+
+  useEffect(() => sftpManager.subscribeConnectionLost(({ id, reason }) => {
+    if (activeConnectionIdRef.current !== id) return
+    resetRemoteView()
+    toast.error(`连接已断开：${ reason || '服务器无响应，请重新连接' }`, {
+      id: 'msgBoxGlobal',
+      style: msgBoxStyle
+    })
+  }), [resetRemoteView])
+
+  // SSH keepalive prevents idle NAT expiry; this active probe also detects a
+  // server shutdown while the user is looking at an otherwise idle directory.
+  useEffect(() => {
+    if (!currentConnectionId) return undefined
+    const connectionId = currentConnectionId
+    let disposed = false
+    let probing = false
+    const probe = async () => {
+      if (disposed || probing || activeConnectionIdRef.current !== connectionId) return
+      probing = true
+      try {
+        await sftpManager.checkConnection(connectionId)
+      } catch {
+        // Rust emits ssh-disconnected for transport failures. The manager's
+        // local fallback covers runtimes where an event arrives late.
+        if (!disposed && sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
+          resetRemoteView()
+        }
+      } finally {
+        probing = false
+      }
+    }
+    const timer = window.setInterval(() => void probe(), 15_000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [ currentConnectionId, resetRemoteView ])
 
   const loadConnections = async () => {
     const saved = await store.get(StoreKeys.SSH_CONNECTIONS)
@@ -183,6 +240,7 @@ function FileBrowserPanel() {
         ...(connections.find(item => item.id === connection.id) || connection),
         hostKeyFingerprint: result.hostKey?.fingerprint || connection.hostKeyFingerprint
       }
+      activeConnectionIdRef.current = connectionId
       setCurrentConnection(profile)
       setCurrentConnectionId(connectionId)
       setHomeDir(home || '/')
@@ -227,17 +285,12 @@ function FileBrowserPanel() {
       )
       if (!accepted) return
     }
-    requestId.current += 1
-    if (currentConnectionId) await sftpManager.disconnect(currentConnectionId).catch(() => undefined)
-    setCurrentConnection(null)
-    setCurrentConnectionId(null)
-    setCurrentPath('/')
-    setFiles([])
-    setHomeDir('')
-    setDrives([])
-    setError(null)
-    closePreview()
-    setLoading(false)
+    const connectionId = currentConnectionId
+    // Suppress an in-flight transport event while the user is intentionally
+    // disconnecting; only unexpected loss should show the reconnect notice.
+    activeConnectionIdRef.current = null
+    if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
+    resetRemoteView()
   }
 
   const loadRemoteDirectory = async (path, connectionId = currentConnectionId) => {
@@ -257,7 +310,11 @@ function FileBrowserPanel() {
     } catch (requestError) {
       if (currentRequest === requestId.current) {
         setFiles([])
-        setError(normalizeError(requestError))
+        if (sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
+          resetRemoteView()
+        } else {
+          setError(normalizeError(requestError))
+        }
       }
     } finally {
       if (currentRequest === requestId.current) setLoading(false)
