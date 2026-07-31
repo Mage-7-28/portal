@@ -156,6 +156,18 @@ struct FolderUploadPlan {
     skipped_entries: usize,
 }
 
+struct FolderDownloadFile {
+    remote_path: String,
+    relative_path: PathBuf,
+}
+
+struct FolderDownloadPlan {
+    directories: Vec<PathBuf>,
+    files: Vec<FolderDownloadFile>,
+    total_bytes: u64,
+    skipped_entries: usize,
+}
+
 struct RemoteDeleteTarget {
     path: PathBuf,
     display_path: String,
@@ -546,6 +558,137 @@ fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, Ssh
                 });
             } else {
                 plan.skipped_entries += 1;
+            }
+        }
+    }
+
+    plan.directories.sort_by(|left, right| {
+        left.components()
+            .count()
+            .cmp(&right.components().count())
+            .then_with(|| left.cmp(right))
+    });
+    plan.files
+        .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(plan)
+}
+
+fn join_remote_child_path(base_path: &str, name: &str) -> Result<String, SshError> {
+    if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
+        return Err(SshError::FileOperationFailed(
+            "远程目录包含不安全的项目名称".to_string(),
+        ));
+    }
+    let mut components = Path::new(name).components();
+    if !matches!(components.next(), Some(Component::Normal(_))) || components.next().is_some() {
+        return Err(SshError::FileOperationFailed(
+            "远程目录包含不安全的项目名称".to_string(),
+        ));
+    }
+
+    // SFTP paths always use slash separators, even when the local desktop is
+    // running on Windows. Normalizing here keeps recursive downloads
+    // independent from the host platform's Path separator.
+    let mut remote_path = base_path.replace('\\', "/");
+    while remote_path.len() > 1 && remote_path.ends_with('/') {
+        remote_path.pop();
+    }
+    if remote_path.is_empty() {
+        remote_path.push('/');
+    }
+    if remote_path != "/" {
+        remote_path.push('/');
+    }
+    remote_path.push_str(name);
+    Ok(remote_path)
+}
+
+fn collect_folder_download_plan(
+    state: &SshState,
+    connection_id: &str,
+    sftp: &Sftp,
+    remote_path: &str,
+    transfer_id: &str,
+) -> Result<FolderDownloadPlan, SshError> {
+    let normalized_root = remote_path.replace('\\', "/");
+    let root_stat = sftp.lstat(Path::new(&normalized_root)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, connection_id, &error);
+        SshError::FileOperationFailed(format!("无法读取远程文件夹“{remote_path}”: {error}"))
+    })?;
+    if root_stat.file_type() == ssh2::FileType::Symlink || !root_stat.is_dir() {
+        return Err(SshError::FileOperationFailed(
+            "远程路径不是可下载的文件夹".to_string(),
+        ));
+    }
+
+    let mut plan = FolderDownloadPlan {
+        directories: Vec::new(),
+        files: Vec::new(),
+        total_bytes: 0,
+        skipped_entries: 0,
+    };
+    let mut pending = vec![(normalized_root, PathBuf::new())];
+
+    while let Some((directory, relative_directory)) = pending.pop() {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
+        }
+        let entries = sftp.readdir(Path::new(&directory)).map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, connection_id, &error);
+            SshError::FileOperationFailed(format!("读取远程文件夹“{directory}”失败: {error}"))
+        })?;
+
+        for (listed_path, _) in entries {
+            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+                return Err(SshError::TransferCancelled);
+            }
+            let Some(name) = listed_path.file_name().and_then(|value| value.to_str()) else {
+                plan.skipped_entries = plan.skipped_entries.saturating_add(1);
+                continue;
+            };
+            if name == "." || name == ".." {
+                continue;
+            }
+            let child_remote_path = match join_remote_child_path(&directory, name) {
+                Ok(path) => path,
+                Err(_) => {
+                    plan.skipped_entries = plan.skipped_entries.saturating_add(1);
+                    continue;
+                }
+            };
+            let child_stat = match sftp.lstat(Path::new(&child_remote_path)) {
+                Ok(stat) => stat,
+                Err(error) if is_sftp_missing_path(&error) => {
+                    plan.skipped_entries = plan.skipped_entries.saturating_add(1);
+                    continue;
+                }
+                Err(error) => {
+                    mark_ssh_error_if_connection_lost(state, connection_id, &error);
+                    return Err(SshError::FileOperationFailed(format!(
+                        "无法读取远程项目“{child_remote_path}”: {error}"
+                    )));
+                }
+            };
+            if child_stat.file_type() == ssh2::FileType::Symlink {
+                // Never follow a remote link while creating local paths. This
+                // also keeps the plan safe if a link points outside the tree.
+                plan.skipped_entries = plan.skipped_entries.saturating_add(1);
+                continue;
+            }
+
+            let relative_path = relative_directory.join(name);
+            if child_stat.is_dir() {
+                plan.directories.push(relative_path.clone());
+                pending.push((child_remote_path, relative_path));
+            } else if child_stat.is_file() {
+                let size = child_stat.size.unwrap_or(0);
+                plan.total_bytes = plan.total_bytes.saturating_add(size);
+                plan.files.push(FolderDownloadFile {
+                    remote_path: child_remote_path,
+                    relative_path,
+                });
+            } else {
+                plan.skipped_entries = plan.skipped_entries.saturating_add(1);
             }
         }
     }
@@ -1380,8 +1523,9 @@ fn transfer_progress(
     );
 }
 
-fn folder_upload_progress(
+fn folder_transfer_progress(
     state: &SshState,
+    event: &str,
     transfer_id: &str,
     connection_id: &str,
     file_name: &str,
@@ -1401,14 +1545,14 @@ fn folder_upload_progress(
         if file_total == 0 {
             100
         } else {
-            ((file_index.saturating_mul(100)) / file_total).min(100) as u64
+            ((file_index.saturating_add(1).saturating_mul(100)) / file_total).min(100) as u64
         }
     } else {
         (((completed_bytes.saturating_add(current)).saturating_mul(100)) / total_bytes).min(100)
     };
     emit_event(
         &state.app_handle,
-        "upload-progress",
+        event,
         json!({
             "id": connection_id,
             "transferId": transfer_id,
@@ -1595,8 +1739,9 @@ fn run_upload_directory(
             &remote_file_path,
             overwrite,
             |current, total| {
-                folder_upload_progress(
+                folder_transfer_progress(
                     state,
+                    "upload-progress",
                     transfer_id,
                     &connection.id,
                     &display_path,
@@ -1638,6 +1783,102 @@ fn run_upload_directory(
     }
 }
 
+fn download_file_to_local<F>(
+    state: &SshState,
+    connection: &SshConnection,
+    sftp: &Sftp,
+    transfer_id: &str,
+    remote_path: &str,
+    target: &Path,
+    overwrite: bool,
+    mut report_progress: F,
+) -> Result<u64, SshError>
+where
+    F: FnMut(u64, u64),
+{
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if metadata.file_type().is_symlink() {
+            return Err(SshError::FileOperationFailed(
+                "本地目标路径是符号链接，不支持直接覆盖".to_string(),
+            ));
+        }
+        if metadata.is_dir() {
+            return Err(SshError::FileOperationFailed(
+                "本地目标路径是文件夹，无法保存文件".to_string(),
+            ));
+        }
+        if !overwrite {
+            return Err(SshError::FileOperationFailed(
+                "本地目标文件已存在".to_string(),
+            ));
+        }
+    }
+
+    let mut remote_file = sftp.open(Path::new(remote_path)).map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::FileOperationFailed(error.to_string())
+    })?;
+    let total = remote_file
+        .stat()
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?
+        .size
+        .unwrap_or(0);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    }
+    let target_name = target
+        .file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
+    let temporary_path = target.with_file_name(format!("{target_name}.portal-part-{transfer_id}"));
+    let local_file = File::create(&temporary_path)
+        .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地临时文件: {error}")))?;
+    let mut writer = BufWriter::new(local_file);
+    let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
+    let mut current = 0u64;
+    report_progress(current, total);
+
+    let result = (|| -> Result<(), SshError> {
+        loop {
+            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+                return Err(SshError::TransferCancelled);
+            }
+            let count = remote_file.read(&mut buffer).map_err(|error| {
+                mark_io_error_if_connection_lost(state, &connection.id, &error);
+                SshError::FileOperationFailed(error.to_string())
+            })?;
+            if count == 0 {
+                break;
+            }
+            writer
+                .write_all(&buffer[..count])
+                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            current = current.saturating_add(count as u64);
+            report_progress(current, total);
+        }
+        writer
+            .flush()
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        drop(writer);
+        if overwrite && target.exists() {
+            fs::remove_file(target)
+                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        }
+        fs::rename(&temporary_path, target)
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        Ok(())
+    })();
+
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result.map(|_| total)
+}
+
 fn run_download(
     state: &SshState,
     connection: &SshConnection,
@@ -1655,51 +1896,15 @@ fn run_download(
         SshError::SftpFailed(error.to_string())
     })?;
     drop(session);
-    let mut remote_file = sftp.open(Path::new(remote_path)).map_err(|error| {
-        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
-    let total = remote_file
-        .stat()
-        .map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?
-        .size
-        .unwrap_or(0);
-    let target = PathBuf::from(local_path);
-    if target.exists() && !overwrite {
-        return Err(SshError::FileOperationFailed(
-            "本地目标文件已存在".to_string(),
-        ));
-    }
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-    }
-    let temporary_path = PathBuf::from(format!("{local_path}.portal-part-{transfer_id}"));
-    let local_file = File::create(&temporary_path)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地临时文件: {error}")))?;
-    let mut writer = BufWriter::new(local_file);
-    let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
-    let mut current = 0u64;
-
-    let result = (|| -> Result<(), SshError> {
-        loop {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
-                return Err(SshError::TransferCancelled);
-            }
-            let count = remote_file.read(&mut buffer).map_err(|error| {
-                mark_io_error_if_connection_lost(state, &connection.id, &error);
-                SshError::FileOperationFailed(error.to_string())
-            })?;
-            if count == 0 {
-                break;
-            }
-            writer
-                .write_all(&buffer[..count])
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-            current += count as u64;
+    download_file_to_local(
+        state,
+        connection,
+        &sftp,
+        transfer_id,
+        remote_path,
+        Path::new(local_path),
+        overwrite,
+        |current, total| {
             transfer_progress(
                 state,
                 "download-progress",
@@ -1708,24 +1913,126 @@ fn run_download(
                 current,
                 total,
             );
-        }
-        writer
-            .flush()
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-        drop(writer);
-        if overwrite && target.exists() {
-            fs::remove_file(&target)
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-        }
-        fs::rename(&temporary_path, &target)
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-        Ok(())
-    })();
+        },
+    )
+    .map(|_| "下载成功".to_string())
+}
 
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
+fn run_download_directory(
+    state: &SshState,
+    connection: &SshConnection,
+    session: &Arc<Mutex<Session>>,
+    transfer_id: &str,
+    remote_path: &str,
+    local_path: &str,
+    overwrite: bool,
+) -> Result<String, SshError> {
+    let target_root = PathBuf::from(local_path);
+    if let Ok(metadata) = fs::symlink_metadata(&target_root) {
+        if metadata.file_type().is_symlink() {
+            return Err(SshError::FileOperationFailed(
+                "本地目标文件夹是符号链接，不支持直接覆盖".to_string(),
+            ));
+        }
+        if !metadata.is_dir() {
+            return Err(SshError::FileOperationFailed(
+                "本地目标路径已存在且不是文件夹".to_string(),
+            ));
+        }
+        if !overwrite {
+            return Err(SshError::FileOperationFailed(
+                "本地目标文件夹已存在".to_string(),
+            ));
+        }
     }
-    result.map(|_| "下载成功".to_string())
+
+    let session = session
+        .lock()
+        .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
+    drop(session);
+
+    let plan =
+        collect_folder_download_plan(state, &connection.id, &sftp, remote_path, transfer_id)?;
+    if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        return Err(SshError::TransferCancelled);
+    }
+    fs::create_dir_all(&target_root)
+        .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地文件夹: {error}")))?;
+    for relative_path in &plan.directories {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
+        }
+        fs::create_dir_all(target_root.join(relative_path)).map_err(|error| {
+            SshError::FileOperationFailed(format!(
+                "无法创建本地文件夹“{}”: {error}",
+                display_relative_path(relative_path)
+            ))
+        })?;
+    }
+
+    let file_total = plan.files.len();
+    let mut completed_bytes = 0u64;
+    for (file_index, file) in plan.files.iter().enumerate() {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
+        }
+        let display_path = display_relative_path(&file.relative_path);
+        let target = target_root.join(&file.relative_path);
+        let downloaded_size = download_file_to_local(
+            state,
+            connection,
+            &sftp,
+            transfer_id,
+            &file.remote_path,
+            &target,
+            overwrite,
+            |current, total| {
+                folder_transfer_progress(
+                    state,
+                    "download-progress",
+                    transfer_id,
+                    &connection.id,
+                    &display_path,
+                    file_index,
+                    file_total,
+                    current,
+                    total,
+                    completed_bytes,
+                    plan.total_bytes,
+                );
+            },
+        )
+        .map_err(|error| {
+            if matches!(&error, SshError::TransferCancelled) {
+                error
+            } else {
+                SshError::FileOperationFailed(format!("下载“{display_path}”失败: {error}"))
+            }
+        })?;
+        completed_bytes = completed_bytes.saturating_add(downloaded_size);
+    }
+
+    let skipped_note = if plan.skipped_entries == 0 {
+        String::new()
+    } else {
+        format!("，已跳过 {} 个符号链接或特殊文件", plan.skipped_entries)
+    };
+    if file_total == 0 {
+        Ok(format!(
+            "文件夹下载成功：已创建 {} 个文件夹{}",
+            plan.directories.len().saturating_add(1),
+            skipped_note
+        ))
+    } else {
+        Ok(format!(
+            "文件夹下载成功：{} 个文件{}",
+            file_total, skipped_note
+        ))
+    }
 }
 
 #[tauri::command]
@@ -1857,6 +2164,49 @@ pub fn scp_download(
 }
 
 #[tauri::command]
+pub fn sftp_download_directory(
+    state: State<SshState>,
+    id: String,
+    remote_path: String,
+    local_path: String,
+    transfer_id: Option<String>,
+    overwrite: Option<bool>,
+) -> Result<String, SshError> {
+    let transfer_id = transfer_id.unwrap_or_else(|| format!("folder-download-{}", uuid_fallback()));
+    let connection = connection_info(&state, &id, true)?;
+    let session = session_for(&state, &id)?;
+    transfer_slot(&state)?;
+    let state_handle = state.inner().clone();
+    let transfer_id_for_thread = transfer_id.clone();
+    let overwrite = overwrite.unwrap_or(false);
+    thread::spawn(move || {
+        let result = run_download_directory(
+            &state_handle,
+            &connection,
+            &session,
+            &transfer_id_for_thread,
+            &remote_path,
+            &local_path,
+            overwrite,
+        );
+        let cancelled = matches!(result, Err(SshError::TransferCancelled));
+        emit_event(
+            &state_handle.app_handle,
+            "download-complete",
+            json!({
+                "id": connection.id,
+                "transferId": transfer_id_for_thread,
+                "success": result.is_ok(),
+                "cancelled": cancelled,
+                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+            }),
+        );
+        finish_transfer(&state_handle, &transfer_id_for_thread);
+    });
+    Ok("文件夹下载已开始".to_string())
+}
+
+#[tauri::command]
 pub fn cancel_transfer(state: State<SshState>, transfer_id: String) -> Result<bool, SshError> {
     state
         .cancelled_transfers
@@ -1944,6 +2294,20 @@ mod tests {
             "C:/upload/nested/file.txt"
         );
         assert!(join_remote_path("/upload", Path::new("../escape")).is_err());
+    }
+
+    #[test]
+    fn joins_remote_download_children_with_portable_separators() {
+        assert_eq!(
+            join_remote_child_path("/remote/", "nested").unwrap(),
+            "/remote/nested"
+        );
+        assert_eq!(
+            join_remote_child_path("C:\\remote\\", "nested").unwrap(),
+            "C:/remote/nested"
+        );
+        assert!(join_remote_child_path("/remote", "../escape").is_err());
+        assert!(join_remote_child_path("/remote", "nested/file.txt").is_err());
     }
 
     #[test]

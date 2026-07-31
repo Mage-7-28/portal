@@ -29,8 +29,9 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
     }
     const remotePath = joinRemotePath(currentPath, entry.name)
     const localPath = joinLocalPath(downloadPath, entry.name)
+    const itemLabel = entry.isDirectory ? '文件夹' : '文件'
     const accepted = await confirm(
-      `确定下载“${ entry.name }”吗？\n\n保存到：${ localPath }`,
+      `确定下载${ itemLabel }“${ entry.name }”吗？\n\n保存到：${ localPath }`,
       {
         title: '确认下载',
         kind: 'warning',
@@ -39,69 +40,71 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
       }
     )
     if (!accepted) return
-    let overwrite = false
     let transferId = null
-    try {
-      setDownloading(true)
+    const publishProgress = (progress, payload = {}) => {
+      const fileIndex = Number(payload.fileIndex)
+      const fileTotal = Number(payload.fileTotal)
       PubSubBusinessKeyEnum.SEND_MASK({
-        progress: 0,
-        fileName: entry.name,
-        operation: 'download',
+        progress: Math.round(Number(progress) || 0),
+        fileName: entry.isDirectory ? (payload.fileName || entry.name) : entry.name,
+        operation: entry.isDirectory ? 'download-directory' : 'download',
+        folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
+        folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
+        overallProgress: Number.isFinite(Number(payload.overallProgress))
+          ? Number(payload.overallProgress)
+          : undefined,
         onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
       })
-      await sftpManager.downloadFile(connectionId, remotePath, localPath, progress => {
-        PubSubBusinessKeyEnum.SEND_MASK({
-          progress: Math.round(progress),
-          fileName: entry.name,
-          operation: 'download',
-          onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
-        })
-      }, overwrite, id => {
-        transferId = id
-        PubSubBusinessKeyEnum.SEND_MASK({
-          progress: 0,
-          fileName: entry.name,
-          operation: 'download',
-          onCancel: () => sftpManager.cancelTransfer(transferId)
-        })
-      })
-      notification.success('下载成功', `文件 ${ entry.name } 已保存到 ${ localPath }`)
+    }
+    const performDownload = async (overwrite) => {
+      transferId = null
+      const download = entry.isDirectory
+        ? sftpManager.downloadDirectory.bind(sftpManager)
+        : sftpManager.downloadFile.bind(sftpManager)
+      try {
+        await download(
+          connectionId,
+          remotePath,
+          localPath,
+          (progress, payload) => publishProgress(progress, payload),
+          overwrite,
+          id => {
+            transferId = id
+            publishProgress(0)
+          }
+        )
+      } finally {
+        transferId = null
+      }
+    }
+
+    try {
+      setDownloading(true)
+      publishProgress(0)
+      await performDownload(false)
+      notification.success('下载成功', `${ itemLabel } ${ entry.name } 已保存到 ${ localPath }`)
     } catch (error) {
       const message = error.message || error.toString() || '未知错误'
-      if (message.includes('已存在')) {
-        const accepted = await confirm(`本地文件已存在：\n${ localPath }\n是否覆盖？`, {
-          title: '确认覆盖',
-          kind: 'warning',
-          okLabel: '覆盖',
-          cancelLabel: '取消'
-        })
-        if (accepted) {
-          overwrite = true
+      if (!message.includes('已存在')) {
+        notification.error('下载失败', `${ itemLabel } ${ entry.name }：${ message }`)
+      } else {
+        const overwriteAccepted = await confirm(
+          `本地${ itemLabel }已存在：\n${ localPath }\n${ entry.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
+          {
+            title: '确认覆盖',
+            kind: 'warning',
+            okLabel: entry.isDirectory ? '合并并覆盖' : '覆盖',
+            cancelLabel: '取消'
+          }
+        )
+        if (overwriteAccepted) {
           try {
-            await sftpManager.downloadFile(connectionId, remotePath, localPath, progress => {
-              PubSubBusinessKeyEnum.SEND_MASK({
-                progress: Math.round(progress),
-                fileName: entry.name,
-                operation: 'download',
-                onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
-              })
-            }, overwrite, id => {
-              transferId = id
-              PubSubBusinessKeyEnum.SEND_MASK({
-                progress: 0,
-                fileName: entry.name,
-                operation: 'download',
-                onCancel: () => sftpManager.cancelTransfer(transferId)
-              })
-            })
-            notification.success('下载成功', `文件 ${ entry.name } 已覆盖`)
-            return
+            await performDownload(true)
+            notification.success('下载成功', `${ itemLabel } ${ entry.name } 已覆盖`)
           } catch (retryError) {
             notification.error('下载失败', retryError.message || retryError.toString() || '未知错误')
           }
         }
-      } else {
-        notification.error('下载失败', `文件 ${ entry.name }：${ message }`)
       }
     } finally {
       setDownloading(false)
@@ -181,19 +184,16 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
           <span className="file-item-size">
             {entry.isDirectory ? '' : formatFileSize(entry.size)}
           </span>
-          {!entry.isDirectory && (
-            <Tooltip title="下载文件">
-              <Button
-                className="compact-icon-button"
-                size="small"
-                icon={<DownloadOutlined />}
-                loading={downloading}
-                aria-label={`下载 ${ entry.name }`}
-                onClick={handleDownload}
-              >
-              </Button>
-            </Tooltip>
-          )}
+          <Tooltip title={entry.isDirectory ? '下载文件夹' : '下载文件'}>
+            <Button
+              className="compact-icon-button"
+              size="small"
+              icon={<DownloadOutlined />}
+              loading={downloading}
+              aria-label={`下载 ${ entry.name }`}
+              onClick={handleDownload}
+            />
+          </Tooltip>
           <Tooltip title="重命名">
             <Button
               className="compact-icon-button"

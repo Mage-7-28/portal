@@ -174,6 +174,7 @@ pub fn run() {
             ssh::scp_upload,
             ssh::sftp_upload_directory,
             ssh::scp_download,
+            ssh::sftp_download_directory,
             ssh::list_sftp_directory,
             ssh::remove_ssh_connection,
             ssh::get_sftp_file_content,

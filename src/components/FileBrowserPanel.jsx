@@ -446,10 +446,6 @@ function FileBrowserPanel() {
 
   const handleDownloadItems = async (entries) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
-    if (entries.some(entry => entry.isDirectory)) {
-      toast.error('批量下载目前仅支持文件，请不要选择文件夹', { id: 'msgBoxGlobal', style: msgBoxStyle })
-      return false
-    }
 
     let downloadPath
     try {
@@ -463,7 +459,7 @@ function FileBrowserPanel() {
     const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
     const omittedCount = entries.length - Math.min(entries.length, 3)
     const accepted = await confirm(
-      `确定下载选中的 ${ entries.length } 个文件吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n保存到：${ downloadPath }`,
+      `确定下载选中的 ${ entries.length } 个项目吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n保存到：${ downloadPath }`,
       {
         title: '确认批量下载',
         kind: 'warning',
@@ -478,14 +474,22 @@ function FileBrowserPanel() {
     let skippedCount = 0
     let transferId = null
     let cancelled = false
-    const publishProgress = (progress, entry, queueIndex) => {
+    const publishProgress = (progress, entry, queueIndex, payload = {}) => {
+      const isDirectoryDownload = Boolean(entry.isDirectory)
+      const fileIndex = Number(payload.fileIndex)
+      const fileTotal = Number(payload.fileTotal)
       PubSubBusinessKeyEnum.SEND_MASK({
         progress: Math.round(Number(progress) || 0),
-        fileName: entry.name,
-        operation: 'download',
+        fileName: isDirectoryDownload ? (payload.fileName || entry.name) : entry.name,
+        operation: isDirectoryDownload ? 'download-directory' : 'download',
         queueIndex,
         queueTotal: entries.length,
         pendingCount: Math.max(entries.length - queueIndex - 1, 0),
+        folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
+        folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
+        overallProgress: Number.isFinite(Number(payload.overallProgress))
+          ? Number(payload.overallProgress)
+          : undefined,
         onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
       })
     }
@@ -495,11 +499,14 @@ function FileBrowserPanel() {
       const localPath = joinLocalPath(downloadPath, entry.name)
       publishProgress(0, entry, queueIndex)
       try {
-        await sftpManager.downloadFile(
+        const download = entry.isDirectory
+          ? sftpManager.downloadDirectory.bind(sftpManager)
+          : sftpManager.downloadFile.bind(sftpManager)
+        await download(
           currentConnectionId,
           remotePath,
           localPath,
-          progress => publishProgress(progress, entry, queueIndex),
+          (progress, payload) => publishProgress(progress, entry, queueIndex, payload),
           overwrite,
           id => {
             transferId = id
@@ -527,12 +534,13 @@ function FileBrowserPanel() {
             continue
           }
 
+          const itemLabel = entry.isDirectory ? '文件夹' : '文件'
           const overwriteAccepted = await confirm(
-            `本地文件已存在：\n${ joinLocalPath(downloadPath, entry.name) }\n是否覆盖？`,
+            `本地${ itemLabel }已存在：\n${ joinLocalPath(downloadPath, entry.name) }\n${ entry.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
             {
               title: '确认覆盖',
               kind: 'warning',
-              okLabel: '覆盖',
+              okLabel: entry.isDirectory ? '合并并覆盖' : '覆盖',
               cancelLabel: '跳过'
             }
           )
@@ -560,11 +568,11 @@ function FileBrowserPanel() {
       return false
     }
     if (failedEntries.length === 0 && skippedCount === 0 && downloadedCount === entries.length) {
-      toast.success(`已下载 ${ entries.length } 个文件`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      toast.success(`已下载 ${ entries.length } 个项目`, { id: 'msgBoxGlobal', style: msgBoxStyle })
       return true
     }
     const failedNames = failedEntries.map(item => item.entry.name).join('、')
-    const summary = `已下载 ${ downloadedCount } 个文件${ skippedCount > 0 ? `，跳过 ${ skippedCount } 个` : '' }${ failedEntries.length > 0 ? `，${ failedEntries.length } 个失败` : '' }`
+    const summary = `已下载 ${ downloadedCount } 个项目${ skippedCount > 0 ? `，跳过 ${ skippedCount } 个` : '' }${ failedEntries.length > 0 ? `，${ failedEntries.length } 个失败` : '' }`
     const summaryMessage = `${ summary }${ failedNames ? `：${ failedNames }` : '' }`
     if (failedEntries.length > 0) {
       toast.error(summaryMessage, { id: 'msgBoxGlobal', style: msgBoxStyle })

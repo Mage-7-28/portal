@@ -144,7 +144,6 @@ const FileBrowser = ({
 
   const handleBatchDownload = async () => {
     if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
-    if (selectedEntries.some(entry => entry.isDirectory)) return
     setBatchDownloading(true)
     try {
       await handleDownloadItems(selectedEntries)
@@ -527,13 +526,13 @@ const FileBrowser = ({
       {selectedKeys.length > 1 && (
         <div className="selection-action-bar" role="toolbar" aria-label="批量操作">
           <span className="selection-count">已选择 {selectedKeys.length} 项</span>
-          <Tooltip title={selectedEntries.some(entry => entry.isDirectory) ? '批量下载暂不支持文件夹' : '批量下载选中的文件'}>
+          <Tooltip title="批量下载选中的文件和文件夹">
             <span>
               <Button
                 size="small"
                 icon={<DownloadOutlined />}
                 loading={batchDownloading}
-                disabled={batchDeleting || batchDownloading || selectedEntries.some(entry => entry.isDirectory)}
+                disabled={batchDeleting || batchDownloading}
                 onClick={event => {
                   event.stopPropagation()
                   void handleBatchDownload()

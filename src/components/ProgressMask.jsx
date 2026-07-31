@@ -46,7 +46,12 @@ const ProgressMask = () => {
     phase = '',
     onCancel
   } = maskData
-  const downloadQueueLabel = operation === 'download' && Number(queueTotal) > 1
+  const isDownloadOperation = operation === 'download' || operation === 'download-directory'
+  const isDirectoryDownload = operation === 'download-directory'
+  const directoryProgress = Number.isFinite(Number(overallProgress))
+    ? Number(overallProgress)
+    : Number(progress) || 0
+  const downloadQueueLabel = isDownloadOperation && !isDirectoryDownload && Number(queueTotal) > 1
     ? `（第 ${ Number(queueIndex) + 1 }/${ queueTotal } 个）`
     : ''
 
@@ -124,7 +129,7 @@ const ProgressMask = () => {
       <div style={styles.container}>
         <div style={styles.iconContainer}>
           <div style={styles.operationIcon}>
-            {operation === 'download' ? (
+            {isDownloadOperation ? (
               <DownloadOutlined style={styles.icon} />
             ) : (
               <UploadOutlined style={styles.icon} />
@@ -133,22 +138,30 @@ const ProgressMask = () => {
         </div>
 
         <Text style={styles.title}>
-          {operation === 'download' ? `下载中${ downloadQueueLabel }` : '上传中'}
+          {isDirectoryDownload
+            ? `下载文件夹中${ Number(folderQueueTotal) > 0 ? `（文件 ${ Math.min(Number(folderQueueIndex) + 1, Number(folderQueueTotal) ) }/${ folderQueueTotal }）` : '' }`
+            : isDownloadOperation ? `下载中${ downloadQueueLabel }` : '上传中'}
         </Text>
 
         <Text style={styles.fileName} ellipsis={{ tooltip: fileName }}>
           {fileName}
         </Text>
 
+        {isDirectoryDownload && Number(folderQueueTotal) > 0 && (
+          <Text style={styles.folderProgressText}>
+            当前文件 {Math.round(Number(progress) || 0)}% · 总体 {Math.round(directoryProgress)}%
+          </Text>
+        )}
+
         <div style={styles.progressWrapper}>
           <Progress
-            percent={Math.round(progress)}
+            percent={Math.round(directoryProgress)}
             strokeColor={THEME_PRIMARY_COLOR}
             railColor={THEME_BORDER_COLOR}
             showInfo={false}
             size="small"
           />
-          <Text style={styles.percentText}>{Math.round(progress)}%</Text>
+          <Text style={styles.percentText}>{Math.round(directoryProgress)}%</Text>
         </div>
         {onCancel && (
           <Button
@@ -228,6 +241,13 @@ const styles = {
     display: 'block',
     maxWidth: '90%',
     margin: '0 auto 14px',
+    lineHeight: '1.4'
+  },
+  folderProgressText: {
+    display: 'block',
+    margin: '-6px auto 10px',
+    color: THEME_TEXT_SECONDARY,
+    fontSize: '11px',
     lineHeight: '1.4'
   },
   progressWrapper: {

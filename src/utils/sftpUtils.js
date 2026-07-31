@@ -214,6 +214,16 @@ class SftpManager {
     })
   }
 
+  async downloadDirectory(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId) {
+    return this.transfer('download-directory', connectionId, {
+      remotePath,
+      localPath,
+      onProgress,
+      overwrite,
+      onTransferId
+    })
+  }
+
   async transfer(direction, connectionId, options) {
     const info = this.requireConnected(connectionId)
     const transferId = randomId(direction)
@@ -260,7 +270,9 @@ class SftpManager {
         ? 'scp_upload'
         : direction === 'upload-directory'
           ? 'sftp_upload_directory'
-          : 'scp_download'
+          : direction === 'download-directory'
+            ? 'sftp_download_directory'
+            : 'scp_download'
       await this.invokeRemote(connectionId, command, isUpload
         ? {
           id: connectionId,
