@@ -54,6 +54,14 @@ const ProgressMask = () => {
   const downloadQueueLabel = isDownloadOperation && !isDirectoryDownload && Number(queueTotal) > 1
     ? `（第 ${ Number(queueIndex) + 1 }/${ queueTotal } 个）`
     : ''
+  const isInlineOperation = [
+    'upload',
+    'upload-directory',
+    'download',
+    'download-directory',
+    'delete',
+    'rename'
+  ].includes(operation)
 
   const handleCancel = async () => {
     if (!onCancel || cancelling) return
@@ -65,18 +73,50 @@ const ProgressMask = () => {
     }
   }
 
-  if (operation === 'upload' || operation === 'upload-directory' || operation === 'delete' || operation === 'rename') {
+  if (isInlineOperation) {
     const isDirectoryUpload = operation === 'upload-directory'
     const isMutation = operation === 'delete' || operation === 'rename'
+    const isDirectoryTransfer = isDirectoryUpload || isDirectoryDownload
+    const folderIndex = Number(folderQueueIndex) || 0
+    const folderTotal = Number(folderQueueTotal) || 0
+    const displayProgress = isDirectoryDownload ? directoryProgress : Number(progress) || 0
     const operationLabel = isMutation
       ? (operation === 'delete' ? '删除' : '重命名')
-      : (isDirectoryUpload ? '上传文件夹' : '上传中')
-    const showItemPosition = !isMutation || (operation === 'delete' && phase === 'deleting' && queueTotal > 0)
-    const pendingLabel = isDirectoryUpload && Number.isFinite(overallProgress)
-      ? Number(folderQueueTotal) > 0
-        ? `总进度 ${ Math.round(overallProgress) }% · 文件待处理 ${ Math.max(Number(folderQueueTotal) - Number(folderQueueIndex) - 1, 0) } 个`
-        : `队列待处理 ${ pendingCount } 个`
-      : `待上传 ${ pendingCount } 个`
+      : isDirectoryDownload ? '下载文件夹' : isDirectoryUpload ? '上传文件夹' : isDownloadOperation ? '下载中' : '上传中'
+    const showItemPosition = isMutation
+      ? operation === 'delete' && phase === 'deleting' && queueTotal > 0
+      : isDirectoryTransfer || Number(queueTotal) > 1
+    let pendingLabel = message
+    let pendingDetail = ''
+    let pendingKind = ''
+    let pendingCountLabel = ''
+
+    if (!isMutation && isDirectoryDownload) {
+      if (folderTotal > 0) {
+        pendingDetail = `当前 ${ Math.round(Number(progress) || 0) }% ·`
+        pendingKind = '待处理'
+        pendingCountLabel = `${ Math.max(folderTotal - folderIndex - 1, 0) } 个`
+      } else {
+        pendingLabel = '正在扫描文件夹...'
+      }
+    } else if (!isMutation && isDirectoryUpload && Number.isFinite(Number(overallProgress))) {
+      if (folderTotal > 0) {
+        pendingDetail = `总进度 ${ Math.round(Number(overallProgress)) }% ·`
+        pendingKind = '文件待处理'
+        pendingCountLabel = `${ Math.max(folderTotal - folderIndex - 1, 0) } 个`
+      } else {
+        pendingKind = '队列待处理'
+        pendingCountLabel = `${ pendingCount } 个`
+      }
+    } else if (!isMutation && Number(pendingCount) > 0) {
+      pendingKind = isDownloadOperation ? '待下载' : '待上传'
+      pendingCountLabel = `${ pendingCount } 个`
+    }
+
+    if (pendingCountLabel) {
+      pendingLabel = [ pendingDetail, pendingKind, pendingCountLabel ].filter(Boolean).join(' ')
+    }
+    const cancelLabel = isMutation ? '取消操作' : isDownloadOperation ? '取消下载' : '取消上传'
     return (
       <div
         className={`transfer-inline-status${ isMutation ? ' is-operation' : '' }`}
@@ -87,27 +127,35 @@ const ProgressMask = () => {
           <span className="transfer-inline-position">
             {operation === 'delete'
               ? `第 ${ queueIndex + 1 }/${ queueTotal } 个文件`
-              : isDirectoryUpload && Number(folderQueueTotal) > 0
-                ? `项目 ${ queueIndex + 1 }/${ queueTotal } · 文件 ${ Math.min(Number(folderQueueIndex) + 1, Number(folderQueueTotal)) }/${ folderQueueTotal }`
+              : isDirectoryTransfer && folderTotal > 0
+                ? `项目 ${ queueIndex + 1 }/${ queueTotal } · 文件 ${ Math.min(folderIndex + 1, folderTotal) }/${ folderTotal }`
                 : `项目 ${ queueIndex + 1 }/${ queueTotal }`}
           </span>
         )}
         <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>
         <Progress
           className="transfer-inline-progress"
-          percent={Math.round(progress)}
+          percent={Math.round(displayProgress)}
           status={isMutation ? 'active' : undefined}
           strokeColor={THEME_PRIMARY_COLOR}
           railColor={THEME_BORDER_COLOR}
           showInfo={false}
           size="small"
         />
-        <span className="transfer-inline-percent">{Math.round(progress)}%</span>
-        <span className={`transfer-inline-pending${ isMutation ? ' transfer-inline-message' : '' }`}>
-          {isMutation ? message : pendingLabel}
-        </span>
+        <span className="transfer-inline-percent">{Math.round(displayProgress)}%</span>
+        {pendingLabel && (
+          <span className={`transfer-inline-pending${ isMutation ? ' transfer-inline-message' : '' }`} title={pendingLabel}>
+            {pendingCountLabel ? (
+              <>
+                {pendingDetail && <span className="transfer-inline-pending-detail">{pendingDetail}</span>}
+                <span className="transfer-inline-pending-kind">{pendingKind}</span>
+                <span className="transfer-inline-pending-count">{pendingCountLabel}</span>
+              </>
+            ) : pendingLabel}
+          </span>
+        )}
         {onCancel && (
-          <Tooltip title="取消上传">
+          <Tooltip title={cancelLabel}>
             <Button
               className="transfer-inline-cancel"
               type="text"
@@ -116,7 +164,7 @@ const ProgressMask = () => {
               icon={<StopOutlined />}
               loading={cancelling}
               onClick={handleCancel}
-              aria-label="取消上传"
+              aria-label={cancelLabel}
             />
           </Tooltip>
         )}

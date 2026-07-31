@@ -29,7 +29,7 @@
 .download-status {
   display: flex;
   align-items: center;
-  gap: 6px;
+  min-width: 0;
   min-height: 24px;
   padding: 0 8px;
   overflow: hidden;
@@ -41,6 +41,15 @@
   line-height: 24px;
 }
 
+.download-status-location {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+}
+
 .download-status-label {
   flex: 0 0 auto;
   color: #e8e5de;
@@ -48,21 +57,37 @@
 }
 
 .download-status-path {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.download-status-transfer {
+  display: none;
+  min-width: 0;
+}
+
+.download-status-transfer:not(:empty) {
+  display: flex;
+  flex: 0 1 min(560px, 58%);
+  width: min(560px, 58%);
+  min-width: 0;
+  margin-left: 10px;
+}
+
 .transfer-inline-status {
   display: flex;
-  flex: 0 1 min(520px, 55%);
+  flex: 1 1 auto;
   align-items: center;
-  min-width: 300px;
-  gap: 7px;
+  justify-content: flex-end;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  gap: 6px;
   height: 22px;
-  margin-left: 10px;
+  margin-left: 0;
   overflow: hidden;
   color: #d8d3c9;
   line-height: 1;
@@ -87,16 +112,18 @@
 }
 
 .transfer-inline-file {
-  min-width: 72px;
-  max-width: 150px;
+  flex: 0 1 170px;
+  min-width: 0;
+  max-width: 170px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .transfer-inline-progress {
-  flex: 1 1 90px;
-  min-width: 64px;
+  flex: 0 0 76px;
+  min-width: 76px;
+  width: 76px;
   line-height: 1;
 }
 
@@ -123,12 +150,29 @@
 }
 
 .transfer-inline-pending {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  color: #aaa69d;
+  white-space: nowrap;
+}
+
+.transfer-inline-pending-detail {
   color: #aaa69d;
 }
 
+.transfer-inline-pending-kind {
+  color: #c0bcb4;
+}
+
+.transfer-inline-pending-count {
+  color: #e8e5de;
+  font-variant-numeric: tabular-nums;
+}
+
 .transfer-inline-status.is-operation {
-  flex-basis: min(440px, 48%);
-  min-width: 260px;
+  flex-basis: auto;
 }
 
 .transfer-inline-status.is-operation .transfer-inline-file {
@@ -136,7 +180,10 @@
 }
 
 .transfer-inline-message {
+  display: block;
+  flex: 0 1 180px;
   min-width: 0;
+  max-width: 180px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -153,23 +200,109 @@
   color: #d07878;
 }
 
-@media (max-width: 760px) {
+@media (max-width: 1040px) {
+  .download-status-transfer:not(:empty) {
+    flex-basis: 58%;
+    width: 58%;
+  }
+
   .transfer-inline-status {
-    flex-basis: 50%;
-    min-width: 210px;
     gap: 5px;
   }
 
-  .transfer-inline-status.is-operation {
-    min-width: 210px;
-  }
-
   .transfer-inline-file {
-    max-width: 90px;
+    max-width: 116px;
   }
 
   .transfer-inline-pending {
+    max-width: none;
+  }
+
+  .transfer-inline-pending-detail {
     display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .download-status {
+    padding-inline: 6px;
+  }
+
+  .download-status-location {
+    gap: 5px;
+  }
+
+  .download-status-transfer:not(:empty) {
+    flex: 1 1 0;
+    width: auto;
+    margin-left: 6px;
+  }
+
+  .transfer-inline-status,
+  .transfer-inline-status.is-operation {
+    flex: 1 1 0;
+    max-width: none;
+    gap: 5px;
+    margin-left: 0;
+  }
+
+  .transfer-inline-position,
+  .transfer-inline-file {
+    display: none;
+  }
+
+  .transfer-inline-file {
+    flex-basis: 100px;
+    max-width: 100px;
+  }
+
+  .transfer-inline-progress {
+    flex: 0 1 72px;
+    min-width: 54px;
+    width: 72px;
+  }
+}
+
+@media (max-width: 520px) {
+  .download-status-label {
+    max-width: 42px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .download-status-location {
+    flex: 0 1 30%;
+  }
+
+  .download-status-path {
+    flex: 1 1 auto;
+  }
+
+  .transfer-inline-file {
+    flex-basis: 76px;
+    max-width: 76px;
+  }
+}
+
+@media (max-width: 420px) {
+  .download-status-location {
+    display: none;
+  }
+
+  .transfer-inline-file {
+    display: none;
+  }
+
+  .transfer-inline-operation {
+    max-width: 48px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .transfer-inline-progress {
+    width: 58px;
+    min-width: 48px;
   }
 }
 

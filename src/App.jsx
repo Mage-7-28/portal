@@ -18,6 +18,7 @@ import packageInfo from '../package.json'
 function App() {
   const storedDownloadPath = useStoreValue(StoreKeys.DOWNLOAD_PATH)
   const downloadPath = typeof storedDownloadPath === 'string' ? storedDownloadPath : ''
+  const downloadPathHint = downloadPath || '尚未设置（首次下载时选择）'
   const [ aboutOpen, setAboutOpen ] = useState(false)
   const exitConfirmingRef = useRef(false)
   const exitRequestedRef = useRef(false)
@@ -174,11 +175,15 @@ function App() {
             className="download-status"
             title={downloadPath || '尚未设置下载地址，首次下载时会提示选择'}
           >
-            <span className="download-status-label">下载地址</span>
-            <span className="download-status-path">
-              {downloadPath || '尚未设置（首次下载时选择）'}
-            </span>
-            <ProgressMask />
+            <div className="download-status-location">
+              <span className="download-status-label">下载地址</span>
+              <span className="download-status-path" title={downloadPathHint}>
+                {downloadPathHint}
+              </span>
+            </div>
+            <div className="download-status-transfer">
+              <ProgressMask />
+            </div>
           </div>
         </div>
       </div>
