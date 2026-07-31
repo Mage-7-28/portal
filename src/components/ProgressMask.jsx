@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
 import { DownloadOutlined, StopOutlined, UploadOutlined } from '@ant-design/icons'
 import PubSub from 'pubsub-js'
@@ -9,9 +9,16 @@ const { Text } = Typography
 const ProgressMask = () => {
   const [ maskData, setMaskData ] = useState(null)
   const [ cancelling, setCancelling ] = useState(false)
+  const dismissedMaskIds = useRef(new Set())
 
   useEffect(() => {
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
+      if (data?.dismissMaskId) {
+        dismissedMaskIds.current.add(data.dismissMaskId)
+        setMaskData(current => current?.maskId === data.dismissMaskId ? null : current)
+        return
+      }
+      if (data?.maskId && dismissedMaskIds.current.has(data.maskId)) return
       setMaskData(data)
     })
 
@@ -33,6 +40,8 @@ const ProgressMask = () => {
     queueTotal = 1,
     pendingCount = 0,
     overallProgress,
+    message = '',
+    phase = '',
     onCancel
   } = maskData
 
@@ -46,27 +55,43 @@ const ProgressMask = () => {
     }
   }
 
-  if (operation === 'upload' || operation === 'upload-directory') {
+  if (operation === 'upload' || operation === 'upload-directory' || operation === 'delete' || operation === 'rename') {
     const isDirectoryUpload = operation === 'upload-directory'
-    const operationLabel = isDirectoryUpload ? '上传文件夹' : '上传中'
+    const isMutation = operation === 'delete' || operation === 'rename'
+    const operationLabel = isMutation
+      ? (operation === 'delete' ? '删除' : '重命名')
+      : (isDirectoryUpload ? '上传文件夹' : '上传中')
+    const showItemPosition = !isMutation || (operation === 'delete' && phase === 'deleting' && queueTotal > 0)
     const pendingLabel = isDirectoryUpload && Number.isFinite(overallProgress)
       ? `总进度 ${ Math.round(overallProgress) }% · 待上传 ${ pendingCount } 个`
       : `待上传 ${ pendingCount } 个`
     return (
-      <div className="transfer-inline-status" title={`${ operationLabel }：${ fileName }`}>
+      <div
+        className={`transfer-inline-status${ isMutation ? ' is-operation' : '' }`}
+        title={`${ operationLabel }：${ fileName }${ message ? ` - ${ message }` : '' }`}
+      >
         <span className="transfer-inline-operation">{operationLabel}</span>
-        <span className="transfer-inline-position">{queueIndex + 1}/{queueTotal}</span>
+        {showItemPosition && (
+          <span className="transfer-inline-position">
+            {operation === 'delete'
+              ? `第 ${ queueIndex + 1 }/${ queueTotal } 个文件`
+              : `${ queueIndex + 1 }/${ queueTotal }`}
+          </span>
+        )}
         <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>
         <Progress
           className="transfer-inline-progress"
           percent={Math.round(progress)}
+          status={isMutation ? 'active' : undefined}
           strokeColor={THEME_PRIMARY_COLOR}
           railColor={THEME_BORDER_COLOR}
           showInfo={false}
           size="small"
         />
         <span className="transfer-inline-percent">{Math.round(progress)}%</span>
-        <span className="transfer-inline-pending">{pendingLabel}</span>
+        <span className={`transfer-inline-pending${ isMutation ? ' transfer-inline-message' : '' }`}>
+          {isMutation ? message : pendingLabel}
+        </span>
         {onCancel && (
           <Tooltip title="取消上传">
             <Button

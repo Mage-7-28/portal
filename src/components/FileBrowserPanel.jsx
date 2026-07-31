@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
 import { SftpConnectionStatus, StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
-import { formatFileSize } from '../utils/common.js'
+import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
@@ -80,6 +80,26 @@ function FileBrowserPanel() {
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
   const activeConnectionIdRef = useRef(null)
+  const operationStatusSequence = useRef(0)
+
+  const createOperationStatus = (operation, fileName) => {
+    const maskId = `file-operation-${ operation }-${ Date.now() }-${ ++operationStatusSequence.current }`
+    const publish = (progress, message, details = {}) => {
+      PubSubBusinessKeyEnum.SEND_MASK({
+        maskId,
+        operation,
+        fileName,
+        progress,
+        message,
+        ...details
+      })
+    }
+    return {
+      start: message => publish(0, message),
+      update: (progress, message, details) => publish(progress, message, details),
+      dismiss: () => PubSubBusinessKeyEnum.SEND_MASK({ dismissMaskId: maskId })
+    }
+  }
 
   const releasePreviewUrl = useCallback(() => {
     if (!previewUrlRef.current) return
@@ -424,28 +444,77 @@ function FileBrowserPanel() {
   }
 
   const handleDeleteItem = async (entry) => {
-    const accepted = await confirm(`确定删除“${ entry.name }”吗？`, {
+    const description = entry.isDirectory
+      ? `确定删除文件夹“${ entry.name }”及其所有内容吗？此操作无法撤销。`
+      : `确定删除“${ entry.name }”吗？`
+    const accepted = await confirm(description, {
       title: '删除远程项目',
       kind: 'warning',
       okLabel: '删除',
       cancelLabel: '取消'
     })
     if (!accepted) return
-    await sftpManager.deleteRemoteItem(currentConnectionId, joinRemotePath(currentPath, entry.name), entry.isDirectory)
-    await loadRemoteDirectory(currentPath)
-    toast.success('已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+
+    const status = createOperationStatus('delete', entry.name)
+    status.start(entry.isDirectory ? '正在删除文件夹及其内容...' : '正在删除文件...')
+    try {
+      await sftpManager.deleteRemoteItem(
+        currentConnectionId,
+        joinRemotePath(currentPath, entry.name),
+        entry.isDirectory,
+        (progress, payload = {}) => {
+          const itemTotal = Number(payload.itemTotal) || 0
+          const itemIndex = Number(payload.itemIndex) || 0
+          const phase = payload.phase || 'deleting'
+          const currentItem = payload.fileName || entry.name
+          const hasItems = itemTotal > 0
+          let operationMessage = hasItems ? '正在删除文件...' : '正在删除...'
+          if (phase === 'scanning') operationMessage = '正在扫描文件夹...'
+          if (phase === 'cleaning') operationMessage = '正在清理文件夹...'
+          status.update(
+            Math.round(Number(progress) || 0),
+            operationMessage,
+            {
+              phase,
+              fileName: currentItem,
+              queueIndex: hasItems ? Math.min(itemIndex, itemTotal - 1) : 0,
+              queueTotal: hasItems ? itemTotal : 1,
+              pendingCount: hasItems ? Math.max(itemTotal - itemIndex - 1, 0) : 0
+            }
+          )
+        }
+      )
+      status.update(92, '正在刷新目录...', { phase: 'refreshing' })
+      await loadRemoteDirectory(currentPath)
+      toast.success('已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } catch (deleteError) {
+      const message = normalizeError(deleteError)
+      toast.error(`删除失败：${ message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } finally {
+      status.dismiss()
+    }
   }
 
   const handleRenameItem = async (entry, name) => {
     const trimmedName = name.trim()
     if (!trimmedName || trimmedName === entry.name) return
-    await sftpManager.renameRemoteItem(
-      currentConnectionId,
-      joinRemotePath(currentPath, entry.name),
-      joinRemotePath(currentPath, trimmedName)
-    )
-    await loadRemoteDirectory(currentPath)
-    toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    const status = createOperationStatus('rename', `${ entry.name } -> ${ trimmedName }`)
+    status.start('正在重命名...')
+    try {
+      await sftpManager.renameRemoteItem(
+        currentConnectionId,
+        joinRemotePath(currentPath, entry.name),
+        joinRemotePath(currentPath, trimmedName)
+      )
+      status.update(82, '正在刷新目录...')
+      await loadRemoteDirectory(currentPath)
+      toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } catch (renameError) {
+      // Keep the modal open so the user can correct the name or retry.
+      throw renameError
+    } finally {
+      status.dismiss()
+    }
   }
 
   const renderPreviewContent = () => {

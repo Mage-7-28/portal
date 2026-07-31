@@ -340,10 +340,53 @@ class SftpManager {
     return true
   }
 
-  async deleteRemoteItem(connectionId, remotePath, isDirectory = false) {
-    this.requireConnected(connectionId)
-    await this.invokeRemote(connectionId, 'sftp_delete', { id: connectionId, remotePath, isDirectory })
-    return true
+  async deleteRemoteItem(connectionId, remotePath, isDirectory = false, onProgress) {
+    const info = this.requireConnected(connectionId)
+    const operationId = randomId('delete')
+    let unlistenProgress
+    let unlistenComplete
+    try {
+      let resolveCompletion
+      let rejectCompletion
+      const completion = new Promise((resolve, reject) => {
+        resolveCompletion = resolve
+        rejectCompletion = reject
+      })
+      const completeHandler = event => {
+        const payload = event.payload || {}
+        if (payload.id !== connectionId || payload.operationId !== operationId) return
+        if (payload.success) {
+          resolveCompletion(payload.message)
+        } else {
+          const deleteError = new Error(payload.message || '删除失败')
+          if (this.isConnectionLossError(deleteError)) {
+            this.markConnectionLost(connectionId, deleteError)
+          }
+          rejectCompletion(deleteError)
+        }
+      }
+      if (onProgress) {
+        unlistenProgress = await listen('delete-progress', event => {
+          const payload = event.payload || {}
+          if (payload.id === connectionId && payload.operationId === operationId) {
+            onProgress(payload.progress, payload)
+          }
+        })
+      }
+      unlistenComplete = await listen('delete-complete', completeHandler)
+      await this.invokeRemote(connectionId, 'sftp_delete', {
+        id: connectionId,
+        remotePath,
+        isDirectory,
+        operationId
+      })
+      await completion
+      info.lastActivity = Date.now()
+      return true
+    } finally {
+      unlistenProgress?.()
+      unlistenComplete?.()
+    }
   }
 
   async renameRemoteItem(connectionId, sourcePath, targetPath, overwrite = false) {

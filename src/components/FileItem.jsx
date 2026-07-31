@@ -10,6 +10,7 @@ import { store } from '../utils/storeUtils.js'
 
 const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRename }) => {
   const [ downloading, setDownloading ] = useState(false)
+  const [ deleting, setDeleting ] = useState(false)
   const [ renameOpen, setRenameOpen ] = useState(false)
   const [ renameValue, setRenameValue ] = useState(entry.name)
   const [ renaming, setRenaming ] = useState(false)
@@ -139,6 +140,17 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
     }
   }
 
+  const handleDelete = async (event) => {
+    event.stopPropagation()
+    if (deleting) return
+    setDeleting(true)
+    try {
+      await onDelete()
+    } finally {
+      setDeleting(false)
+    }
+  }
+
   return (
     <div
       className="file-item-row"
@@ -209,11 +221,9 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
               danger
               size="small"
               icon={<DeleteOutlined />}
+              loading={deleting}
               aria-label={`删除 ${ entry.name }`}
-              onClick={event => {
-                event.stopPropagation()
-                void onDelete()
-              }}
+              onClick={event => void handleDelete(event)}
             />
           </Tooltip>
         </div>

@@ -156,6 +156,12 @@ struct FolderUploadPlan {
     skipped_entries: usize,
 }
 
+struct RemoteDeleteTarget {
+    path: PathBuf,
+    display_path: String,
+    is_directory: bool,
+}
+
 struct OpenSession {
     session: Session,
     host_key: HostKeyInfo,
@@ -633,6 +639,230 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     })
 }
 
+fn remote_delete_display_path(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn collect_remote_delete_plan(
+    state: &SshState,
+    connection_id: &str,
+    sftp: &Sftp,
+    remote_path: &Path,
+) -> Result<Vec<RemoteDeleteTarget>, SshError> {
+    // Build the plan with lstat so a symbolic link to a directory is deleted
+    // as a link and never followed outside the user-selected tree.
+    let mut pending = vec![(
+        remote_path.to_path_buf(),
+        remote_delete_display_path(remote_path),
+    )];
+    let mut files = Vec::new();
+    let mut directories = Vec::new();
+
+    while let Some((path, display_path)) = pending.pop() {
+        let stat = match sftp.lstat(&path) {
+            Ok(stat) => stat,
+            // A concurrent client may have already removed an entry. It does
+            // not need to be part of the plan because the desired end state
+            // has already been reached.
+            Err(error) if is_sftp_missing_path(&error) => continue,
+            Err(error) => {
+                mark_ssh_error_if_connection_lost(state, connection_id, &error);
+                return Err(SshError::FileOperationFailed(format!(
+                    "无法读取远程项目“{}”: {error}",
+                    path.display()
+                )));
+            }
+        };
+
+        if !stat.is_dir() {
+            files.push(RemoteDeleteTarget {
+                path,
+                display_path,
+                is_directory: false,
+            });
+            continue;
+        }
+
+        directories.push(RemoteDeleteTarget {
+            path: path.clone(),
+            display_path: display_path.clone(),
+            is_directory: true,
+        });
+        let entries = sftp.readdir(&path).map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, connection_id, &error);
+            SshError::FileOperationFailed(format!(
+                "读取远程文件夹“{}”失败: {error}",
+                path.display()
+            ))
+        })?;
+
+        for (listed_path, _) in entries {
+            let name = listed_path.file_name().ok_or_else(|| {
+                SshError::FileOperationFailed(format!(
+                    "无法识别远程文件夹“{}”中的项目名称",
+                    path.display()
+                ))
+            })?;
+            if name == "." || name == ".." {
+                continue;
+            }
+            let child_name = name.to_string_lossy();
+            pending.push((path.join(name), format!("{display_path}/{child_name}")));
+        }
+    }
+
+    // Parents are visited before descendants. Reverse the directory portion
+    // so every directory is removed only after its contents are gone.
+    directories.reverse();
+    files.extend(directories);
+    Ok(files)
+}
+
+fn delete_progress(
+    state: &SshState,
+    connection_id: &str,
+    operation_id: Option<&str>,
+    file_name: &str,
+    item_index: usize,
+    item_total: usize,
+    phase: &str,
+) {
+    let Some(operation_id) = operation_id else {
+        return;
+    };
+    let progress = if phase == "cleaning" {
+        100
+    } else if item_total == 0 {
+        0
+    } else {
+        (((item_index.saturating_add(1)).saturating_mul(100)) / item_total).min(100)
+    };
+    emit_event(
+        &state.app_handle,
+        "delete-progress",
+        json!({
+            "id": connection_id,
+            "operationId": operation_id,
+            "progress": progress,
+            "fileName": file_name,
+            "itemIndex": item_index,
+            "itemTotal": item_total,
+            "phase": phase
+        }),
+    );
+}
+
+fn delete_remote_path(
+    state: &SshState,
+    connection_id: &str,
+    sftp: &Sftp,
+    remote_path: &Path,
+    operation_id: Option<&str>,
+) -> Result<(), SshError> {
+    let root_name = remote_delete_display_path(remote_path);
+    delete_progress(
+        state,
+        connection_id,
+        operation_id,
+        &root_name,
+        0,
+        0,
+        "scanning",
+    );
+    let plan = collect_remote_delete_plan(state, connection_id, sftp, remote_path)?;
+    let file_total = plan.iter().filter(|target| !target.is_directory).count();
+    let mut file_index = 0usize;
+    let mut cleaning_started = false;
+
+    for target in plan.iter() {
+        if target.is_directory && !cleaning_started {
+            delete_progress(
+                state,
+                connection_id,
+                operation_id,
+                &target.display_path,
+                file_index,
+                file_total,
+                "cleaning",
+            );
+            cleaning_started = true;
+        }
+        let result = if target.is_directory {
+            sftp.rmdir(&target.path)
+        } else {
+            sftp.unlink(&target.path)
+        };
+        if let Err(error) = result {
+            if is_sftp_missing_path(&error) {
+                if !target.is_directory {
+                    delete_progress(
+                        state,
+                        connection_id,
+                        operation_id,
+                        &target.display_path,
+                        file_index,
+                        file_total,
+                        "deleting",
+                    );
+                    file_index = file_index.saturating_add(1);
+                }
+                continue;
+            }
+            mark_ssh_error_if_connection_lost(state, connection_id, &error);
+            let action = if target.is_directory {
+                "删除远程文件夹"
+            } else {
+                "删除远程项目"
+            };
+            return Err(SshError::FileOperationFailed(format!(
+                "{action}“{}”失败: {error}",
+                target.path.display()
+            )));
+        }
+        if !target.is_directory {
+            delete_progress(
+                state,
+                connection_id,
+                operation_id,
+                &target.display_path,
+                file_index,
+                file_total,
+                "deleting",
+            );
+            file_index = file_index.saturating_add(1);
+        }
+    }
+    Ok(())
+}
+
+fn run_delete(
+    state: &SshState,
+    session: &Arc<Mutex<Session>>,
+    connection_id: &str,
+    remote_path: &str,
+    operation_id: &str,
+) -> Result<(), SshError> {
+    let session = session
+        .lock()
+        .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, connection_id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
+    drop(session);
+
+    delete_remote_path(
+        state,
+        connection_id,
+        &sftp,
+        Path::new(remote_path),
+        Some(operation_id),
+    )
+}
+
 fn ensure_remote_directory(
     state: &SshState,
     connection_id: &str,
@@ -1055,17 +1285,37 @@ pub fn sftp_delete(
     id: String,
     remote_path: String,
     is_directory: bool,
+    operation_id: Option<String>,
 ) -> Result<bool, SshError> {
-    let sftp = sftp_for(&state, &id)?;
-    if is_directory {
-        sftp.rmdir(Path::new(&remote_path))
-    } else {
-        sftp.unlink(Path::new(&remote_path))
-    }
-    .map_err(|error| {
-        mark_ssh_error_if_connection_lost(&state, &id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
+    let _ = is_directory;
+    let session = session_for(&state, &id)?;
+    let operation_id = operation_id.unwrap_or_else(|| format!("delete-{}", uuid_fallback()));
+    let state_handle = state.inner().clone();
+    let connection_id = id.clone();
+    let operation_id_for_thread = operation_id.clone();
+    thread::spawn(move || {
+        let result = run_delete(
+            &state_handle,
+            &session,
+            &connection_id,
+            &remote_path,
+            &operation_id_for_thread,
+        );
+        let (success, message) = match result {
+            Ok(()) => (true, "删除成功".to_string()),
+            Err(error) => (false, error.to_string()),
+        };
+        emit_event(
+            &state_handle.app_handle,
+            "delete-complete",
+            json!({
+                "id": connection_id,
+                "operationId": operation_id_for_thread,
+                "success": success,
+                "message": message
+            }),
+        );
+    });
     Ok(true)
 }
 

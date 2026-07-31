@@ -126,6 +126,22 @@
   color: #aaa69d;
 }
 
+.transfer-inline-status.is-operation {
+  flex-basis: min(440px, 48%);
+  min-width: 260px;
+}
+
+.transfer-inline-status.is-operation .transfer-inline-file {
+  max-width: 132px;
+}
+
+.transfer-inline-message {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .transfer-inline-cancel.ant-btn {
   display: inline-flex;
   width: 22px;
@@ -142,6 +158,10 @@
     flex-basis: 50%;
     min-width: 210px;
     gap: 5px;
+  }
+
+  .transfer-inline-status.is-operation {
+    min-width: 210px;
   }
 
   .transfer-inline-file {
