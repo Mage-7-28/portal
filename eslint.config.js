@@ -26,6 +26,8 @@ export default [
         document: 'readonly',
         setTimeout: 'readonly',
         TextDecoder: 'readonly',
+        URL: 'readonly',
+        Worker: 'readonly',
         window: 'readonly'
       }
     },

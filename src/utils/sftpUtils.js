@@ -223,10 +223,26 @@ class SftpManager {
     return true
   }
 
-  async getRemoteFileContent(connectionId, remotePath) {
+  async getRemoteFileContent(connectionId, remotePath, previewId, onProgress) {
     this.requireConnected(connectionId)
-    const result = await invoke('get_sftp_file_content', { id: connectionId, remotePath })
-    return new Uint8Array(result)
+    let unlistenProgress
+    try {
+      if (onProgress && previewId) {
+        unlistenProgress = await listen('preview-progress', event => {
+          const payload = event.payload || {}
+          if (payload.id !== connectionId || payload.previewId !== previewId) return
+          onProgress(payload.progress, payload)
+        })
+      }
+      const result = await invoke('get_sftp_file_content', {
+        id: connectionId,
+        remotePath,
+        previewId: previewId || null
+      })
+      return new Uint8Array(result)
+    } finally {
+      unlistenProgress?.()
+    }
   }
 
   async listRemoteDirectory(connectionId, remotePath) {

@@ -103,6 +103,137 @@ html,
   font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+.preview-loading {
+  display: flex;
+  min-height: 170px;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: center;
+  gap: 9px;
+  padding: 8px 4px;
+  color: #d9d5cc;
+  font-size: 12px;
+  text-align: center;
+}
+
+.preview-progress {
+  margin: 0 5px;
+  line-height: 1;
+}
+
+.preview-progress .ant-progress-inner {
+  height: 9px;
+  overflow: hidden;
+  border: 1px solid #4a443b;
+  border-radius: 999px;
+  background: #35322d;
+}
+
+.preview-progress .ant-progress-bg {
+  height: 100% !important;
+  border-radius: 999px;
+  background: #eb9070 !important;
+  background: lab(68.9646% 33.16 32.3692) !important;
+  box-shadow: none;
+}
+
+.preview-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 5px;
+  color: #aaa69d;
+  font-size: 10.5px;
+}
+
+.preview-note {
+  margin-bottom: 7px;
+  color: #aaa69d;
+  font-size: 10.5px;
+  line-height: 16px;
+}
+
+.image-preview-shell {
+  display: flex;
+  min-height: 180px;
+  max-height: min(70vh, 680px);
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #3c3f41;
+  border-radius: 4px;
+  background: #171717;
+}
+
+.image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: min(65vh, 640px);
+  object-fit: contain;
+}
+
+.code-preview {
+  max-height: min(65vh, 640px);
+  overflow: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.code-preview .token.comment,
+.code-preview .token.prolog,
+.code-preview .token.doctype,
+.code-preview .token.cdata {
+  color: #8f927f;
+}
+
+.code-preview .token.punctuation {
+  color: #bdb8ad;
+}
+
+.code-preview .token.property,
+.code-preview .token.tag,
+.code-preview .token.boolean,
+.code-preview .token.number,
+.code-preview .token.constant,
+.code-preview .token.symbol {
+  color: #c99f80;
+}
+
+.code-preview .token.selector,
+.code-preview .token.attr-name,
+.code-preview .token.string,
+.code-preview .token.char,
+.code-preview .token.builtin {
+  color: #a8bd8f;
+}
+
+.code-preview .token.operator,
+.code-preview .token.entity,
+.code-preview .token.url,
+.code-preview .language-css .token.string,
+.code-preview .style .token.string {
+  color: #c8bda9;
+}
+
+.code-preview .token.atrule,
+.code-preview .token.attr-value,
+.code-preview .token.keyword {
+  color: #d6a477;
+}
+
+.code-preview .token.function,
+.code-preview .token.class-name {
+  color: #d5b47a;
+}
+
+.code-preview .token.regex,
+.code-preview .token.important,
+.code-preview .token.variable {
+  color: #d07878;
+}
+
 .ant-btn {
   display: inline-flex;
   align-items: center;

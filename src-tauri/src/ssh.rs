@@ -590,13 +590,41 @@ pub fn list_sftp_directory(
     Ok(files)
 }
 
-#[tauri::command]
-pub fn get_sftp_file_content(
-    state: State<SshState>,
+fn preview_progress(
+    state: &SshState,
+    connection_id: &str,
+    preview_id: Option<&str>,
+    current: u64,
+    total: u64,
+) {
+    let Some(preview_id) = preview_id else {
+        return;
+    };
+    let progress = if total == 0 {
+        100
+    } else {
+        ((current.saturating_mul(100)) / total).min(100)
+    };
+    emit_event(
+        &state.app_handle,
+        "preview-progress",
+        json!({
+            "id": connection_id,
+            "previewId": preview_id,
+            "progress": progress,
+            "current": current,
+            "total": total
+        }),
+    );
+}
+
+fn read_sftp_file_content(
+    state: &SshState,
     id: String,
     remote_path: String,
+    preview_id: Option<String>,
 ) -> Result<Vec<u8>, SshError> {
-    let sftp = sftp_for(&state, &id)?;
+    let sftp = sftp_for(state, &id)?;
     let mut file = sftp
         .open(Path::new(&remote_path))
         .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
@@ -609,14 +637,42 @@ pub fn get_sftp_file_content(
         return Err(SshError::PreviewTooLarge);
     }
     let mut content = Vec::with_capacity(size.min(MAX_PREVIEW_BYTES) as usize);
-    let mut limited_file = file.take(MAX_PREVIEW_BYTES.saturating_add(1));
-    limited_file
-        .read_to_end(&mut content)
-        .map_err(|error| SshError::ReadFailed(error.to_string()))?;
-    if content.len() as u64 > MAX_PREVIEW_BYTES {
-        return Err(SshError::PreviewTooLarge);
+    let mut reader = file.take(MAX_PREVIEW_BYTES.saturating_add(1));
+    let mut buffer = vec![0_u8; TRANSFER_BUFFER_SIZE];
+    let mut current = 0_u64;
+    preview_progress(state, &id, preview_id.as_deref(), current, size);
+    // Read in chunks so the UI can receive progress events during slow SFTP reads.
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .map_err(|error| SshError::ReadFailed(error.to_string()))?;
+        if read == 0 {
+            break;
+        }
+        content.extend_from_slice(&buffer[..read]);
+        current = current.saturating_add(read as u64);
+        if current > MAX_PREVIEW_BYTES {
+            return Err(SshError::PreviewTooLarge);
+        }
+        preview_progress(state, &id, preview_id.as_deref(), current, size);
     }
+    preview_progress(state, &id, preview_id.as_deref(), current, size);
     Ok(content)
+}
+
+#[tauri::command]
+pub async fn get_sftp_file_content(
+    state: State<'_, SshState>,
+    id: String,
+    remote_path: String,
+    preview_id: Option<String>,
+) -> Result<Vec<u8>, SshError> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        read_sftp_file_content(&state, id, remote_path, preview_id)
+    })
+    .await
+    .map_err(|error| SshError::ReadFailed(format!("预览任务失败: {error}")))?
 }
 
 #[tauri::command]

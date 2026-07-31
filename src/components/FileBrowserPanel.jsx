@@ -1,10 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { Modal } from 'antd'
+import { Modal, Progress } from 'antd'
 import toast from 'react-hot-toast'
 import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
 import { StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
+import { formatFileSize } from '../utils/common.js'
+import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
 import PasswordPromptModal from './PasswordPromptModal.jsx'
@@ -71,11 +73,34 @@ function FileBrowserPanel() {
   const [ connectingId, setConnectingId ] = useState(null)
   const [ preview, setPreview ] = useState(null)
   const [ previewLoading, setPreviewLoading ] = useState(false)
+  const [ previewStage, setPreviewStage ] = useState('reading')
+  const [ previewTargetName, setPreviewTargetName ] = useState('')
+  const [ previewProgress, setPreviewProgress ] = useState(null)
   const requestId = useRef(0)
+  const previewRequestId = useRef(0)
+  const previewUrlRef = useRef(null)
+
+  const releasePreviewUrl = () => {
+    if (!previewUrlRef.current) return
+    window.URL.revokeObjectURL(previewUrlRef.current)
+    previewUrlRef.current = null
+  }
+
+  const closePreview = () => {
+    previewRequestId.current += 1
+    releasePreviewUrl()
+    setPreview(null)
+    setPreviewTargetName('')
+    setPreviewProgress(null)
+    setPreviewLoading(false)
+    setPreviewStage('reading')
+  }
 
   useEffect(() => {
     void loadConnections()
   }, [])
+
+  useEffect(() => () => releasePreviewUrl(), [])
 
   const loadConnections = async () => {
     const saved = await store.get(StoreKeys.SSH_CONNECTIONS)
@@ -211,8 +236,7 @@ function FileBrowserPanel() {
     setHomeDir('')
     setDrives([])
     setError(null)
-    setPreview(null)
-    setPreviewLoading(false)
+    closePreview()
     setLoading(false)
   }
 
@@ -252,15 +276,80 @@ function FileBrowserPanel() {
       await loadRemoteDirectory(joinRemotePath(currentPath, entry.name))
       return
     }
+    const descriptor = getPreviewDescriptor(entry.name)
+    if (descriptor.kind === 'unsupported') {
+      toast.error(`暂不支持预览“${ entry.name }”，请下载后使用本地应用打开`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      return
+    }
+    if (Number(entry.size) > MAX_PREVIEW_BYTES) {
+      toast.error(`文件超过 ${ formatFileSize(MAX_PREVIEW_BYTES) } 的预览限制，请下载后打开`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      return
+    }
+    const currentPreviewRequest = ++previewRequestId.current
+    const previewId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `preview-${ Date.now() }-${ Math.random().toString(16).slice(2) }`
+    releasePreviewUrl()
+    setPreview(null)
+    setPreviewTargetName(entry.name)
+    setPreviewProgress({ current: 0, total: Number(entry.size) || 0, percent: 0 })
+    setPreviewStage('reading')
     setPreviewLoading(true)
     try {
-      const bytes = await sftpManager.getRemoteFileContent(currentConnectionId, joinRemotePath(currentPath, entry.name))
-      const content = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
-      setPreview({ name: entry.name, content })
+      const bytes = await sftpManager.getRemoteFileContent(
+        currentConnectionId,
+        joinRemotePath(currentPath, entry.name),
+        previewId,
+        (progress, payload) => {
+          if (currentPreviewRequest !== previewRequestId.current) return
+          setPreviewProgress(previous => ({
+            current: Number(payload.current) || previous?.current || 0,
+            total: Number(payload.total) || previous?.total || 0,
+            percent: Number(progress) || 0
+          }))
+        }
+      )
+      if (currentPreviewRequest !== previewRequestId.current) return
+
+      if (descriptor.kind === 'image') {
+        const objectUrl = window.URL.createObjectURL(new window.Blob([bytes], { type: descriptor.mime }))
+        previewUrlRef.current = objectUrl
+        setPreview({
+          kind: 'image',
+          name: entry.name,
+          url: objectUrl,
+          mime: descriptor.mime
+        })
+      } else {
+        const content = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
+        setPreviewStage('processing')
+        const jsonPreview = descriptor.language === 'json' ? await formatJsonPreviewAsync(content) : null
+        const displayContent = jsonPreview?.content ?? content
+        const highlighted = descriptor.kind === 'code'
+          ? await highlightCode(displayContent, descriptor.language)
+          : null
+        if (currentPreviewRequest !== previewRequestId.current) return
+        setPreview({
+          kind: descriptor.kind,
+          name: entry.name,
+          content: displayContent,
+          html: highlighted?.html,
+          plainContent: highlighted?.content,
+          highlighted: highlighted?.highlighted,
+          language: descriptor.language,
+          formattedJson: jsonPreview?.formatted || false
+        })
+      }
     } catch (previewError) {
-      toast.error(`预览失败：${ normalizeError(previewError) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      if (currentPreviewRequest === previewRequestId.current) {
+        toast.error(`预览失败：${ normalizeError(previewError) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      }
     } finally {
-      setPreviewLoading(false)
+      if (currentPreviewRequest === previewRequestId.current) {
+        setPreviewLoading(false)
+        setPreviewProgress(null)
+        setPreviewStage('reading')
+      }
     }
   }
 
@@ -302,6 +391,58 @@ function FileBrowserPanel() {
     toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
   }
 
+  const renderPreviewContent = () => {
+    if (previewLoading) {
+      const current = previewProgress?.current || 0
+      const total = previewProgress?.total || 0
+      const percent = previewProgress?.percent || 0
+      return (
+        <div className="preview-loading">
+          <span>{previewStage === 'processing' ? '正在整理预览...' : '正在读取文件...'}</span>
+          <Progress
+            className="preview-progress"
+            percent={total > 0 ? percent : 0}
+            status="active"
+            showInfo={false}
+          />
+          <div className="preview-progress-meta">
+            <span>{total > 0 ? `${ formatFileSize(current) } / ${ formatFileSize(total) }` : '正在建立传输通道'}</span>
+            {total > 0 && <span>{percent}%</span>}
+          </div>
+        </div>
+      )
+    }
+    if (!preview) return null
+    if (preview.kind === 'image') {
+      return (
+        <div className="image-preview-shell">
+          <img className="image-preview" src={preview.url} alt={preview.name} />
+        </div>
+      )
+    }
+    if (preview.kind === 'code') {
+      return (
+        <>
+          {!preview.highlighted && (
+            <div className="preview-note">
+              {preview.formattedJson ? 'JSON 已格式化显示；文件较大，已关闭语法高亮以保持流畅。' : '文件较大或语法规则不可用，已关闭语法高亮。'}
+            </div>
+          )}
+          {/* Keep large unhighlighted files as a text node instead of building HTML. */}
+          {preview.highlighted ? (
+            <pre
+              className="file-preview code-preview"
+              dangerouslySetInnerHTML={{ __html: preview.html || '' }}
+            />
+          ) : (
+            <pre className="file-preview code-preview">{preview.plainContent ?? preview.content}</pre>
+          )}
+        </>
+      )
+    }
+    return <pre className="file-preview">{preview.content}</pre>
+  }
+
   if (currentConnectionId && currentConnection) {
     return (
       <>
@@ -326,14 +467,15 @@ function FileBrowserPanel() {
           handleDisconnect={handleDisconnect}
         />
         <Modal
-          title={`预览：${ preview?.name || '' }`}
+          rootClassName="compact-modal preview-modal"
+          title={`预览：${ preview?.name || previewTargetName || '' }`}
           open={Boolean(preview) || previewLoading}
-          onCancel={() => setPreview(null)}
+          onCancel={closePreview}
           footer={null}
           width="min(900px, calc(100vw - 32px))"
           destroyOnHidden
         >
-          {previewLoading ? '读取中...' : <pre className="file-preview">{preview?.content}</pre>}
+          {renderPreviewContent()}
         </Modal>
         <PasswordPromptModal
           visible={Boolean(passwordPrompt)}
