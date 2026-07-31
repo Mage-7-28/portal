@@ -851,6 +851,64 @@ html,
   margin-top: 12px;
 }
 
+.about-modal .ant-modal-content {
+  padding: 18px 18px 14px;
+}
+
+.about-modal .ant-modal-close {
+  top: 7px;
+}
+
+.about-modal .ant-modal-footer {
+  margin-top: 14px;
+  padding-top: 11px;
+  border-top: 1px solid #3c3f41;
+  text-align: center;
+}
+
+.about-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 4px 10px 0;
+  text-align: center;
+}
+
+.about-logo {
+  display: block;
+  width: 82px;
+  height: 82px;
+  object-fit: contain;
+}
+
+.about-title {
+  margin: 9px 0 2px;
+  color: #f0ede6;
+  font-size: 21px;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.about-description {
+  margin: 0;
+  color: #c5c0b6;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.about-meta {
+  display: flex;
+  width: 100%;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 16px;
+  padding-top: 11px;
+  border-top: 1px solid #3c3f41;
+  color: #aaa69d;
+  font-size: 11px;
+  line-height: 16px;
+}
+
 .compact-form .ant-form-item {
   margin-bottom: 10px;
 }

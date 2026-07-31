@@ -9,6 +9,11 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn exit_application(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[derive(serde::Serialize)]
 struct FileEntry {
     name: String,
@@ -124,6 +129,7 @@ pub fn run() {
         .manage(ssh::SshState::default())
         .invoke_handler(tauri::generate_handler![
             greet,
+            exit_application,
             get_home_dir,
             read_directory,
             get_platform,
@@ -159,7 +165,11 @@ pub fn run() {
                 // 创建菜单项
                 let about_item = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
                 let separator = PredefinedMenuItem::separator(app)?;
-                let quit_shortcut = if cfg!(target_os = "macos") { "Cmd+Q" } else { "Ctrl+Q" };
+                let quit_shortcut = if cfg!(target_os = "macos") {
+                    "Cmd+Q"
+                } else {
+                    "Ctrl+Q"
+                };
                 let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some(quit_shortcut))?;
                 let download_path_item =
                     MenuItem::with_id(app, "download-path", "选择下载路径", true, None::<&str>)?;
@@ -192,26 +202,19 @@ pub fn run() {
                 app.set_menu(menu)?;
 
                 // 绑定菜单事件
-                app.on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "about" => {
-                            // 显示关于对话框
-                            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                            app.dialog()
-                                .message("        Portal 应用\n        版本: 0.1.0\n\n        一个现代化的跨平台桌面应用")
-                                .title("关于 Portal")
-                                .buttons(MessageDialogButtons::OkCustom("确定".to_string()))
-                                .show(|_| {});
-                        }
-                        "quit" => app.exit(0),
-                        "download-path" => {
-                            let _ = app.emit("menu-download-path", ());
-                        }
-
-                        _ => {}
+                app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "about" => {
+                        let _ = app.emit("menu-about", ());
                     }
-                });
+                    "quit" => {
+                        let _ = app.emit("menu-request-exit", ());
+                    }
+                    "download-path" => {
+                        let _ = app.emit("menu-download-path", ());
+                    }
 
+                    _ => {}
+                });
             }
             Ok(())
         })

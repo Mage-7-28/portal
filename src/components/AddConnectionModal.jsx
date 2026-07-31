@@ -141,7 +141,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
             label={<span><CloudServerOutlined /> 主机地址</span>}
             rules={[{ required: true, whitespace: true, message: '请输入主机地址' }]}
           >
-            <Input placeholder="example.com 或 192.168.1.10" />
+            <Input placeholder="xxx.xxx.xxx.xxx" />
           </Form.Item>
           <Form.Item
             name="port"
