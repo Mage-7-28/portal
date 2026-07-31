@@ -46,6 +46,9 @@ const ProgressMask = () => {
     phase = '',
     onCancel
   } = maskData
+  const downloadQueueLabel = operation === 'download' && Number(queueTotal) > 1
+    ? `（第 ${ Number(queueIndex) + 1 }/${ queueTotal } 个）`
+    : ''
 
   const handleCancel = async () => {
     if (!onCancel || cancelling) return
@@ -130,7 +133,7 @@ const ProgressMask = () => {
         </div>
 
         <Text style={styles.title}>
-          {operation === 'download' ? '下载中' : '上传中'}
+          {operation === 'download' ? `下载中${ downloadQueueLabel }` : '上传中'}
         </Text>
 
         <Text style={styles.fileName} ellipsis={{ tooltip: fileName }}>

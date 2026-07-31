@@ -1,6 +1,6 @@
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Upload } from 'antd'
-import { DeleteOutlined, DisconnectOutlined, DownOutlined, FileOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
+import { DeleteOutlined, DisconnectOutlined, DownloadOutlined, DownOutlined, FileOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
 import FileItem from './FileItem'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -58,6 +58,7 @@ const FileBrowser = ({
   handleCreateDirectory,
   handleDeleteItem,
   handleDeleteItems,
+  handleDownloadItems,
   handleRenameItem,
   handleDriveSelect,
   handleDisconnect
@@ -74,6 +75,7 @@ const FileBrowser = ({
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
+  const [ batchDownloading, setBatchDownloading ] = React.useState(false)
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
@@ -97,7 +99,7 @@ const FileBrowser = ({
   }, [ currentPath, files ])
 
   const handleItemSelect = (entry, event) => {
-    if (batchDeleting) return
+    if (batchDeleting || batchDownloading) return
     const key = getEntryKey(entry)
     if (!key) return
     const currentIndex = files.findIndex(item => getEntryKey(item) === key)
@@ -124,7 +126,7 @@ const FileBrowser = ({
   }
 
   const handleBatchDelete = async () => {
-    if (batchDeleting || selectedKeys.length < 2 || !handleDeleteItems) return
+    if (batchDeleting || batchDownloading || selectedKeys.length < 2 || !handleDeleteItems) return
     const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
     if (selectedEntries.length < 2) return
     setBatchDeleting(true)
@@ -135,6 +137,19 @@ const FileBrowser = ({
       }
     } finally {
       setBatchDeleting(false)
+    }
+  }
+
+  const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
+
+  const handleBatchDownload = async () => {
+    if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
+    if (selectedEntries.some(entry => entry.isDirectory)) return
+    setBatchDownloading(true)
+    try {
+      await handleDownloadItems(selectedEntries)
+    } finally {
+      setBatchDownloading(false)
     }
   }
 
@@ -512,11 +527,28 @@ const FileBrowser = ({
       {selectedKeys.length > 1 && (
         <div className="selection-action-bar" role="toolbar" aria-label="批量操作">
           <span className="selection-count">已选择 {selectedKeys.length} 项</span>
+          <Tooltip title={selectedEntries.some(entry => entry.isDirectory) ? '批量下载暂不支持文件夹' : '批量下载选中的文件'}>
+            <span>
+              <Button
+                size="small"
+                icon={<DownloadOutlined />}
+                loading={batchDownloading}
+                disabled={batchDeleting || batchDownloading || selectedEntries.some(entry => entry.isDirectory)}
+                onClick={event => {
+                  event.stopPropagation()
+                  void handleBatchDownload()
+                }}
+              >
+                批量下载
+              </Button>
+            </span>
+          </Tooltip>
           <Button
             danger
             size="small"
             icon={<DeleteOutlined />}
             loading={batchDeleting}
+            disabled={batchDownloading}
             onClick={event => {
               event.stopPropagation()
               void handleBatchDelete()

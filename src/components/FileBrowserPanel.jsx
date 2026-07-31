@@ -6,6 +6,7 @@ import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
 import { SftpConnectionStatus, StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
+import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
@@ -443,6 +444,136 @@ function FileBrowserPanel() {
     await loadRemoteDirectory(currentPath)
   }
 
+  const handleDownloadItems = async (entries) => {
+    if (!Array.isArray(entries) || entries.length < 2) return false
+    if (entries.some(entry => entry.isDirectory)) {
+      toast.error('批量下载目前仅支持文件，请不要选择文件夹', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      return false
+    }
+
+    let downloadPath
+    try {
+      downloadPath = await resolveDownloadPath()
+      if (!downloadPath) return false
+    } catch (error) {
+      toast.error(`下载失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      return false
+    }
+
+    const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
+    const omittedCount = entries.length - Math.min(entries.length, 3)
+    const accepted = await confirm(
+      `确定下载选中的 ${ entries.length } 个文件吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n保存到：${ downloadPath }`,
+      {
+        title: '确认批量下载',
+        kind: 'warning',
+        okLabel: '下载全部',
+        cancelLabel: '取消'
+      }
+    )
+    if (!accepted) return false
+
+    const failedEntries = []
+    let downloadedCount = 0
+    let skippedCount = 0
+    let transferId = null
+    let cancelled = false
+    const publishProgress = (progress, entry, queueIndex) => {
+      PubSubBusinessKeyEnum.SEND_MASK({
+        progress: Math.round(Number(progress) || 0),
+        fileName: entry.name,
+        operation: 'download',
+        queueIndex,
+        queueTotal: entries.length,
+        pendingCount: Math.max(entries.length - queueIndex - 1, 0),
+        onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
+      })
+    }
+    const downloadOne = async (entry, queueIndex, overwrite) => {
+      transferId = null
+      const remotePath = joinRemotePath(currentPath, entry.name)
+      const localPath = joinLocalPath(downloadPath, entry.name)
+      publishProgress(0, entry, queueIndex)
+      try {
+        await sftpManager.downloadFile(
+          currentConnectionId,
+          remotePath,
+          localPath,
+          progress => publishProgress(progress, entry, queueIndex),
+          overwrite,
+          id => {
+            transferId = id
+            publishProgress(0, entry, queueIndex)
+          }
+        )
+      } finally {
+        transferId = null
+      }
+    }
+
+    try {
+      for (const [ queueIndex, entry ] of entries.entries()) {
+        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        try {
+          await downloadOne(entry, queueIndex, false)
+          downloadedCount += 1
+          continue
+        } catch (downloadError) {
+          const message = normalizeError(downloadError)
+          if (!message.includes('已存在')) {
+            failedEntries.push({ entry, error: message })
+            cancelled = message.includes('传输已取消')
+            if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+            continue
+          }
+
+          const overwriteAccepted = await confirm(
+            `本地文件已存在：\n${ joinLocalPath(downloadPath, entry.name) }\n是否覆盖？`,
+            {
+              title: '确认覆盖',
+              kind: 'warning',
+              okLabel: '覆盖',
+              cancelLabel: '跳过'
+            }
+          )
+          if (!overwriteAccepted) {
+            skippedCount += 1
+            continue
+          }
+          try {
+            await downloadOne(entry, queueIndex, true)
+            downloadedCount += 1
+          } catch (retryError) {
+            const retryMessage = normalizeError(retryError)
+            failedEntries.push({ entry, error: retryMessage })
+            cancelled = retryMessage.includes('传输已取消')
+            if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+          }
+        }
+      }
+    } finally {
+      transferId = null
+      PubSubBusinessKeyEnum.SEND_MASK(null)
+    }
+
+    if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+      return false
+    }
+    if (failedEntries.length === 0 && skippedCount === 0 && downloadedCount === entries.length) {
+      toast.success(`已下载 ${ entries.length } 个文件`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      return true
+    }
+    const failedNames = failedEntries.map(item => item.entry.name).join('、')
+    const summary = `已下载 ${ downloadedCount } 个文件${ skippedCount > 0 ? `，跳过 ${ skippedCount } 个` : '' }${ failedEntries.length > 0 ? `，${ failedEntries.length } 个失败` : '' }`
+    const summaryMessage = `${ summary }${ failedNames ? `：${ failedNames }` : '' }`
+    if (failedEntries.length > 0) {
+      toast.error(summaryMessage, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } else {
+      toast.success(summaryMessage, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    }
+    return false
+  }
+
   const deleteRemoteEntry = async (entry, status, options = {}) => {
     const {
       queueIndex = 0,
@@ -666,6 +797,7 @@ function FileBrowserPanel() {
           handleCreateDirectory={handleCreateDirectory}
           handleDeleteItem={handleDeleteItem}
           handleDeleteItems={handleDeleteItems}
+          handleDownloadItems={handleDownloadItems}
           handleRenameItem={handleRenameItem}
           handleDriveSelect={path => void loadRemoteDirectory(path)}
           handleDisconnect={handleDisconnect}

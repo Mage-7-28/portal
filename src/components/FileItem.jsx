@@ -2,11 +2,10 @@ import React, { useState } from 'react'
 import { Button, Input, List, Modal, Tooltip } from 'antd'
 import { DeleteOutlined, DownloadOutlined, EditOutlined, FileOutlined, FolderOutlined } from '@ant-design/icons'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import * as dialog from '@tauri-apps/plugin-dialog'
-import { formatFileSize, PubSubBusinessKeyEnum, StoreKeys } from '../utils/common'
+import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
-import { store } from '../utils/storeUtils.js'
+import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 
 const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActivate, onDelete, onRename }) => {
   const [ downloading, setDownloading ] = useState(false)
@@ -16,28 +15,14 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
   const [ renaming, setRenaming ] = useState(false)
 
   const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
-  const joinLocalPath = (base, name) => {
-    const separator = base.includes('\\') && !base.includes('/') ? '\\' : '/'
-    return `${ base.replace(/[\\/]+$/, '') }${ separator }${ name }`
-  }
 
   const handleDownload = async (event) => {
     event.stopPropagation()
     if (downloading) return
     let downloadPath
     try {
-      downloadPath = await store.get(StoreKeys.DOWNLOAD_PATH)
-      if (!downloadPath) {
-        const selected = await dialog.open({
-          title: '选择本地下载目录',
-          directory: true,
-          multiple: false,
-          canCreateDirectories: true
-        })
-        if (typeof selected !== 'string' || !selected) return
-        await store.set(StoreKeys.DOWNLOAD_PATH, selected)
-        downloadPath = selected
-      }
+      downloadPath = await resolveDownloadPath()
+      if (!downloadPath) return
     } catch (error) {
       notification.error('下载失败', error.message || error.toString() || '无法选择本地下载目录')
       return
