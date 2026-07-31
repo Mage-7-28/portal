@@ -40,6 +40,8 @@ const ProgressMask = () => {
     queueTotal = 1,
     pendingCount = 0,
     overallProgress,
+    folderQueueIndex,
+    folderQueueTotal,
     message = '',
     phase = '',
     onCancel
@@ -63,7 +65,9 @@ const ProgressMask = () => {
       : (isDirectoryUpload ? '上传文件夹' : '上传中')
     const showItemPosition = !isMutation || (operation === 'delete' && phase === 'deleting' && queueTotal > 0)
     const pendingLabel = isDirectoryUpload && Number.isFinite(overallProgress)
-      ? `总进度 ${ Math.round(overallProgress) }% · 待上传 ${ pendingCount } 个`
+      ? Number(folderQueueTotal) > 0
+        ? `总进度 ${ Math.round(overallProgress) }% · 文件待处理 ${ Math.max(Number(folderQueueTotal) - Number(folderQueueIndex) - 1, 0) } 个`
+        : `队列待处理 ${ pendingCount } 个`
       : `待上传 ${ pendingCount } 个`
     return (
       <div
@@ -75,7 +79,9 @@ const ProgressMask = () => {
           <span className="transfer-inline-position">
             {operation === 'delete'
               ? `第 ${ queueIndex + 1 }/${ queueTotal } 个文件`
-              : `${ queueIndex + 1 }/${ queueTotal }`}
+              : isDirectoryUpload && Number(folderQueueTotal) > 0
+                ? `项目 ${ queueIndex + 1 }/${ queueTotal } · 文件 ${ Math.min(Number(folderQueueIndex) + 1, Number(folderQueueTotal)) }/${ folderQueueTotal }`
+                : `项目 ${ queueIndex + 1 }/${ queueTotal }`}
           </span>
         )}
         <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>

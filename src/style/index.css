@@ -860,6 +860,120 @@ html,
   line-height: 22px;
 }
 
+.upload-picker-actions {
+  display: flex;
+  margin-bottom: 9px;
+}
+
+.upload-drop-zone.ant-upload-drag {
+  overflow: hidden;
+  border: 1px dashed #5a554b;
+  border-radius: 5px;
+  background: #1d1d1d;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.upload-drop-zone.ant-upload-drag:hover,
+.upload-drop-zone.ant-upload-drag.is-dragging {
+  border-color: #b47b58;
+  background: #24211e;
+}
+
+.upload-drop-zone .ant-upload {
+  padding: 0;
+}
+
+.upload-drop-content {
+  display: flex;
+  min-height: 128px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  padding: 12px 10px;
+  color: #ddd8cf;
+  font-size: 12px;
+}
+
+.upload-drop-content small {
+  color: #aaa69d;
+  font-size: 10.5px;
+}
+
+.upload-drop-content .upload-drop-empty {
+  color: #c9c3b9;
+}
+
+.upload-drop-icon {
+  color: #c08a66;
+  font-size: 20px;
+}
+
+.upload-drop-hint {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border-bottom: 1px solid #3c3f41;
+  color: #c9c3b9;
+  font-size: 11px;
+}
+
+.upload-drop-hint-icon {
+  color: #c08a66;
+  font-size: 14px;
+}
+
+.upload-picker-list {
+  max-height: min(280px, 42vh);
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  background: #1d1d1d;
+}
+
+.upload-picker-list .ant-list-item {
+  min-height: 42px;
+  padding: 5px 8px;
+}
+
+.upload-picker-list .ant-list-item-meta {
+  min-width: 0;
+  align-items: center;
+}
+
+.upload-picker-list .ant-list-item-meta-avatar {
+  margin-inline-end: 8px;
+}
+
+.upload-picker-list .ant-list-item-meta-title,
+.upload-picker-list .ant-list-item-meta-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-picker-list .ant-list-item-meta-title {
+  margin-bottom: 1px;
+  color: #e8e5de;
+  font-size: 12px;
+}
+
+.upload-picker-list .ant-list-item-meta-description {
+  color: #aaa69d;
+  font-size: 10.5px;
+}
+
+.upload-picker-item-icon {
+  color: #d0cdc5;
+  font-size: 14px;
+}
+
+.upload-picker-item-icon.is-directory {
+  color: #7ea886;
+}
+
 .compact-modal .ant-modal-close {
   top: 9px;
   inset-inline-end: 10px;

@@ -22,6 +22,13 @@ struct FileEntry {
     size: u64,
 }
 
+#[derive(serde::Serialize)]
+struct LocalPathEntry {
+    path: String,
+    #[serde(rename = "isDirectory")]
+    is_directory: bool,
+}
+
 #[tauri::command]
 fn get_home_dir() -> Result<String, String> {
     dirs::home_dir()
@@ -66,6 +73,28 @@ fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
         }
         Err(e) => Err(format!("Failed to read directory: {}", e)),
     }
+}
+
+#[tauri::command]
+fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
+    paths
+        .into_iter()
+        .map(|path| {
+            let metadata = std::fs::symlink_metadata(&path)
+                .map_err(|error| format!("无法读取本地路径“{path}”: {error}"))?;
+            let file_type = metadata.file_type();
+            if file_type.is_symlink() {
+                return Err(format!("不支持拖拽符号链接: {path}"));
+            }
+            if !metadata.is_file() && !metadata.is_dir() {
+                return Err(format!("不支持的本地项目类型: {path}"));
+            }
+            Ok(LocalPathEntry {
+                path,
+                is_directory: metadata.is_dir(),
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -132,6 +161,7 @@ pub fn run() {
             exit_application,
             get_home_dir,
             read_directory,
+            inspect_local_paths,
             get_platform,
             list_drives,
             ssh::test_sftp_connection,

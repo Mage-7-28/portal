@@ -1,7 +1,9 @@
 import React from 'react'
-import { Alert, Button, Dropdown, Input, List, Modal, Spin, Tooltip } from 'antd'
-import { DisconnectOutlined, DownOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
+import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Upload } from 'antd'
+import { DeleteOutlined, DisconnectOutlined, DownOutlined, FileOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
 import FileItem from './FileItem'
+import { invoke } from '@tauri-apps/api/core'
+import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
@@ -12,6 +14,19 @@ const localPathName = (path) => String(path || '')
   .replace(/[\\/]+$/, '')
   .split(/[\\/]/)
   .pop() || ''
+
+const normalizeSelectedPaths = (result) => {
+  const paths = result ? (Array.isArray(result) ? result : [result]) : []
+  return [...new Set(paths.filter(path => typeof path === 'string' && path))]
+}
+
+const mergeUploadItems = (previous, items) => {
+  const existingPaths = new Set(previous.map(item => item.localPath))
+  return [
+    ...previous,
+    ...items.filter(item => !existingPaths.has(item.localPath))
+  ]
+}
 
 const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
@@ -38,7 +53,12 @@ const FileBrowser = ({
   const [ directoryModalOpen, setDirectoryModalOpen ] = React.useState(false)
   const [ directoryName, setDirectoryName ] = React.useState('')
   const [ directorySubmitting, setDirectorySubmitting ] = React.useState(false)
-  const [ folderUploading, setFolderUploading ] = React.useState(false)
+  const [ uploadModalOpen, setUploadModalOpen ] = React.useState(false)
+  const [ uploadItems, setUploadItems ] = React.useState([])
+  const [ uploadPicking, setUploadPicking ] = React.useState(null)
+  const [ uploadSubmitting, setUploadSubmitting ] = React.useState(false)
+  const [ uploadDragActive, setUploadDragActive ] = React.useState(false)
+  const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
 
   const submitDirectory = async () => {
     const name = directoryName.trim()
@@ -54,152 +74,214 @@ const FileBrowser = ({
       setDirectorySubmitting(false)
     }
   }
-  const handleUpload = async () => {
-    let uploadQueue = []
+  const handleUpload = () => {
+    if (uploadSubmitting) return
+    setUploadItems([])
+    setUploadModalOpen(true)
+  }
+
+  const addUploadItems = async (kind) => {
+    if (uploadPicking || uploadSubmitting) return
+    setUploadPicking(kind)
     try {
       const result = await dialog.open({
-        title: '选择要上传的文件',
+        title: kind === 'directory' ? '选择要上传的文件夹' : '选择要上传的文件',
         multiple: true,
-        directory: false
+        directory: kind === 'directory',
+        recursive: kind === 'directory'
       })
-      const paths = result ? (Array.isArray(result) ? result : [result]) : []
-      uploadQueue = paths
+      const items = normalizeSelectedPaths(result)
         .map(localPath => ({
           localPath,
-          fileName: localPathName(localPath)
+          fileName: localPathName(localPath),
+          kind
         }))
         .filter(item => item.fileName)
+      setUploadItems(previous => mergeUploadItems(previous, items))
+    } catch (error) {
+      notification.error(
+        kind === 'directory' ? '添加文件夹失败' : '添加文件失败',
+        error.message || error.toString() || '未知错误'
+      )
+    } finally {
+      setUploadPicking(null)
+    }
+  }
 
-      for (const [ queueIndex, { localPath, fileName }] of uploadQueue.entries()) {
+  const handleDroppedPaths = React.useCallback(async (paths) => {
+    if (!uploadModalOpen || uploadSubmitting || uploadDropProcessing || !paths?.length) return
+    setUploadDropProcessing(true)
+    try {
+      const entries = await invoke('inspect_local_paths', { paths })
+      const items = (Array.isArray(entries) ? entries : [])
+        .map(entry => ({
+          localPath: entry.path,
+          fileName: localPathName(entry.path),
+          kind: entry.isDirectory ? 'directory' : 'file'
+        }))
+        .filter(item => item.fileName && typeof item.localPath === 'string')
+      if (items.length > 0) {
+        setUploadItems(previous => mergeUploadItems(previous, items))
+      }
+    } catch (error) {
+      notification.error('添加拖拽内容失败', error.message || error.toString() || '无法读取拖拽路径')
+    } finally {
+      setUploadDropProcessing(false)
+    }
+  }, [ uploadDropProcessing, uploadModalOpen, uploadSubmitting ])
+
+  React.useEffect(() => {
+    if (!uploadModalOpen) {
+      setUploadDragActive(false)
+      return undefined
+    }
+
+    let disposed = false
+    let unlisten
+    const registerDragDrop = async () => {
+      try {
+        const dispose = await getCurrentWebview().onDragDropEvent(event => {
+          if (disposed) return
+          const payload = event.payload
+          if (payload.type === 'enter' || payload.type === 'over') {
+            setUploadDragActive(true)
+          } else if (payload.type === 'leave') {
+            setUploadDragActive(false)
+          } else if (payload.type === 'drop') {
+            setUploadDragActive(false)
+            void handleDroppedPaths(payload.paths)
+          }
+        })
+        if (disposed) {
+          dispose()
+        } else {
+          unlisten = dispose
+        }
+      } catch {
+        // Browser previews do not expose Tauri's native file-drop event.
+      }
+    }
+    void registerDragDrop()
+
+    return () => {
+      disposed = true
+      unlisten?.()
+      setUploadDragActive(false)
+    }
+  }, [ handleDroppedPaths, uploadModalOpen ])
+
+  const startUploadQueue = async (uploadQueue) => {
+    if (uploadSubmitting || uploadQueue.length === 0) return
+    const duplicateNames = uploadQueue
+      .map(item => item.fileName)
+      .filter((name, index, names) => names.indexOf(name) !== index)
+    if (duplicateNames.length > 0) {
+      notification.error(
+        '无法开始上传',
+        `选择的文件和文件夹存在同名项目：${ [...new Set(duplicateNames)].join('、') }`
+      )
+      return
+    }
+
+    setUploadSubmitting(true)
+    setUploadModalOpen(false)
+    try {
+      for (const [ queueIndex, item ] of uploadQueue.entries()) {
+        const { localPath, fileName, kind } = item
         if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
         let transferId = null
         let overwrite = false
-        const publishProgress = progress => {
-          PubSubBusinessKeyEnum.SEND_MASK({
-            progress,
-            fileName,
-            operation: 'upload',
-            queueIndex,
-            queueTotal: uploadQueue.length,
-            pendingCount: Math.max(uploadQueue.length - queueIndex - 1, 0),
-            onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
-          })
+        const existing = files.find(entry => entry.name === fileName)
+        if (existing && ((kind === 'directory' && !existing.isDirectory)
+          || (kind === 'file' && existing.isDirectory))) {
+          notification.error(
+            '上传失败',
+            `远程目录中已存在类型不同的同名项目：${ fileName }`
+          )
+          continue
         }
-        if (files.some(entry => entry.name === fileName)) {
-          overwrite = await confirm(`远程目录中已存在“${ fileName }”，是否覆盖？`, {
-            title: '确认覆盖',
-            kind: 'warning',
-            okLabel: '覆盖',
-            cancelLabel: '取消'
-          })
+        if (existing) {
+          overwrite = await confirm(
+            kind === 'directory'
+              ? `远程目录中已存在文件夹“${ fileName }”，是否合并并覆盖其中的同名文件？`
+              : `远程目录中已存在“${ fileName }”，是否覆盖？`,
+            {
+              title: '确认覆盖',
+              kind: 'warning',
+              okLabel: kind === 'directory' ? '合并并覆盖' : '覆盖',
+              cancelLabel: '取消'
+            }
+          )
           if (!overwrite) continue
         }
         const remotePath = joinRemotePath(currentPath, fileName)
+        const publishProgress = (progress, payload = {}) => {
+          const fileTotal = Number(payload.fileTotal) || 0
+          const fileIndex = Number(payload.fileIndex) || 0
+          PubSubBusinessKeyEnum.SEND_MASK({
+            progress,
+            overallProgress: kind === 'directory' && Number.isFinite(Number(payload.overallProgress))
+              ? Number(payload.overallProgress)
+              : undefined,
+            fileName: payload.fileName || fileName,
+            operation: kind === 'directory' ? 'upload-directory' : 'upload',
+            queueIndex,
+            queueTotal: uploadQueue.length,
+            pendingCount: Math.max(uploadQueue.length - queueIndex - 1, 0),
+            folderQueueIndex: kind === 'directory' ? fileIndex : undefined,
+            folderQueueTotal: kind === 'directory' ? fileTotal : undefined,
+            onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
+          })
+        }
         publishProgress(0)
         try {
-          await sftpManager.uploadFile(currentConnectionId, localPath, remotePath, progress => {
-            publishProgress(Math.round(progress))
-          }, overwrite, id => {
-            transferId = id
-            publishProgress(0)
-          })
-          notification.success('上传成功', `文件 ${ fileName } 上传成功`)
+          if (kind === 'directory') {
+            await sftpManager.uploadDirectory(
+              currentConnectionId,
+              localPath,
+              remotePath,
+              (progress, payload) => publishProgress(Math.round(progress), payload),
+              overwrite,
+              id => {
+                transferId = id
+                publishProgress(0)
+              }
+            )
+            notification.success('上传成功', `文件夹 ${ fileName } 上传成功`)
+          } else {
+            await sftpManager.uploadFile(
+              currentConnectionId,
+              localPath,
+              remotePath,
+              progress => publishProgress(Math.round(progress)),
+              overwrite,
+              id => {
+                transferId = id
+                publishProgress(0)
+              }
+            )
+            notification.success('上传成功', `文件 ${ fileName } 上传成功`)
+          }
         } catch (error) {
-          notification.error('上传失败', `文件 ${ fileName } 上传失败：${ error.message || error.toString() || '未知错误' }`)
-          if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+          notification.error(
+            '上传失败',
+            `${ kind === 'directory' ? '文件夹' : '文件' } ${ fileName } 上传失败：${ error.message || error.toString() || '未知错误' }`
+          )
+          const errorMessage = error.message || error.toString() || ''
+          if (errorMessage.includes('传输已取消')
+            || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+            break
+          }
         }
       }
-      if (uploadQueue.length > 0
-        && sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
+      if (sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
         handleRefresh()
       }
     } catch (error) {
       notification.error('上传文件失败', error.message || error.toString() || '未知错误')
     } finally {
-      if (uploadQueue.length > 0) PubSubBusinessKeyEnum.SEND_MASK(null)
-    }
-  }
-
-  const handleUploadDirectory = async () => {
-    if (folderUploading) return
-
-    let folderName = ''
-    try {
-      const selected = await dialog.open({
-        title: '选择要上传的文件夹',
-        multiple: false,
-        directory: true
-      })
-      if (typeof selected !== 'string' || !selected) return
-
-      folderName = localPathName(selected)
-      if (!folderName) {
-        throw new Error('无法识别所选文件夹名称')
-      }
-
-      const existing = files.find(entry => entry.name === folderName)
-      if (existing && !existing.isDirectory) {
-        notification.error('上传文件夹失败', `远程目录中已存在同名文件：${ folderName }`)
-        return
-      }
-
-      let overwrite = false
-      if (existing) {
-        overwrite = await confirm(
-          `远程目录中已存在“${ folderName }”，是否合并上传并覆盖其中的同名文件？`,
-          {
-            title: '确认合并文件夹',
-            kind: 'warning',
-            okLabel: '合并并覆盖',
-            cancelLabel: '取消'
-          }
-        )
-        if (!overwrite) return
-      }
-
-      const remotePath = joinRemotePath(currentPath, folderName)
-      let transferId = null
-      const publishProgress = (progress, payload = {}) => {
-        const fileTotal = Number(payload.fileTotal) || 0
-        const fileIndex = Number(payload.fileIndex) || 0
-        PubSubBusinessKeyEnum.SEND_MASK({
-          progress,
-          overallProgress: Number.isFinite(Number(payload.overallProgress))
-            ? Number(payload.overallProgress)
-            : undefined,
-          fileName: payload.fileName || folderName,
-          operation: 'upload-directory',
-          queueIndex: fileTotal > 0 ? Math.min(fileIndex, fileTotal - 1) : 0,
-          queueTotal: fileTotal || 1,
-          pendingCount: fileTotal > 0 ? Math.max(fileTotal - fileIndex - 1, 0) : 0,
-          onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
-        })
-      }
-
-      setFolderUploading(true)
-      publishProgress(0)
-      const message = await sftpManager.uploadDirectory(
-        currentConnectionId,
-        selected,
-        remotePath,
-        (progress, payload) => publishProgress(Math.round(progress), payload),
-        overwrite,
-        id => {
-          transferId = id
-          publishProgress(0)
-        }
-      )
-      notification.success('文件夹上传成功', message || `文件夹 ${ folderName } 上传成功`)
-      if (sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
-        handleRefresh()
-      }
-    } catch (error) {
-      notification.error(
-        '上传文件夹失败',
-        `文件夹 ${ folderName || '所选文件夹' } 上传失败：${ error.message || error.toString() || '未知错误' }`
-      )
-    } finally {
-      setFolderUploading(false)
+      setUploadSubmitting(false)
+      setUploadItems([])
       PubSubBusinessKeyEnum.SEND_MASK(null)
     }
   }
@@ -281,16 +363,8 @@ const FileBrowser = ({
           </span>
         </div>
         <div className="connection-actions">
-          <Button size="small" icon={<UploadOutlined />} onClick={handleUpload}>
+          <Button size="small" icon={<UploadOutlined />} loading={uploadSubmitting} onClick={handleUpload}>
             上传
-          </Button>
-          <Button
-            size="small"
-            icon={<FolderOutlined />}
-            loading={folderUploading}
-            onClick={handleUploadDirectory}
-          >
-            上传文件夹
           </Button>
           <Button
             size="small"
@@ -344,6 +418,90 @@ const FileBrowser = ({
           />
         )}
       </div>
+      <Modal
+        rootClassName="compact-modal upload-modal"
+        title="选择上传内容"
+        open={uploadModalOpen}
+        onCancel={() => setUploadModalOpen(false)}
+        onOk={() => void startUploadQueue([...uploadItems])}
+        okText="开始上传"
+        cancelText="取消"
+        okButtonProps={{ disabled: uploadItems.length === 0 }}
+        width="min(520px, calc(100vw - 24px))"
+        destroyOnHidden
+      >
+        <Space className="upload-picker-actions" size={6}>
+          <Button
+            icon={<FileOutlined />}
+            loading={uploadPicking === 'file'}
+            onClick={() => void addUploadItems('file')}
+          >
+            添加文件
+          </Button>
+          <Button
+            icon={<FolderOutlined />}
+            loading={uploadPicking === 'directory'}
+            onClick={() => void addUploadItems('directory')}
+          >
+            添加文件夹
+          </Button>
+        </Space>
+        <Upload.Dragger
+          className={`upload-drop-zone${ uploadDragActive ? ' is-dragging' : '' }`}
+          openFileDialogOnClick={false}
+          showUploadList={false}
+          multiple
+          beforeUpload={() => false}
+          onDrop={event => event.preventDefault()}
+        >
+          {uploadItems.length === 0 ? (
+            <div className="upload-drop-content">
+              <InboxOutlined className="upload-drop-icon" />
+              <span>{uploadDropProcessing ? '正在读取拖拽内容...' : '拖拽文件或文件夹到这里'}</span>
+              <small className="upload-drop-empty">尚未选择上传内容</small>
+              <small>也可以使用上方按钮选择</small>
+            </div>
+          ) : (
+            <>
+              <div className="upload-drop-hint">
+                <InboxOutlined className="upload-drop-hint-icon" />
+                <span>{uploadDropProcessing ? '正在读取拖拽内容...' : '继续拖拽内容到此处添加'}</span>
+              </div>
+              <div className="upload-picker-list">
+                <List
+                  size="small"
+                  dataSource={uploadItems}
+                  rowKey={item => item.localPath}
+                  renderItem={item => (
+                    <List.Item
+                      actions={[
+                        <Tooltip key="remove" title="移除">
+                          <Button
+                            type="text"
+                            danger
+                            size="small"
+                            icon={<DeleteOutlined />}
+                            aria-label={`移除 ${ item.fileName }`}
+                            onClick={() => setUploadItems(previous => previous.filter(current => current.localPath !== item.localPath))}
+                          />
+                        </Tooltip>
+                      ]}
+                    >
+                      <List.Item.Meta
+                        avatar={item.kind === 'directory'
+                          ? <FolderOutlined className="upload-picker-item-icon is-directory" />
+                          : <FileOutlined className="upload-picker-item-icon" />}
+                        title={item.fileName}
+                        description={item.localPath}
+                      />
+                    </List.Item>
+                  )}
+                />
+              </div>
+            </>
+          )}
+        </Upload.Dragger>
+      </Modal>
       <Modal
         rootClassName="compact-modal"
         title="新建远程文件夹"
