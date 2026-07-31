@@ -443,6 +443,48 @@ function FileBrowserPanel() {
     await loadRemoteDirectory(currentPath)
   }
 
+  const deleteRemoteEntry = async (entry, status, options = {}) => {
+    const {
+      queueIndex = 0,
+      queueTotal = 1,
+      showBatchPosition = false
+    } = options
+    await sftpManager.deleteRemoteItem(
+      currentConnectionId,
+      joinRemotePath(currentPath, entry.name),
+      entry.isDirectory,
+      (progress, payload = {}) => {
+        const itemTotal = Number(payload.itemTotal) || 0
+        const itemIndex = Number(payload.itemIndex) || 0
+        const phase = payload.phase || 'deleting'
+        const currentItem = payload.fileName || entry.name
+        let operationMessage = itemTotal > 0 ? '正在删除文件...' : '正在删除...'
+        if (phase === 'scanning') operationMessage = '正在扫描文件夹...'
+        if (phase === 'cleaning') operationMessage = '正在清理文件夹...'
+        if (showBatchPosition && itemTotal > 0) {
+          operationMessage += ` (${ Math.min(itemIndex + 1, itemTotal) }/${ itemTotal })`
+        }
+        status.update(
+          Math.round(Number(progress) || 0),
+          showBatchPosition
+            ? `第 ${ queueIndex + 1 }/${ queueTotal } 项：${ operationMessage }`
+            : operationMessage,
+          {
+            phase,
+            fileName: currentItem,
+            queueIndex: showBatchPosition
+              ? queueIndex
+              : (itemTotal > 0 ? Math.min(itemIndex, itemTotal - 1) : 0),
+            queueTotal: showBatchPosition ? queueTotal : (itemTotal > 0 ? itemTotal : 1),
+            pendingCount: showBatchPosition
+              ? Math.max(queueTotal - queueIndex - 1, 0)
+              : (itemTotal > 0 ? Math.max(itemTotal - itemIndex - 1, 0) : 0)
+          }
+        )
+      }
+    )
+  }
+
   const handleDeleteItem = async (entry) => {
     const description = entry.isDirectory
       ? `确定删除文件夹“${ entry.name }”及其所有内容吗？此操作无法撤销。`
@@ -458,38 +500,73 @@ function FileBrowserPanel() {
     const status = createOperationStatus('delete', entry.name)
     status.start(entry.isDirectory ? '正在删除文件夹及其内容...' : '正在删除文件...')
     try {
-      await sftpManager.deleteRemoteItem(
-        currentConnectionId,
-        joinRemotePath(currentPath, entry.name),
-        entry.isDirectory,
-        (progress, payload = {}) => {
-          const itemTotal = Number(payload.itemTotal) || 0
-          const itemIndex = Number(payload.itemIndex) || 0
-          const phase = payload.phase || 'deleting'
-          const currentItem = payload.fileName || entry.name
-          const hasItems = itemTotal > 0
-          let operationMessage = hasItems ? '正在删除文件...' : '正在删除...'
-          if (phase === 'scanning') operationMessage = '正在扫描文件夹...'
-          if (phase === 'cleaning') operationMessage = '正在清理文件夹...'
-          status.update(
-            Math.round(Number(progress) || 0),
-            operationMessage,
-            {
-              phase,
-              fileName: currentItem,
-              queueIndex: hasItems ? Math.min(itemIndex, itemTotal - 1) : 0,
-              queueTotal: hasItems ? itemTotal : 1,
-              pendingCount: hasItems ? Math.max(itemTotal - itemIndex - 1, 0) : 0
-            }
-          )
-        }
-      )
+      await deleteRemoteEntry(entry, status)
       status.update(92, '正在刷新目录...', { phase: 'refreshing' })
       await loadRemoteDirectory(currentPath)
       toast.success('已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (deleteError) {
       const message = normalizeError(deleteError)
       toast.error(`删除失败：${ message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+    } finally {
+      status.dismiss()
+    }
+  }
+
+  const handleDeleteItems = async (entries) => {
+    if (!Array.isArray(entries) || entries.length < 2) return false
+    const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
+    const omittedCount = entries.length - Math.min(entries.length, 3)
+    const accepted = await confirm(
+      `确定删除选中的 ${ entries.length } 个项目吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n文件夹及其内容也会被删除，此操作无法撤销。`,
+      {
+        title: '批量删除远程项目',
+        kind: 'warning',
+        okLabel: '删除全部',
+        cancelLabel: '取消'
+      }
+    )
+    if (!accepted) return false
+
+    const status = createOperationStatus('delete', `${ entries.length } 个项目`)
+    status.start(`正在删除 ${ entries.length } 个项目...`)
+    const failedEntries = []
+    let deletedCount = 0
+    try {
+      for (const [ queueIndex, entry ] of entries.entries()) {
+        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        try {
+          await deleteRemoteEntry(entry, status, {
+            queueIndex,
+            queueTotal: entries.length,
+            showBatchPosition: true
+          })
+          deletedCount += 1
+        } catch (deleteError) {
+          failedEntries.push({ entry, error: normalizeError(deleteError) })
+          if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        }
+      }
+
+      if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+        return false
+      }
+      status.update(92, '正在刷新目录...', {
+        phase: 'refreshing',
+        queueIndex: entries.length,
+        queueTotal: entries.length,
+        pendingCount: 0
+      })
+      await loadRemoteDirectory(currentPath)
+      if (failedEntries.length === 0 && deletedCount === entries.length) {
+        toast.success(`已删除 ${ entries.length } 个项目`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        return true
+      }
+      const failedNames = failedEntries.map(item => item.entry.name).join('、')
+      toast.error(
+        `已删除 ${ deletedCount } 个项目，${ failedEntries.length } 个失败${ failedNames ? `：${ failedNames }` : '' }`,
+        { id: 'msgBoxGlobal', style: msgBoxStyle }
+      )
+      return false
     } finally {
       status.dismiss()
     }
@@ -588,6 +665,7 @@ function FileBrowserPanel() {
           handleItemClick={handleItemClick}
           handleCreateDirectory={handleCreateDirectory}
           handleDeleteItem={handleDeleteItem}
+          handleDeleteItems={handleDeleteItems}
           handleRenameItem={handleRenameItem}
           handleDriveSelect={path => void loadRemoteDirectory(path)}
           handleDisconnect={handleDisconnect}

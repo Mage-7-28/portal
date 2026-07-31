@@ -28,6 +28,8 @@ const mergeUploadItems = (previous, items) => {
   ]
 }
 
+const getEntryKey = (entry) => entry?.path || entry?.name || ''
+
 const isPositionInsideElement = (position, element) => {
   if (!position || !element || typeof window === 'undefined') return false
   const rect = element.getBoundingClientRect()
@@ -55,6 +57,7 @@ const FileBrowser = ({
   handleItemClick,
   handleCreateDirectory,
   handleDeleteItem,
+  handleDeleteItems,
   handleRenameItem,
   handleDriveSelect,
   handleDisconnect
@@ -69,8 +72,71 @@ const FileBrowser = ({
   const [ uploadDragActive, setUploadDragActive ] = React.useState(false)
   const [ directoryDropActive, setDirectoryDropActive ] = React.useState(false)
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
+  const [ selectedKeys, setSelectedKeys ] = React.useState([])
+  const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
+  const selectionAnchorRef = React.useRef(null)
+  const selectionPathRef = React.useRef(currentPath)
+
+  React.useEffect(() => {
+    if (selectionPathRef.current !== currentPath) {
+      selectionPathRef.current = currentPath
+      selectionAnchorRef.current = null
+      setSelectedKeys([])
+      return
+    }
+    const availableKeys = new Set(files.map(getEntryKey))
+    setSelectedKeys(previous => {
+      const next = previous.filter(key => availableKeys.has(key))
+      return next.length === previous.length ? previous : next
+    })
+    if (selectionAnchorRef.current && !availableKeys.has(selectionAnchorRef.current)) {
+      selectionAnchorRef.current = null
+    }
+  }, [ currentPath, files ])
+
+  const handleItemSelect = (entry, event) => {
+    if (batchDeleting) return
+    const key = getEntryKey(entry)
+    if (!key) return
+    const currentIndex = files.findIndex(item => getEntryKey(item) === key)
+    const anchorIndex = files.findIndex(item => getEntryKey(item) === selectionAnchorRef.current)
+    const rangeSelection = event.shiftKey && anchorIndex >= 0 && currentIndex >= 0
+      ? files
+        .slice(Math.min(anchorIndex, currentIndex), Math.max(anchorIndex, currentIndex) + 1)
+        .map(getEntryKey)
+      : null
+    const togglesSelection = event.ctrlKey || event.metaKey
+
+    if (rangeSelection) {
+      setSelectedKeys(previous => togglesSelection
+        ? [...new Set([ ...previous, ...rangeSelection ])]
+        : rangeSelection)
+    } else if (togglesSelection) {
+      setSelectedKeys(previous => previous.includes(key)
+        ? previous.filter(itemKey => itemKey !== key)
+        : [ ...previous, key ])
+    } else {
+      setSelectedKeys([key])
+    }
+    selectionAnchorRef.current = key
+  }
+
+  const handleBatchDelete = async () => {
+    if (batchDeleting || selectedKeys.length < 2 || !handleDeleteItems) return
+    const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
+    if (selectedEntries.length < 2) return
+    setBatchDeleting(true)
+    try {
+      if (await handleDeleteItems(selectedEntries)) {
+        selectionAnchorRef.current = null
+        setSelectedKeys([])
+      }
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
 
   const submitDirectory = async () => {
     const name = directoryName.trim()
@@ -433,7 +499,9 @@ const FileBrowser = ({
                 entry={entry}
                 currentPath={currentPath}
                 connectionId={currentConnectionId}
-                onClick={() => handleItemClick(entry)}
+                selected={selectedKeys.includes(getEntryKey(entry))}
+                onSelect={event => handleItemSelect(entry, event)}
+                onActivate={() => handleItemClick(entry)}
                 onDelete={() => handleDeleteItem(entry)}
                 onRename={name => handleRenameItem(entry, name)}
               />
@@ -441,6 +509,23 @@ const FileBrowser = ({
           />
         )}
       </div>
+      {selectedKeys.length > 1 && (
+        <div className="selection-action-bar" role="toolbar" aria-label="批量操作">
+          <span className="selection-count">已选择 {selectedKeys.length} 项</span>
+          <Button
+            danger
+            size="small"
+            icon={<DeleteOutlined />}
+            loading={batchDeleting}
+            onClick={event => {
+              event.stopPropagation()
+              void handleBatchDelete()
+            }}
+          >
+            批量删除
+          </Button>
+        </div>
+      )}
       <Modal
         rootClassName="compact-modal upload-modal"
         title="选择上传内容"

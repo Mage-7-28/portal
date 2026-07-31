@@ -605,6 +605,7 @@ html,
 
 .file-browser {
   display: flex;
+  position: relative;
   flex-direction: column;
   height: 100%;
   min-height: 0;
@@ -785,6 +786,7 @@ html,
 .file-item-row {
   cursor: pointer;
   outline: none;
+  user-select: none;
 }
 
 .file-list-item.ant-list-item {
@@ -797,6 +799,47 @@ html,
 .file-item-row:hover .file-list-item,
 .file-item-row:focus-visible .file-list-item {
   background: #252526;
+}
+
+.file-item-row.is-selected .file-list-item,
+.file-item-row.is-selected:hover .file-list-item {
+  background: #38312c;
+  box-shadow: inset 2px 0 0 lab(68.9646% 33.16 32.3692);
+}
+
+.file-item-row.is-selected .file-item-name,
+.file-item-row.is-selected .file-item-size {
+  color: #f0ede6;
+}
+
+.selection-action-bar {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 5px 7px 5px 13px;
+  border: 1px solid #51483f;
+  border-radius: 999px;
+  background: rgba(37, 35, 33, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+  color: #e8e5de;
+  transform: translateX(-50%);
+}
+
+.selection-count {
+  color: #d8d3c9;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.selection-action-bar .ant-btn {
+  height: 27px;
+  border-radius: 999px;
+  font-size: 11.5px;
 }
 
 .file-item-meta {

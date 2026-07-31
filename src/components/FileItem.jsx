@@ -8,7 +8,7 @@ import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { store } from '../utils/storeUtils.js'
 
-const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRename }) => {
+const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActivate, onDelete, onRename }) => {
   const [ downloading, setDownloading ] = useState(false)
   const [ deleting, setDeleting ] = useState(false)
   const [ renameOpen, setRenameOpen ] = useState(false)
@@ -153,21 +153,28 @@ const FileItem = ({ entry, currentPath, connectionId, onClick, onDelete, onRenam
 
   return (
     <div
-      className="file-item-row"
-      title={entry.isDirectory ? '单击进入目录' : '双击预览文件'}
-      onClick={entry.isDirectory ? onClick : undefined}
-      onDoubleClick={entry.isDirectory ? undefined : onClick}
+      className={`file-item-row${ selected ? ' is-selected' : '' }`}
+      title={entry.isDirectory ? '单击选择，双击进入目录' : '单击选择，双击预览文件'}
+      onClick={onSelect}
+      onDoubleClick={event => {
+        event.stopPropagation()
+        onActivate()
+      }}
       onKeyDown={event => {
         // Keyboard activation belongs to the row itself. Events from action
         // buttons and the rename modal must never activate the row.
         if (event.target !== event.currentTarget) return
-        if (event.key === 'Enter' || event.key === ' ') {
+        if (event.key === 'Enter') {
           event.preventDefault()
-          onClick()
+          onActivate()
+        } else if (event.key === ' ') {
+          event.preventDefault()
+          onSelect(event)
         }
       }}
       role="button"
       tabIndex={0}
+      aria-pressed={selected}
     >
       <List.Item
         className="file-list-item"
