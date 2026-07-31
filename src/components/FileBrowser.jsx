@@ -131,10 +131,10 @@ const FileBrowser = ({
     if (selectedEntries.length < 2) return
     setBatchDeleting(true)
     try {
-      if (await handleDeleteItems(selectedEntries)) {
+      await handleDeleteItems(selectedEntries, () => {
         selectionAnchorRef.current = null
         setSelectedKeys([])
-      }
+      })
     } finally {
       setBatchDeleting(false)
     }
@@ -146,7 +146,10 @@ const FileBrowser = ({
     if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
     setBatchDownloading(true)
     try {
-      await handleDownloadItems(selectedEntries)
+      await handleDownloadItems(selectedEntries, () => {
+        selectionAnchorRef.current = null
+        setSelectedKeys([])
+      })
     } finally {
       setBatchDownloading(false)
     }

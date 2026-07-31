@@ -444,7 +444,7 @@ function FileBrowserPanel() {
     await loadRemoteDirectory(currentPath)
   }
 
-  const handleDownloadItems = async (entries) => {
+  const handleDownloadItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
 
     let downloadPath
@@ -468,6 +468,7 @@ function FileBrowserPanel() {
       }
     )
     if (!accepted) return false
+    onConfirmed?.()
 
     const failedEntries = []
     let downloadedCount = 0
@@ -651,7 +652,7 @@ function FileBrowserPanel() {
     }
   }
 
-  const handleDeleteItems = async (entries) => {
+  const handleDeleteItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
     const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
     const omittedCount = entries.length - Math.min(entries.length, 3)
@@ -665,6 +666,7 @@ function FileBrowserPanel() {
       }
     )
     if (!accepted) return false
+    onConfirmed?.()
 
     const status = createOperationStatus('delete', `${ entries.length } 个项目`)
     status.start(`正在删除 ${ entries.length } 个项目...`)
