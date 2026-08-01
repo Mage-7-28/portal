@@ -20,8 +20,8 @@ const KEEPALIVE_INTERVAL_SECS: u32 = 30;
 const MAX_CONCURRENT_TRANSFERS: usize = 4;
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
 
-// Transport/SFTP codes from libssh2-sys. They are kept local to avoid adding
-// a second direct dependency when ssh2 already supplies the raw values.
+// libssh2-sys 中的传输和 SFTP 错误码。这里在本地维护，避免 ssh2 已提供原始值时
+// 再增加一个直接依赖。
 const LIBSSH2_ERROR_SOCKET_SEND: i32 = -7;
 const LIBSSH2_ERROR_TIMEOUT: i32 = -9;
 const LIBSSH2_ERROR_SOCKET_DISCONNECT: i32 = -13;
@@ -370,9 +370,8 @@ fn emit_event(
     }
 }
 
-// libssh2 exposes transport failures through numeric error codes. Keep the
-// list deliberately narrow so file/path/permission errors remain recoverable
-// without throwing the user back to the connection list.
+// libssh2 通过数字错误码暴露传输故障。这里有意只保留传输相关错误，
+// 让文件、路径和权限错误可以恢复，而不必把用户退回连接列表。
 fn is_connection_loss(error: &ssh2::Error) -> bool {
     match error.code() {
         ErrorCode::Session(code) => matches!(
@@ -422,8 +421,8 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
         })
         .unwrap_or(false);
 
-    // Dropping the cached session closes the broken transport. Active
-    // transfer tasks may still hold their own Arc until they finish.
+    // 丢弃缓存会话即可关闭已损坏的传输连接；正在进行的传输任务可能仍会持有
+    // 自己的 Arc，直到任务结束。
     state.connection_pool.write().unwrap().remove(id);
     if was_connected {
         emit_event(
@@ -586,9 +585,8 @@ fn join_remote_child_path(base_path: &str, name: &str) -> Result<String, SshErro
         ));
     }
 
-    // SFTP paths always use slash separators, even when the local desktop is
-    // running on Windows. Normalizing here keeps recursive downloads
-    // independent from the host platform's Path separator.
+    // SFTP 路径始终使用斜杠分隔符，即使桌面程序运行在 Windows 上也是如此。
+    // 在这里统一规范化，可以让递归下载不受本机 Path 分隔符影响。
     let mut remote_path = base_path.replace('\\', "/");
     while remote_path.len() > 1 && remote_path.ends_with('/') {
         remote_path.pop();
@@ -670,8 +668,8 @@ fn collect_folder_download_plan(
                 }
             };
             if child_stat.file_type() == ssh2::FileType::Symlink {
-                // Never follow a remote link while creating local paths. This
-                // also keeps the plan safe if a link points outside the tree.
+                // 创建本地路径时绝不跟随远程链接；即使链接指向目录树外，
+                // 也能保证处理计划的安全性。
                 plan.skipped_entries = plan.skipped_entries.saturating_add(1);
                 continue;
             }
@@ -719,8 +717,8 @@ fn rename_remote_file(
     match sftp.rename(source_path, target_path, Some(preferred_flags)) {
         Ok(()) => Ok(()),
         Err(error) if !is_rename_compatibility_error(&error) => Err(error),
-        // Some SFTP servers reject ATOMIC/NATIVE even though they support a
-        // regular overwrite rename. Retry with only the required flag first.
+        // 某些 SFTP 服务器虽然支持普通覆盖重命名，却会拒绝 ATOMIC/NATIVE 标志。
+        // 先仅使用必要标志重试。
         Err(error) if !overwrite => sftp
             .rename(source_path, target_path, Some(RenameFlags::empty()))
             .map_err(|fallback_error| {
@@ -743,9 +741,8 @@ fn rename_remote_file(
                 {
                     return Err(fallback_error);
                 }
-                // Older servers sometimes cannot overwrite through rename at
-                // all. This final fallback is only used after explicit
-                // overwrite semantics were requested for a non-directory.
+        // 较旧的服务器有时完全不支持通过重命名覆盖文件。只有在用户明确要求
+        // 覆盖非目录项目时，才使用这个最后的降级方案。
                 sftp.unlink(target_path)
                     .and_then(|_| sftp.rename(source_path, target_path, Some(RenameFlags::empty())))
                     .map_err(|fallback_error| {
@@ -795,8 +792,8 @@ fn collect_remote_delete_plan(
     sftp: &Sftp,
     remote_path: &Path,
 ) -> Result<Vec<RemoteDeleteTarget>, SshError> {
-    // Build the plan with lstat so a symbolic link to a directory is deleted
-    // as a link and never followed outside the user-selected tree.
+    // 使用 lstat 构建处理计划，这样指向目录的符号链接会作为链接删除，
+    // 不会跟随到用户选择目录之外。
     let mut pending = vec![(
         remote_path.to_path_buf(),
         remote_delete_display_path(remote_path),
@@ -807,9 +804,8 @@ fn collect_remote_delete_plan(
     while let Some((path, display_path)) = pending.pop() {
         let stat = match sftp.lstat(&path) {
             Ok(stat) => stat,
-            // A concurrent client may have already removed an entry. It does
-            // not need to be part of the plan because the desired end state
-            // has already been reached.
+            // 其他客户端可能已经删除了该项目。由于目标状态已经达到，
+            // 不需要再把它加入处理计划。
             Err(error) if is_sftp_missing_path(&error) => continue,
             Err(error) => {
                 mark_ssh_error_if_connection_lost(state, connection_id, &error);
@@ -857,8 +853,8 @@ fn collect_remote_delete_plan(
         }
     }
 
-    // Parents are visited before descendants. Reverse the directory portion
-    // so every directory is removed only after its contents are gone.
+    // 目录树先访问父目录再访问子项目；反转目录部分后，
+    // 每个目录都会在内容删除完成后再被删除。
     directories.reverse();
     files.extend(directories);
     Ok(files)
@@ -1025,8 +1021,8 @@ fn ensure_remote_directory(
             match sftp.mkdir(Path::new(remote_path), 0o755) {
                 Ok(()) => Ok(()),
                 Err(mkdir_error) => match sftp.stat(Path::new(remote_path)) {
-                    // Another client may have created the directory between stat
-                    // and mkdir. A confirmed merge can safely continue.
+                    // 其他客户端可能在 stat 和 mkdir 之间创建了目录；
+                    // 在已确认合并的情况下可以安全继续。
                     Ok(stat) if stat.is_dir() && allow_existing => Ok(()),
                     Ok(stat) if stat.is_dir() => Err(SshError::FileOperationFailed(format!(
                         "远程文件夹已存在: {remote_path}"
@@ -1255,8 +1251,8 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
 
     match result {
         Ok(_) => Ok(true),
-        // A non-blocking keepalive can temporarily report EAGAIN. The next
-        // probe will retry; it is not evidence that the SSH connection died.
+    // 非阻塞保活可能暂时返回 EAGAIN；下一次探测会重试，
+    // 这并不代表 SSH 连接已经断开。
         Err(error) if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN)) => Ok(true),
         Err(error) => {
             let message = error.to_string();
@@ -1372,7 +1368,7 @@ fn read_sftp_file_content(
     let mut buffer = vec![0_u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0_u64;
     preview_progress(state, &id, preview_id.as_deref(), current, size);
-    // Read in chunks so the UI can receive progress events during slow SFTP reads.
+    // 分块读取，让界面在 SFTP 读取较慢时仍能持续接收进度事件。
     loop {
         let read = reader.read(&mut buffer).map_err(|error| {
             mark_io_error_if_connection_lost(state, &id, &error);

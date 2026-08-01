@@ -1,4 +1,4 @@
-// Formats JSON for display only; the remote file is never modified.
+// JSON 格式化仅用于界面展示，不会修改远程文件内容。
 export const formatJsonContent = (content) => {
   const source = String(content || '').replace(/^\uFEFF/, '')
   try {

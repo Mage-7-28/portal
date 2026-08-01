@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { Button, List, Spin, Tooltip } from 'antd'
-import { CloudServerOutlined, DeleteOutlined, PlusOutlined } from '@ant-design/icons'
+import AppIcon from './AppIcon'
 import AddConnectionModal from './AddConnectionModal'
 
 const ConnectionList = ({
@@ -26,7 +26,7 @@ const ConnectionList = ({
         <Button
           type="primary"
           size="small"
-          icon={<PlusOutlined />}
+          icon={<AppIcon name="plus" />}
           onClick={() => setAddModalVisible(true)}
           disabled={Boolean(connectingId)}
         >
@@ -38,7 +38,7 @@ const ConnectionList = ({
         <div className={`connection-scroll${ connectingId ? ' is-connecting' : '' }`}>
           {connections.length === 0 ? (
             <div className="connection-empty">
-              <CloudServerOutlined />
+              <AppIcon name="ssh" />
               <span>暂无连接配置</span>
             </div>
           ) : (
@@ -67,7 +67,7 @@ const ConnectionList = ({
                         className="compact-icon-button"
                         danger
                         size="small"
-                        icon={<DeleteOutlined />}
+                        icon={<AppIcon name="trash" />}
                         aria-label={`删除 ${ item.name }`}
                         onClick={() => handleDeleteConnection(item.id)}
                         disabled={connectingId !== null}
@@ -76,7 +76,7 @@ const ConnectionList = ({
                   ]}
                 >
                   <List.Item.Meta
-                    avatar={<CloudServerOutlined className="connection-row-icon" />}
+                    avatar={<AppIcon name="ssh" className="connection-row-icon" />}
                     title={<span className="connection-row-name">{item.name}</span>}
                     description={
                       <span className="connection-row-endpoint">

@@ -3,15 +3,15 @@ import react from '@vitejs/plugin-react'
 
 const host = process.env.TAURI_DEV_HOST
 
-// https://vite.dev/config/
+// Vite 配置文档：https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
 
-  // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
+  // 以下配置专门适配 Tauri 开发与构建命令。
   //
-  // 1. prevent Vite from obscuring rust errors
+  // 1. 避免 Vite 清屏导致 Rust 错误信息被隐藏。
   clearScreen: false,
-  // 2. tauri expects a fixed port, fail if that port is not available
+  // 2. Tauri 需要固定端口，端口被占用时直接报错。
   server: {
     port: 1420,
     strictPort: true,
@@ -24,7 +24,7 @@ export default defineConfig(async () => ({
       }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
+      // 3. 忽略 src-tauri 目录的文件监听。
       ignored: ['**/src-tauri/**']
     }
   },

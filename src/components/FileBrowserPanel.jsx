@@ -151,8 +151,8 @@ function FileBrowserPanel() {
     })
   }), [resetRemoteView])
 
-  // SSH keepalive prevents idle NAT expiry; this active probe also detects a
-  // server shutdown while the user is looking at an otherwise idle directory.
+  // SSH 保活可以避免空闲 NAT 过期；主动探测也能在用户停留目录页面时
+  // 及时发现服务器关闭连接。
   useEffect(() => {
     if (!currentConnectionId) return undefined
     const connectionId = currentConnectionId
@@ -164,8 +164,8 @@ function FileBrowserPanel() {
       try {
         await sftpManager.checkConnection(connectionId)
       } catch {
-        // Rust emits ssh-disconnected for transport failures. The manager's
-        // local fallback covers runtimes where an event arrives late.
+        // Rust 会为传输故障发送 ssh-disconnected；如果事件延迟，连接管理器
+        // 的本地降级逻辑仍然可以发现连接状态变化。
         if (!disposed && sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
           resetRemoteView()
         }
@@ -307,8 +307,7 @@ function FileBrowserPanel() {
       if (!accepted) return
     }
     const connectionId = currentConnectionId
-    // Suppress an in-flight transport event while the user is intentionally
-    // disconnecting; only unexpected loss should show the reconnect notice.
+    // 用户主动断开时忽略正在传输中的连接事件；只有意外断开才显示重连提示。
     activeConnectionIdRef.current = null
     if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
     resetRemoteView()
@@ -728,7 +727,7 @@ function FileBrowserPanel() {
       await loadRemoteDirectory(currentPath)
       toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
     } catch (renameError) {
-      // Keep the modal open so the user can correct the name or retry.
+      // 保持弹窗打开，让用户修正名称或重新尝试。
       throw renameError
     } finally {
       status.dismiss()
@@ -772,7 +771,7 @@ function FileBrowserPanel() {
               {preview.formattedJson ? 'JSON 已格式化显示；文件较大，已关闭语法高亮以保持流畅。' : '文件较大或语法规则不可用，已关闭语法高亮。'}
             </div>
           )}
-          {/* Keep large unhighlighted files as a text node instead of building HTML. */}
+          {/* 大文件未高亮时直接渲染文本，避免额外构造 HTML。 */}
           {preview.highlighted ? (
             <pre
               className="file-preview code-preview"

@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { Button, Input, List, Modal, Tooltip } from 'antd'
-import { DeleteOutlined, DownloadOutlined, EditOutlined, FileOutlined, FolderOutlined } from '@ant-design/icons'
+import AppIcon from './AppIcon'
+import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
@@ -13,6 +14,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
   const [ renameOpen, setRenameOpen ] = useState(false)
   const [ renameValue, setRenameValue ] = useState(entry.name)
   const [ renaming, setRenaming ] = useState(false)
+  const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
 
   const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
@@ -149,8 +151,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
         onActivate()
       }}
       onKeyDown={event => {
-        // Keyboard activation belongs to the row itself. Events from action
-        // buttons and the rename modal must never activate the row.
+        // 键盘激活只属于当前文件行；操作按钮和重命名弹窗的事件不能激活文件行。
         if (event.target !== event.currentTarget) return
         if (event.key === 'Enter') {
           event.preventDefault()
@@ -170,9 +171,10 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
         <List.Item.Meta
           className="file-item-meta"
           avatar={
-            entry.isDirectory ?
-              <FolderOutlined className="file-type-icon is-directory" /> :
-              <FileOutlined className="file-type-icon" />
+            <AppIcon
+              name={fileIcon.name}
+              className={`file-type-icon is-${ fileIcon.type }`}
+            />
           }
           title={
             <span className={`file-item-name${ entry.isDirectory ? ' is-directory' : '' }`}>
@@ -188,7 +190,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
             <Button
               className="compact-icon-button"
               size="small"
-              icon={<DownloadOutlined />}
+              icon={<AppIcon name="download" />}
               loading={downloading}
               aria-label={`下载 ${ entry.name }`}
               onClick={handleDownload}
@@ -198,7 +200,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
             <Button
               className="compact-icon-button"
               size="small"
-              icon={<EditOutlined />}
+              icon={<AppIcon name="edit" />}
               aria-label={`重命名 ${ entry.name }`}
               onClick={event => {
                 event.stopPropagation()
@@ -212,7 +214,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
               className="compact-icon-button"
               danger
               size="small"
-              icon={<DeleteOutlined />}
+              icon={<AppIcon name="trash" />}
               loading={deleting}
               aria-label={`删除 ${ entry.name }`}
               onClick={event => void handleDelete(event)}

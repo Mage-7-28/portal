@@ -26,8 +26,8 @@ class SftpManager {
         this.handleConnectionLoss(event.payload || {})
       })
     } catch {
-      // The manager is also used by browser-side tooling where Tauri events
-      // are unavailable. Remote command errors still use the local fallback.
+      // 连接管理器也会被浏览器端工具使用，此时无法监听 Tauri 事件；
+      // 远程命令错误仍然通过本地降级逻辑处理。
     }
   }
 
@@ -263,7 +263,7 @@ class SftpManager {
           options.onProgress?.(payload.progress, payload)
         }
       }
-      // Register listeners before invoking the worker to avoid losing a fast completion event.
+      // 先注册监听器再调用工作线程，避免错过快速完成事件。
       if (options.onProgress) unlistenProgress = await listen(progressEvent, progressHandler)
       unlistenComplete = await listen(completeEvent, completeHandler)
       const command = direction === 'upload'

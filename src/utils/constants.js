@@ -46,9 +46,8 @@ export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
 export const MAX_CONCURRENT_TRANSFERS = 4
 
-// LAB is used by the browser-facing accent styles. Ant Design's FastColor
-// palette generator currently accepts RGB/HSL/hex values only, so it needs
-// the equivalent sRGB fallback when generating derived theme tokens.
+// LAB 用于浏览器界面的强调色样式。Ant Design 的 FastColor 调色板生成器
+// 目前只接受 RGB、HSL 和十六进制颜色，因此生成派生主题令牌时需要对应的 sRGB 降级色。
 export const THEME_PRIMARY_COLOR = 'lab(68.9646% 33.16 32.3692)'
 export const THEME_PRIMARY_COLOR_FALLBACK = '#eb9070'
 export const THEME_BG_PRIMARY = '#1f1f1f'
@@ -109,7 +108,7 @@ export const msgBoxStyle = {
   background: THEME_BG_SECONDARY,
   color: THEME_TEXT_PRIMARY,
   border: `1px solid ${ THEME_BORDER_COLOR }`,
-  fontSize: '13px'
+  fontSize: '14px'
 }
 
 export const headerStyle = {

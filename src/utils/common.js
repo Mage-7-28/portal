@@ -1,4 +1,4 @@
-// Backwards-compatible re-export. New code should import from constants.js.
+// 保留兼容性导出；新代码应直接从 constants.js 引入。
 export {
   GlobalFontFamily,
   StoreKeys,

@@ -2,9 +2,8 @@ import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
 
 /**
- * Small serialized wrapper around Tauri Store.
- * Secrets are deliberately not handled here; credentials stay in process
- * memory and are never written to the Tauri Store.
+ * 对 Tauri Store 的轻量串行封装。
+ * 这里不会处理敏感信息；凭据只保存在进程内存中，绝不写入 Tauri Store。
  */
 export class ReactiveStore {
   constructor(storePath = 'store.json') {
@@ -42,7 +41,7 @@ export class ReactiveStore {
   }
 
   enqueueWrite(operation) {
-    // A failed write must not permanently block all later settings changes.
+    // 单次写入失败不能永久阻塞后续设置变更。
     this.writeQueue = this.writeQueue.catch(() => undefined).then(operation)
     return this.writeQueue
   }

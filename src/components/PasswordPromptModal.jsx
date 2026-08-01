@@ -1,6 +1,6 @@
 import React, { useEffect } from 'react'
 import { Button, Form, Input, Modal } from 'antd'
-import { LockOutlined } from '@ant-design/icons'
+import AppIcon from './AppIcon'
 
 const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading }) => {
   const [form] = Form.useForm()
@@ -22,7 +22,7 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading 
     >
       <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>
         <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中">
-          <Input value={connection?.username || ''} readOnly prefix={<LockOutlined />} />
+          <Input value={connection?.username || ''} readOnly prefix={<AppIcon name="lock" />} />
         </Form.Item>
         <Form.Item
           name="password"
@@ -31,7 +31,12 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading 
             ? []
             : [{ required: true, message: '请输入密码' }]}
         >
-          <Input.Password autoFocus placeholder={connection?.authMethod === 'key' ? '无口令私钥可留空' : '请输入密码'} autoComplete="current-password" />
+          <Input.Password
+            autoFocus
+            placeholder={connection?.authMethod === 'key' ? '无口令私钥可留空' : '请输入密码'}
+            autoComplete="current-password"
+            iconRender={visible => <AppIcon name={visible ? 'eye' : 'eyeOff'} />}
+          />
         </Form.Item>
         <div className="modal-actions">
           <Button onClick={onCancel}>取消</Button>

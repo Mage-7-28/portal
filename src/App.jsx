@@ -146,10 +146,10 @@ function App() {
         colorLink: THEME_TEXT_LINK,
         borderRadius: 5,
         fontFamily: GlobalFontFamily,
-        fontSize: 13,
-        fontSizeSM: 12,
-        controlHeight: 30,
-        controlHeightSM: 26,
+        fontSize: 14,
+        fontSizeSM: 13,
+        controlHeight: 32,
+        controlHeightSM: 28,
         lineHeight: 1.4
       },
       algorithm: [ theme.darkAlgorithm, theme.compactAlgorithm ],
@@ -162,7 +162,7 @@ function App() {
           actionsBg: THEME_BG_SECONDARY
         },
         Modal: {
-          titleFontSize: 14
+          titleFontSize: 15
         }
       }
     } } locale={ zhCN } componentSize="small">

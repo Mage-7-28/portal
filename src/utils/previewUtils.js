@@ -219,7 +219,7 @@ let jsonWorker = null
 let jsonWorkerSequence = 0
 const jsonWorkerJobs = new Map()
 
-// Large JSON formatting runs off the render thread; small files stay synchronous.
+// 大型 JSON 格式化放到独立线程执行，小文件保持同步处理。
 const getJsonWorker = () => {
   if (jsonWorker) return jsonWorker
   jsonWorker = new Worker(

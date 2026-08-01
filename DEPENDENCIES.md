@@ -5,7 +5,8 @@ Portal 本身采用 MIT 许可证。依赖清单由 `license-checker` 生成并�
 
 ## 前端运行时
 
-- React、React DOM、Ant Design、Ant Design Icons、Vite、Valtio、PubSubJS、react-hot-toast、PrismJS：MIT
+- React、React DOM、Ant Design、Vite、Valtio、PubSubJS、react-hot-toast、PrismJS：MIT
+- Ant Design 运行时传递依赖的 `@ant-design/icons`：MIT；Portal 业务图标使用项目内的 `AppIcon` SVG 图标层，避免直接耦合组件库图标。
 - Tauri API 与 Tauri 官方插件：MIT OR Apache-2.0
 
 ## Rust 运行时

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
-import { DownloadOutlined, StopOutlined, UploadOutlined } from '@ant-design/icons'
+import AppIcon from './AppIcon'
 import PubSub from 'pubsub-js'
 import { PubSubBusinessKeyEnum, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
 
@@ -161,7 +161,7 @@ const ProgressMask = () => {
               type="text"
               size="small"
               danger
-              icon={<StopOutlined />}
+              icon={<AppIcon name="stop" />}
               loading={cancelling}
               onClick={handleCancel}
               aria-label={cancelLabel}
@@ -178,9 +178,9 @@ const ProgressMask = () => {
         <div style={styles.iconContainer}>
           <div style={styles.operationIcon}>
             {isDownloadOperation ? (
-              <DownloadOutlined style={styles.icon} />
+              <AppIcon name="download" style={styles.icon} />
             ) : (
-              <UploadOutlined style={styles.icon} />
+              <AppIcon name="upload" style={styles.icon} />
             )}
           </div>
         </div>
@@ -215,7 +215,7 @@ const ProgressMask = () => {
           <Button
             size="small"
             danger
-            icon={<StopOutlined />}
+            icon={<AppIcon name="stop" />}
             loading={cancelling}
             onClick={handleCancel}
             style={{ marginTop: 10 }}
@@ -261,8 +261,8 @@ const styles = {
     alignItems: 'center'
   },
   operationIcon: {
-    width: '40px',
-    height: '40px',
+    width: '42px',
+    height: '42px',
     borderRadius: '8px',
     background: THEME_PRIMARY_COLOR,
     display: 'flex',
@@ -271,11 +271,11 @@ const styles = {
     boxShadow: 'none'
   },
   icon: {
-    fontSize: '18px',
+    fontSize: '20px',
     color: THEME_TEXT_PRIMARY
   },
   title: {
-    fontSize: '15px',
+    fontSize: '16px',
     fontWeight: '600',
     color: THEME_TEXT_PRIMARY,
     marginBottom: '4px',
@@ -283,7 +283,7 @@ const styles = {
     letterSpacing: 0
   },
   fileName: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: THEME_TEXT_SECONDARY,
     marginBottom: '14px',
     display: 'block',
@@ -295,7 +295,7 @@ const styles = {
     display: 'block',
     margin: '-6px auto 10px',
     color: THEME_TEXT_SECONDARY,
-    fontSize: '11px',
+    fontSize: '12px',
     lineHeight: '1.4'
   },
   progressWrapper: {
@@ -303,7 +303,7 @@ const styles = {
     padding: '0 4px'
   },
   percentText: {
-    fontSize: '18px',
+    fontSize: '20px',
     fontWeight: '700',
     color: THEME_TEXT_LINK,
     marginTop: '6px',

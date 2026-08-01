@@ -1,4 +1,4 @@
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
+// Tauri 命令说明：https://tauri.app/develop/calling-rust/
 mod ssh;
 
 use std::path::Path;

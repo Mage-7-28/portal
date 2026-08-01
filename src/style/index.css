@@ -30,15 +30,15 @@
   display: flex;
   align-items: center;
   min-width: 0;
-  min-height: 24px;
+  min-height: 26px;
   padding: 0 8px;
   overflow: hidden;
   border-top: 1px solid #3c3f41;
   border-radius: 0 0 7px 7px;
   background: #252526;
   color: #c0bcb4;
-  font-size: 11px;
-  line-height: 24px;
+  font-size: 12px;
+  line-height: 26px;
 }
 
 .download-status-location {
@@ -191,9 +191,9 @@
 
 .transfer-inline-cancel.ant-btn {
   display: inline-flex;
-  width: 22px;
-  min-width: 22px;
-  height: 22px;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
   align-items: center;
   justify-content: center;
   padding: 0;
@@ -328,7 +328,7 @@ body {
   color: #ebe8e1;
   overflow: hidden;
   min-height: 100%;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.4;
   font-family: var(--global-font-family, "Lora Variable", "Lora", "Source Serif Pro", "Source Serif 4", "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR", "Source Han Serif SC", "Source Han Serif TC", "Source Han Serif", "Songti SC", "STSong", "STSongti-SC-Regular", "PingFang SC", "SimSun", "NSimSun", "宋体", "FangSong", "仿宋", "KaiTi", "楷体", Georgia, "Times New Roman", Cambria, "Liberation Serif", ui-serif, serif);
 }
@@ -352,7 +352,7 @@ html,
   border-radius: 4px;
   background: #1f1f1f;
   color: #e8e5de;
-  font: 12px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
 .preview-loading {
@@ -364,7 +364,7 @@ html,
   gap: 9px;
   padding: 8px 4px;
   color: #d9d5cc;
-  font-size: 12px;
+  font-size: 13px;
   text-align: center;
 }
 
@@ -395,14 +395,14 @@ html,
   gap: 10px;
   padding: 0 5px;
   color: #aaa69d;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .preview-note {
   margin-bottom: 7px;
   color: #aaa69d;
-  font-size: 10.5px;
-  line-height: 16px;
+  font-size: 11.5px;
+  line-height: 17px;
 }
 
 .image-preview-shell {
@@ -490,13 +490,23 @@ html,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   box-shadow: none;
   font-weight: 500;
   line-height: 1.2;
 }
 
+.app-icon {
+  display: inline-block;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  align-self: center;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .ant-btn > .anticon,
+.ant-btn > .app-icon,
 .ant-btn > span {
   line-height: 1.2;
 }
@@ -574,9 +584,9 @@ html,
 }
 
 .compact-icon-button.ant-btn {
-  width: 26px;
-  min-width: 26px;
-  height: 26px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
   padding: 0;
 }
 
@@ -585,7 +595,7 @@ html,
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  padding: 8px;
+  padding: 9px;
 }
 
 .connection-header {
@@ -593,8 +603,8 @@ html,
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  min-height: 30px;
-  margin-bottom: 8px;
+  min-height: 32px;
+  margin-bottom: 9px;
 }
 
 .connection-header > div {
@@ -607,14 +617,14 @@ html,
 .connection-header h1 {
   margin: 0;
   color: #ebe8e1;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 650;
-  line-height: 20px;
+  line-height: 22px;
 }
 
 .connection-header > div > span {
   color: #c0bcb4;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .connection-list-region {
@@ -636,12 +646,12 @@ html,
 .connection-list .ant-list-items {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
 }
 
 .connection-row.ant-list-item {
-  min-height: 50px;
-  padding: 7px 9px !important;
+  min-height: 54px;
+  padding: 8px 10px !important;
   border: 1px solid #3c3f41 !important;
   border-radius: 6px;
   background: #252526;
@@ -659,16 +669,25 @@ html,
 }
 
 .connection-row .ant-list-item-meta-avatar {
-  margin-inline-end: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 22px;
+  margin-inline-end: 10px;
+}
+
+.connection-row .ant-list-item-meta-content {
+  align-self: center;
+  min-width: 0;
 }
 
 .connection-row .ant-list-item-meta-title {
   margin-bottom: 1px;
-  line-height: 18px;
+  line-height: 20px;
 }
 
 .connection-row .ant-list-item-meta-description {
-  line-height: 16px;
+  line-height: 17px;
 }
 
 .connection-row .ant-list-item-action {
@@ -682,14 +701,14 @@ html,
 .connection-row-icon {
   color: #eb9070;
   color: lab(68.9646% 33.16 32.3692);
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .connection-row-name {
   display: block;
   overflow: hidden;
   color: #ebe8e1;
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -699,7 +718,7 @@ html,
   display: block;
   overflow: hidden;
   color: #c0bcb4;
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -711,14 +730,14 @@ html,
   justify-content: center;
   height: 100%;
   min-height: 160px;
-  gap: 8px;
+  gap: 9px;
   color: #c0bcb4;
-  font-size: 12px;
+  font-size: 13px;
 }
 
-.connection-empty .anticon {
+.connection-empty .app-icon {
   color: #817c72;
-  font-size: 24px;
+  font-size: 26px;
 }
 
 .connection-loading {
@@ -729,11 +748,11 @@ html,
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 7px;
+  gap: 8px;
   border-radius: 6px;
   background: rgba(31, 31, 31, 0.56);
   color: #e8e5de;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .file-browser {
@@ -743,7 +762,7 @@ html,
   height: 100%;
   min-height: 0;
   max-height: 100%;
-  padding: 8px;
+  padding: 9px;
   overflow: hidden;
   box-sizing: border-box;
   border: 0;
@@ -756,14 +775,14 @@ html,
   flex: 0 0 auto;
   align-items: center;
   min-width: 0;
-  gap: 5px;
-  margin-bottom: 7px;
+  gap: 6px;
+  margin-bottom: 8px;
 }
 
 .toolbar-icon-button.ant-btn {
-  width: 30px;
-  min-width: 30px;
-  height: 30px;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
   padding: 0;
   border-color: #3c3f41;
   border-radius: 5px;
@@ -776,7 +795,7 @@ html,
   flex: 1;
   align-items: center;
   min-width: 0;
-  height: 30px;
+  height: 32px;
   overflow: hidden;
   border: 1px solid #3c3f41;
   border-radius: 5px;
@@ -791,23 +810,23 @@ html,
 
 .remote-path-icon {
   flex: 0 0 auto;
-  margin-left: 9px;
+  margin-left: 10px;
   color: #eb9070;
   color: lab(68.9646% 33.16 32.3692);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .remote-path-input.ant-input {
   flex: 1;
   min-width: 0;
-  height: 28px;
-  padding: 3px 7px;
+  height: 30px;
+  padding: 3px 8px;
   background: transparent;
   color: #e8e5de;
-  font-size: 12px;
+  font-size: 13px;
 }
 
-/* The path bar owns the focus treatment; avoid a second ring on its input. */
+/* 焦点样式由路径栏统一负责，输入框不再重复显示边框光圈。 */
 .remote-path-input.ant-input:focus,
 .remote-path-input.ant-input:focus-visible,
 .remote-path-input.ant-input-focused {
@@ -817,9 +836,9 @@ html,
 }
 
 .path-menu-button.ant-btn {
-  width: 29px;
-  min-width: 29px;
-  height: 28px;
+  width: 31px;
+  min-width: 31px;
+  height: 30px;
   padding: 0;
   border-left: 1px solid #3c3f41;
   border-radius: 0;
@@ -831,9 +850,9 @@ html,
   flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
-  min-height: 32px;
-  margin-bottom: 7px;
-  padding: 3px 5px 3px 9px;
+  min-height: 35px;
+  margin-bottom: 8px;
+  padding: 3px 6px 3px 10px;
   border: 1px solid #3c3f41;
   border-radius: 5px;
   background: #252526;
@@ -843,14 +862,14 @@ html,
   display: flex;
   align-items: center;
   min-width: 0;
-  gap: 6px;
+  gap: 7px;
   overflow: hidden;
   white-space: nowrap;
 }
 
 .connection-status-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   flex: 0 0 auto;
   border-radius: 50%;
   background: #7ea886;
@@ -860,7 +879,7 @@ html,
   max-width: 180px;
   overflow: hidden;
   color: #e8e5de;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   text-overflow: ellipsis;
 }
@@ -868,7 +887,7 @@ html,
 .connection-endpoint {
   overflow: hidden;
   color: #b8b4ab;
-  font-size: 11px;
+  font-size: 12px;
   text-overflow: ellipsis;
 }
 
@@ -876,14 +895,14 @@ html,
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  gap: 4px;
-  margin-left: 10px;
+  gap: 5px;
+  margin-left: 11px;
 }
 
 .connection-actions .ant-btn {
-  height: 26px;
-  padding-inline: 8px;
-  font-size: 11.5px;
+  height: 28px;
+  padding-inline: 9px;
+  font-size: 12.5px;
 }
 
 .file-list-shell {
@@ -903,17 +922,17 @@ html,
 }
 
 .file-list-alert {
-  margin: 10px;
+  margin: 11px;
 }
 
 .file-list-state {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 120px;
-  gap: 7px;
+  min-height: 128px;
+  gap: 8px;
   color: #c0bcb4;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .file-item-row {
@@ -923,8 +942,9 @@ html,
 }
 
 .file-list-item.ant-list-item {
-  min-height: 38px;
-  padding: 5px 8px !important;
+  min-height: 42px;
+  padding: 6px 9px !important;
+  align-items: center;
   border-block-end: 1px solid #2b2b2b !important;
   transition: background-color 120ms ease;
 }
@@ -952,9 +972,9 @@ html,
   z-index: 5;
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 38px;
-  padding: 5px 7px 5px 13px;
+  gap: 11px;
+  min-height: 42px;
+  padding: 6px 8px 6px 14px;
   border: 1px solid #51483f;
   border-radius: 999px;
   background: rgba(37, 35, 33, 0.96);
@@ -965,14 +985,14 @@ html,
 
 .selection-count {
   color: #d8d3c9;
-  font-size: 11.5px;
+  font-size: 12.5px;
   white-space: nowrap;
 }
 
 .selection-action-bar .ant-btn {
-  height: 27px;
+  height: 29px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: 12.5px;
 }
 
 .file-item-meta {
@@ -981,29 +1001,124 @@ html,
 }
 
 .file-item-meta .ant-list-item-meta-avatar {
-  margin-inline-end: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  margin-inline-end: 9px;
+}
+
+.file-item-meta .ant-list-item-meta-content {
+  align-self: center;
+  min-width: 0;
 }
 
 .file-item-meta .ant-list-item-meta-title {
   margin: 0;
-  line-height: 20px;
+  min-height: 24px;
+  align-items: center;
+  display: flex;
+  line-height: 24px;
 }
 
 .file-type-icon {
+  width: 23px;
+  height: 23px;
   color: #d0cdc5;
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .file-type-icon.is-directory,
 .file-item-name.is-directory {
-  color: #7ea886;
+  color: #b69a6d;
+}
+
+.file-type-icon.is-image,
+.upload-picker-item-icon.is-image {
+  color: #a6ad86;
+}
+
+.file-type-icon.is-json,
+.upload-picker-item-icon.is-json {
+  color: #c4a26d;
+}
+
+.file-type-icon.is-style,
+.upload-picker-item-icon.is-style {
+  color: #b59782;
+}
+
+.file-type-icon.is-javascript,
+.upload-picker-item-icon.is-javascript {
+  color: #d0a16e;
+}
+
+.file-type-icon.is-typescript,
+.upload-picker-item-icon.is-typescript {
+  color: #8ea6ad;
+}
+
+.file-type-icon.is-markup,
+.upload-picker-item-icon.is-markup {
+  color: #9aafa5;
+}
+
+.file-type-icon.is-code,
+.upload-picker-item-icon.is-code {
+  color: #a69eaf;
+}
+
+.file-type-icon.is-data,
+.upload-picker-item-icon.is-data {
+  color: #9ca78a;
+}
+
+.file-type-icon.is-document,
+.upload-picker-item-icon.is-document {
+  color: #b4a99a;
+}
+
+.file-type-icon.is-database,
+.upload-picker-item-icon.is-database {
+  color: #8fa6a0;
+}
+
+.file-type-icon.is-archive,
+.upload-picker-item-icon.is-archive {
+  color: #a99d8b;
+}
+
+.file-type-icon.is-java,
+.upload-picker-item-icon.is-java {
+  color: #c58e69;
+}
+
+.file-type-icon.is-pdf,
+.upload-picker-item-icon.is-pdf {
+  color: #c08078;
+}
+
+.file-type-icon.is-media,
+.upload-picker-item-icon.is-media {
+  color: #a4869c;
+}
+
+.file-type-icon.is-audio,
+.upload-picker-item-icon.is-audio {
+  color: #b08e79;
+}
+
+.file-type-icon.is-font,
+.upload-picker-item-icon.is-font {
+  color: #9d9f88;
 }
 
 .file-item-name {
   display: block;
   overflow: hidden;
   color: #e8e5de;
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1012,39 +1127,40 @@ html,
   display: flex;
   flex: 0 0 auto;
   align-items: center;
-  min-width: 170px;
+  align-self: center;
+  min-width: 184px;
   justify-content: flex-end;
-  gap: 4px;
-  margin-left: 10px;
+  gap: 5px;
+  margin-left: 11px;
 }
 
 .file-item-size {
-  min-width: 66px;
+  min-width: 72px;
   color: #b8b4ab;
-  font-size: 10.5px;
+  font-size: 11.5px;
   text-align: right;
 }
 
 .compact-modal .ant-modal-content {
-  padding: 14px 16px;
+  padding: 16px 18px;
   border: 1px solid #3c3f41;
   border-radius: 7px;
   background: #242424;
 }
 
 .compact-modal .ant-modal-header {
-  margin-bottom: 10px;
+  margin-bottom: 11px;
   background: transparent;
 }
 
 .compact-modal .ant-modal-title {
-  font-size: 14px;
-  line-height: 22px;
+  font-size: 15px;
+  line-height: 24px;
 }
 
 .upload-picker-actions {
   display: flex;
-  margin-bottom: 9px;
+  margin-bottom: 10px;
 }
 
 .upload-drop-zone.ant-upload-drag {
@@ -1067,19 +1183,19 @@ html,
 
 .upload-drop-content {
   display: flex;
-  min-height: 128px;
+  min-height: 136px;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 12px 10px;
+  gap: 4px;
+  padding: 13px 11px;
   color: #ddd8cf;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .upload-drop-content small {
   color: #aaa69d;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .upload-drop-content .upload-drop-empty {
@@ -1088,23 +1204,23 @@ html,
 
 .upload-drop-icon {
   color: #c08a66;
-  font-size: 20px;
+  font-size: 22px;
 }
 
 .upload-drop-hint {
   display: flex;
-  min-height: 34px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   border-bottom: 1px solid #3c3f41;
   color: #c9c3b9;
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .upload-drop-hint-icon {
   color: #c08a66;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .upload-picker-list {
@@ -1116,8 +1232,8 @@ html,
 }
 
 .upload-picker-list .ant-list-item {
-  min-height: 42px;
-  padding: 5px 8px;
+  min-height: 46px;
+  padding: 6px 9px;
 }
 
 .upload-picker-list .ant-list-item-meta {
@@ -1126,7 +1242,16 @@ html,
 }
 
 .upload-picker-list .ant-list-item-meta-avatar {
-  margin-inline-end: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  margin-inline-end: 9px;
+}
+
+.upload-picker-list .ant-list-item-meta-content {
+  align-self: center;
+  min-width: 0;
 }
 
 .upload-picker-list .ant-list-item-meta-title,
@@ -1139,36 +1264,38 @@ html,
 .upload-picker-list .ant-list-item-meta-title {
   margin-bottom: 1px;
   color: #e8e5de;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .upload-picker-list .ant-list-item-meta-description {
   color: #aaa69d;
-  font-size: 10.5px;
+  font-size: 11.5px;
 }
 
 .upload-picker-item-icon {
+  width: 23px;
+  height: 23px;
   color: #d0cdc5;
-  font-size: 14px;
+  font-size: 17px;
 }
 
 .upload-picker-item-icon.is-directory {
-  color: #7ea886;
+  color: #b69a6d;
 }
 
 .compact-modal .ant-modal-close {
-  top: 9px;
-  inset-inline-end: 10px;
-  width: 28px;
-  height: 28px;
+  top: 10px;
+  inset-inline-end: 11px;
+  width: 30px;
+  height: 30px;
 }
 
 .compact-modal .ant-modal-footer {
-  margin-top: 12px;
+  margin-top: 13px;
 }
 
 .about-modal .ant-modal-content {
-  padding: 18px 18px 14px;
+  padding: 20px 20px 16px;
 }
 
 .about-modal .ant-modal-close {
@@ -1176,8 +1303,8 @@ html,
 }
 
 .about-modal .ant-modal-footer {
-  margin-top: 14px;
-  padding-top: 11px;
+  margin-top: 15px;
+  padding-top: 12px;
   border-top: 1px solid #3c3f41;
   text-align: center;
 }
@@ -1192,15 +1319,15 @@ html,
 
 .about-logo {
   display: block;
-  width: 82px;
-  height: 82px;
+  width: 88px;
+  height: 88px;
   object-fit: contain;
 }
 
 .about-title {
-  margin: 9px 0 2px;
+  margin: 10px 0 3px;
   color: #f0ede6;
-  font-size: 21px;
+  font-size: 22px;
   font-weight: 600;
   line-height: 1.25;
 }
@@ -1208,60 +1335,68 @@ html,
 .about-description {
   margin: 0;
   color: #c5c0b6;
-  font-size: 12px;
-  line-height: 18px;
+  font-size: 13px;
+  line-height: 19px;
 }
 
 .about-meta {
   display: flex;
   width: 100%;
   justify-content: center;
-  gap: 14px;
-  margin-top: 16px;
-  padding-top: 11px;
+  gap: 15px;
+  margin-top: 17px;
+  padding-top: 12px;
   border-top: 1px solid #3c3f41;
   color: #aaa69d;
-  font-size: 11px;
-  line-height: 16px;
+  font-size: 12px;
+  line-height: 17px;
 }
 
 .compact-form .ant-form-item {
-  margin-bottom: 10px;
+  margin-bottom: 11px;
 }
 
 .compact-form .ant-form-item-label {
-  padding-bottom: 3px;
+  padding-bottom: 4px;
 }
 
 .compact-form .ant-form-item-label > label {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   height: auto;
   color: #d6d1c8;
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .compact-form .ant-form-item-label > label > span {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+}
+
+.compact-form .ant-form-item-label .app-icon,
+.compact-form .ant-radio-button-wrapper .app-icon,
+.credential-note .app-icon {
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.12em;
 }
 
 .compact-form .ant-form-item-explain,
 .compact-form .ant-form-item-extra {
-  font-size: 10.5px;
-  line-height: 15px;
+  font-size: 11.5px;
+  line-height: 16px;
 }
 
 .form-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 9px;
 }
 
 .form-row-host {
-  grid-template-columns: minmax(0, 1fr) 82px;
+  grid-template-columns: minmax(0, 1fr) 88px;
 }
 
 .form-row > .ant-form-item:only-child {
@@ -1275,9 +1410,9 @@ html,
 
 .compact-form .ant-radio-button-wrapper {
   flex: 1;
-  padding-inline: 8px;
+  padding-inline: 9px;
   overflow: hidden;
-  font-size: 11.5px;
+  font-size: 12.5px;
   text-align: center;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1285,24 +1420,24 @@ html,
 
 .credential-note {
   display: block;
-  margin-bottom: 10px;
-  font-size: 10.5px;
-  line-height: 16px;
+  margin-bottom: 11px;
+  font-size: 11.5px;
+  line-height: 17px;
 }
 
 .modal-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 6px;
+  gap: 7px;
   flex-wrap: wrap;
 }
 
 .connection-test-result {
   display: flex;
-  gap: 10px;
+  gap: 11px;
   align-items: flex-start;
-  padding: 7px 9px;
-  margin-bottom: 10px;
+  padding: 8px 10px;
+  margin-bottom: 11px;
   border: 1px solid;
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.03);
@@ -1312,15 +1447,15 @@ html,
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 2px;
-  font-size: 11px;
+  gap: 3px;
+  font-size: 12px;
 }
 
 .fingerprint-text,
 .fingerprint-help {
   display: block;
   overflow-wrap: anywhere;
-  font-size: 10.5px;
+  font-size: 11.5px;
   line-height: 1.4;
 }
 
@@ -1348,24 +1483,24 @@ html,
 }
 
 .hide-scrollbar::-webkit-scrollbar {
-  display: none; /* Chrome, Safari, Opera*/
+  display: none; /* Chrome、Safari、Opera */
 }
 
-/*整个滚动条*/
+/* 整个滚动条 */
 *::-webkit-scrollbar {
   width: 4px;
   height: 4px;
 }
-/*滚动条轨道*/
+/* 滚动条轨道 */
 *::-webkit-scrollbar-track-piece {
   background: transparent;
 }
-/*滑块*/
+/* 滚动条滑块 */
 *::-webkit-scrollbar-thumb {
   background: #424549;
   border-radius: 20px;
 }
-/*鼠标移动到滑块*/
+/* 鼠标悬停在滚动条滑块上 */
 *::-webkit-scrollbar-thumb:hover {
   background-color: #979797;
 }

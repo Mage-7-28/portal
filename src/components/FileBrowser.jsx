@@ -1,6 +1,7 @@
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Upload } from 'antd'
-import { DeleteOutlined, DisconnectOutlined, DownloadOutlined, DownOutlined, FileOutlined, FolderAddOutlined, FolderOpenOutlined, FolderOutlined, InboxOutlined, ReloadOutlined, UploadOutlined, UpOutlined } from '@ant-design/icons'
+import AppIcon from './AppIcon'
+import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
@@ -260,7 +261,7 @@ const FileBrowser = ({
           unlisten = dispose
         }
       } catch {
-        // Browser previews do not expose Tauri's native file-drop event.
+        // 浏览器预览不会提供 Tauri 原生文件拖放事件。
       }
     }
     void registerDragDrop()
@@ -416,7 +417,7 @@ const FileBrowser = ({
             className="toolbar-icon-button"
             size="small"
             onClick={handleGoBack}
-            icon={<UpOutlined />}
+            icon={<AppIcon name="chevronUp" />}
             aria-label="返回上级目录"
           />
         </Tooltip>
@@ -424,7 +425,7 @@ const FileBrowser = ({
         <div
           className="remote-path-bar"
         >
-          <FolderOpenOutlined className="remote-path-icon" />
+          <AppIcon name="folderOpen" className="remote-path-icon" />
           <Input
             className="remote-path-input"
             variant="borderless"
@@ -439,7 +440,7 @@ const FileBrowser = ({
               className="path-menu-button"
               type="text"
               size="small"
-              icon={<DownOutlined />}
+              icon={<AppIcon name="chevronDown" />}
               aria-label="快速定位目录"
             />
           </Dropdown>
@@ -450,7 +451,7 @@ const FileBrowser = ({
             className="toolbar-icon-button"
             size="small"
             onClick={handleRefresh}
-            icon={<ReloadOutlined />}
+            icon={<AppIcon name="reload" />}
             aria-label="刷新目录"
           />
         </Tooltip>
@@ -468,12 +469,12 @@ const FileBrowser = ({
           </span>
         </div>
         <div className="connection-actions">
-          <Button size="small" icon={<UploadOutlined />} loading={uploadSubmitting} onClick={handleUpload}>
+          <Button size="small" icon={<AppIcon name="upload" />} loading={uploadSubmitting} onClick={handleUpload}>
             上传
           </Button>
           <Button
             size="small"
-            icon={<FolderAddOutlined />}
+            icon={<AppIcon name="folderAdd" />}
             onClick={() => setDirectoryModalOpen(true)}
             aria-label="新建文件夹"
           >
@@ -482,7 +483,7 @@ const FileBrowser = ({
           <Button
             size="small"
             danger
-            icon={<DisconnectOutlined />}
+            icon={<AppIcon name="disconnect" />}
             onClick={() => handleDisconnect()}
           >
             断开连接
@@ -495,7 +496,14 @@ const FileBrowser = ({
         className={`file-list-shell${ directoryDropActive ? ' is-upload-drop-target' : '' }`}
       >
         {error ? (
-          <Alert type="error" showIcon message="目录加载失败" description={error} className="file-list-alert" />
+          <Alert
+            type="error"
+            showIcon
+            icon={<AppIcon name="warningCircle" />}
+            message="目录加载失败"
+            description={error}
+            className="file-list-alert"
+          />
         ) : loading ? (
           <div className="file-list-state">
             <Spin size="small" />
@@ -533,7 +541,7 @@ const FileBrowser = ({
             <span>
               <Button
                 size="small"
-                icon={<DownloadOutlined />}
+                icon={<AppIcon name="download" />}
                 loading={batchDownloading}
                 disabled={batchDeleting || batchDownloading}
                 onClick={event => {
@@ -548,7 +556,7 @@ const FileBrowser = ({
           <Button
             danger
             size="small"
-            icon={<DeleteOutlined />}
+            icon={<AppIcon name="trash" />}
             loading={batchDeleting}
             disabled={batchDownloading}
             onClick={event => {
@@ -574,14 +582,14 @@ const FileBrowser = ({
       >
         <Space className="upload-picker-actions" size={6}>
           <Button
-            icon={<FileOutlined />}
+            icon={<AppIcon name="file" />}
             loading={uploadPicking === 'file'}
             onClick={() => void addUploadItems('file')}
           >
             添加文件
           </Button>
           <Button
-            icon={<FolderOutlined />}
+            icon={<AppIcon name="folder" />}
             loading={uploadPicking === 'directory'}
             onClick={() => void addUploadItems('directory')}
           >
@@ -598,7 +606,7 @@ const FileBrowser = ({
         >
           {uploadItems.length === 0 ? (
             <div className="upload-drop-content">
-              <InboxOutlined className="upload-drop-icon" />
+              <AppIcon name="inbox" className="upload-drop-icon" />
               <span>{uploadDropProcessing ? '正在读取拖拽内容...' : '拖拽文件或文件夹到这里'}</span>
               <small className="upload-drop-empty">尚未选择上传内容</small>
               <small>也可以使用上方按钮选择</small>
@@ -606,7 +614,7 @@ const FileBrowser = ({
           ) : (
             <>
               <div className="upload-drop-hint">
-                <InboxOutlined className="upload-drop-hint-icon" />
+                <AppIcon name="inbox" className="upload-drop-hint-icon" />
                 <span>{uploadDropProcessing ? '正在读取拖拽内容...' : '继续拖拽内容到此处添加'}</span>
               </div>
               <div className="upload-picker-list">
@@ -614,30 +622,36 @@ const FileBrowser = ({
                   size="small"
                   dataSource={uploadItems}
                   rowKey={item => item.localPath}
-                  renderItem={item => (
-                    <List.Item
-                      actions={[
-                        <Tooltip key="remove" title="移除">
-                          <Button
-                            type="text"
-                            danger
-                            size="small"
-                            icon={<DeleteOutlined />}
-                            aria-label={`移除 ${ item.fileName }`}
-                            onClick={() => setUploadItems(previous => previous.filter(current => current.localPath !== item.localPath))}
-                          />
-                        </Tooltip>
-                      ]}
-                    >
-                      <List.Item.Meta
-                        avatar={item.kind === 'directory'
-                          ? <FolderOutlined className="upload-picker-item-icon is-directory" />
-                          : <FileOutlined className="upload-picker-item-icon" />}
-                        title={item.fileName}
-                        description={item.localPath}
-                      />
-                    </List.Item>
-                  )}
+                  renderItem={item => {
+                    const fileIcon = item.kind === 'directory'
+                      ? { name: 'folder', type: 'directory' }
+                      : resolveFileIcon(item.fileName)
+                    return (
+                      <List.Item
+                        actions={[
+                          <Tooltip key="remove" title="移除">
+                            <Button
+                              type="text"
+                              danger
+                              size="small"
+                              icon={<AppIcon name="trash" />}
+                              aria-label={`移除 ${ item.fileName }`}
+                              onClick={() => setUploadItems(previous => previous.filter(current => current.localPath !== item.localPath))}
+                            />
+                          </Tooltip>
+                        ]}
+                      >
+                        <List.Item.Meta
+                          avatar={<AppIcon
+                            name={fileIcon.name}
+                            className={`upload-picker-item-icon is-${ fileIcon.type }`}
+                          />}
+                          title={item.fileName}
+                          description={item.localPath}
+                        />
+                      </List.Item>
+                    )
+                  }}
                 />
               </div>
             </>
