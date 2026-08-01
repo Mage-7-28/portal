@@ -182,6 +182,10 @@ pub fn run() {
             ssh::sftp_delete,
             ssh::sftp_rename,
             ssh::get_sftp_user_home,
+            ssh::open_ssh_terminal,
+            ssh::write_ssh_terminal,
+            ssh::resize_ssh_terminal,
+            ssh::close_ssh_terminal,
             ssh::cancel_transfer
         ])
         .setup(|app| {

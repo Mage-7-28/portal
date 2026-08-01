@@ -3,14 +3,14 @@ use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::json;
-use ssh2::{ErrorCode, HashType, RenameFlags, Session, Sftp};
+use ssh2::{Channel, ErrorCode, HashType, RenameFlags, Session, Sftp};
 use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 
@@ -19,6 +19,12 @@ const TRANSFER_BUFFER_SIZE: usize = 64 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u32 = 30;
 const MAX_CONCURRENT_TRANSFERS: usize = 4;
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
+const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
+const TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const TERMINAL_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
+const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(12);
+const DEFAULT_TERMINAL_COLUMNS: u32 = 100;
+const DEFAULT_TERMINAL_ROWS: u32 = 30;
 
 // libssh2-sys 中的传输和 SFTP 错误码。这里在本地维护，避免 ssh2 已提供原始值时
 // 再增加一个直接依赖。
@@ -68,6 +74,12 @@ pub enum SshError {
     TransferCancelled,
     #[error("预览文件超过大小限制")]
     PreviewTooLarge,
+    #[error("终端会话不存在")]
+    TerminalNotFound,
+    #[error("终端输入超过大小限制")]
+    TerminalInputTooLong,
+    #[error("终端会话失败: {0}")]
+    TerminalFailed(String),
 }
 
 impl From<std::io::Error> for SshError {
@@ -89,6 +101,7 @@ pub struct SshState {
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
     pub active_transfers: Arc<AtomicUsize>,
+    terminal_sessions: Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -177,6 +190,14 @@ struct RemoteDeleteTarget {
 struct OpenSession {
     session: Session,
     host_key: HostKeyInfo,
+}
+
+// 终端会话独立于文件传输会话，避免交互式读取阻塞 SFTP 通道。
+struct TerminalSession {
+    connection_id: String,
+    channel: Arc<Mutex<Channel>>,
+    stop: Arc<AtomicBool>,
+    write_lock: Mutex<()>,
 }
 
 fn connection_info(
@@ -359,6 +380,315 @@ fn authenticate(session: &Session, connection: &SshConnection) -> Result<(), Ssh
     }
 }
 
+fn open_authenticated_session(connection: &SshConnection) -> Result<Session, SshError> {
+    let opened = open_session(connection)?;
+    verify_host_key(connection, &opened.host_key)?;
+    authenticate(&opened.session, connection)?;
+    Ok(opened.session)
+}
+
+fn normalize_terminal_dimensions(columns: u32, rows: u32) -> (u32, u32) {
+    let columns = if columns == 0 {
+        DEFAULT_TERMINAL_COLUMNS
+    } else {
+        columns.clamp(40, 240)
+    };
+    let rows = if rows == 0 {
+        DEFAULT_TERMINAL_ROWS
+    } else {
+        rows.clamp(10, 100)
+    };
+    (columns, rows)
+}
+
+fn open_terminal_channel(
+    connection: &SshConnection,
+    columns: u32,
+    rows: u32,
+) -> Result<Channel, SshError> {
+    let session = open_authenticated_session(connection)?;
+    let mut channel = session
+        .channel_session()
+        .map_err(|error| SshError::TerminalFailed(error.to_string()))?;
+    let (columns, rows) = normalize_terminal_dimensions(columns, rows);
+    channel
+        .request_pty("xterm-256color", None, Some((columns, rows, 0, 0)))
+        .map_err(|error| SshError::TerminalFailed(format!("申请 PTY 失败: {error}")))?;
+    channel
+        .shell()
+        .map_err(|error| SshError::TerminalFailed(format!("启动远程 Shell 失败: {error}")))?;
+    // 非阻塞读取让读线程和键盘输入可以并行工作，不会互相占用 SSH Session 锁。
+    session.set_blocking(false);
+    session.set_timeout(0);
+    Ok(channel)
+}
+
+fn terminal_session_for(
+    state: &SshState,
+    terminal_id: &str,
+) -> Result<Arc<TerminalSession>, SshError> {
+    state
+        .terminal_sessions
+        .read()
+        .unwrap()
+        .get(terminal_id)
+        .cloned()
+        .ok_or(SshError::TerminalNotFound)
+}
+
+fn close_terminal_session(
+    terminal_sessions: &Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
+    terminal_id: &str,
+) {
+    let session = terminal_sessions.write().unwrap().remove(terminal_id);
+    if let Some(session) = session {
+        session.stop.store(true, Ordering::Release);
+        if let Ok(mut channel) = session.channel.lock() {
+            let _ = channel.close();
+        }
+    }
+}
+
+fn close_terminals_for_connection(state: &SshState, connection_id: &str) {
+    let terminal_ids: Vec<String> = state
+        .terminal_sessions
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|(_, session)| session.connection_id == connection_id)
+        .map(|(terminal_id, _)| terminal_id.clone())
+        .collect();
+    for terminal_id in terminal_ids {
+        close_terminal_session(&state.terminal_sessions, &terminal_id);
+    }
+}
+
+fn emit_terminal_event(
+    app_handle: &Arc<Mutex<Option<AppHandle>>>,
+    event: &str,
+    terminal_id: &str,
+    payload: serde_json::Value,
+) {
+    let mut payload = payload;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "terminalId".to_string(),
+            serde_json::Value::String(terminal_id.to_string()),
+        );
+    }
+    emit_event(app_handle, event, payload);
+}
+
+fn emit_terminal_bytes(
+    app_handle: &Arc<Mutex<Option<AppHandle>>>,
+    terminal_id: &str,
+    pending: &mut Vec<u8>,
+    bytes: &[u8],
+) {
+    pending.extend_from_slice(bytes);
+    let bytes = std::mem::take(pending);
+    match String::from_utf8(bytes) {
+        Ok(data) => emit_terminal_event(
+            app_handle,
+            "ssh-terminal-data",
+            terminal_id,
+            json!({ "data": data }),
+        ),
+        Err(error) => {
+            let utf8_error = error.utf8_error();
+            let bytes = error.into_bytes();
+            let valid_up_to = utf8_error.valid_up_to();
+            if valid_up_to > 0 {
+                let data = String::from_utf8_lossy(&bytes[..valid_up_to]).into_owned();
+                emit_terminal_event(
+                    app_handle,
+                    "ssh-terminal-data",
+                    terminal_id,
+                    json!({ "data": data }),
+                );
+            }
+            if utf8_error.error_len().is_some() {
+                // 非 UTF-8 输出通常来自二进制命令，使用替换字符避免卡住后续终端输出。
+                let data = String::from_utf8_lossy(&bytes[valid_up_to..]).into_owned();
+                emit_terminal_event(
+                    app_handle,
+                    "ssh-terminal-data",
+                    terminal_id,
+                    json!({ "data": data }),
+                );
+            } else {
+                pending.extend_from_slice(&bytes[valid_up_to..]);
+            }
+        }
+    }
+}
+
+fn spawn_terminal_reader(state: SshState, terminal_id: String, session: Arc<TerminalSession>) {
+    let app_handle = Arc::clone(&state.app_handle);
+    let terminal_sessions = Arc::clone(&state.terminal_sessions);
+    thread::spawn(move || {
+        let mut buffer = vec![0_u8; TRANSFER_BUFFER_SIZE];
+        let mut pending_utf8 = Vec::new();
+        let mut close_reason = "远程 Shell 已退出".to_string();
+        let mut connection_error = None;
+
+        loop {
+            if session.stop.load(Ordering::Acquire) {
+                break;
+            }
+            let result = session
+                .channel
+                .lock()
+                .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))
+                .and_then(|mut channel| {
+                    channel
+                        .read(&mut buffer)
+                        .map_err(|error| SshError::TerminalFailed(error.to_string()))
+                });
+            match result {
+                Ok(0) => {
+                    close_reason = "远程 Shell 已退出".to_string();
+                    break;
+                }
+                Ok(size) => {
+                    emit_terminal_bytes(
+                        &app_handle,
+                        &terminal_id,
+                        &mut pending_utf8,
+                        &buffer[..size],
+                    );
+                }
+                Err(error) => {
+                    let message = error.to_string();
+                    if message.to_ascii_lowercase().contains("would block") {
+                        thread::sleep(TERMINAL_POLL_INTERVAL);
+                        continue;
+                    }
+                    close_reason = "终端连接已断开".to_string();
+                    connection_error = Some(message);
+                    break;
+                }
+            }
+        }
+
+        if !pending_utf8.is_empty() {
+            let data = String::from_utf8_lossy(&pending_utf8).into_owned();
+            emit_terminal_event(
+                &app_handle,
+                "ssh-terminal-data",
+                &terminal_id,
+                json!({ "data": data }),
+            );
+        }
+        let was_stopped = session.stop.load(Ordering::Acquire);
+        if let Some(message) = connection_error {
+            emit_terminal_event(
+                &app_handle,
+                "ssh-terminal-error",
+                &terminal_id,
+                json!({ "message": message.clone() }),
+            );
+            if !was_stopped && is_terminal_connection_loss(&message) {
+                mark_connection_disconnected(&state, &session.connection_id, close_reason.clone());
+            }
+        }
+        emit_terminal_event(
+            &app_handle,
+            "ssh-terminal-closed",
+            &terminal_id,
+            json!({ "reason": close_reason, "expected": was_stopped }),
+        );
+
+        let mut sessions = terminal_sessions.write().unwrap();
+        if sessions
+            .get(&terminal_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &session))
+        {
+            sessions.remove(&terminal_id);
+        }
+    });
+}
+
+fn write_terminal_input(session: &Arc<TerminalSession>, data: &[u8]) -> Result<(), SshError> {
+    let _write_guard = session
+        .write_lock
+        .lock()
+        .map_err(|_| SshError::TerminalFailed("终端输入锁已损坏".to_string()))?;
+    let started_at = Instant::now();
+    let mut offset = 0;
+    while offset < data.len() {
+        if session.stop.load(Ordering::Acquire) {
+            return Err(SshError::TerminalNotFound);
+        }
+        let result = session
+            .channel
+            .lock()
+            .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))
+            .and_then(|mut channel| {
+                channel
+                    .write(&data[offset..])
+                    .map_err(|error| SshError::TerminalFailed(error.to_string()))
+            });
+        match result {
+            Ok(0) => return Err(SshError::TerminalFailed("终端输入通道已关闭".to_string())),
+            Ok(size) => offset += size,
+            Err(error)
+                if error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("would block") =>
+            {
+                if started_at.elapsed() >= TERMINAL_WRITE_TIMEOUT {
+                    return Err(SshError::TerminalFailed("终端输入发送超时".to_string()));
+                }
+                thread::sleep(TERMINAL_POLL_INTERVAL);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(())
+}
+
+fn is_terminal_connection_loss(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("socket")
+        || message.contains("connection")
+        || message.contains("network")
+        || message.contains("timed out")
+}
+
+fn resize_terminal(
+    session: &Arc<TerminalSession>,
+    columns: u32,
+    rows: u32,
+) -> Result<(), SshError> {
+    let started_at = Instant::now();
+    loop {
+        if session.stop.load(Ordering::Acquire) {
+            return Err(SshError::TerminalNotFound);
+        }
+        let result = session
+            .channel
+            .lock()
+            .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))?
+            .request_pty_size(columns, rows, None, None);
+        match result {
+            Ok(()) => return Ok(()),
+            Err(error)
+                if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN))
+                    && started_at.elapsed() < TERMINAL_CONTROL_TIMEOUT =>
+            {
+                thread::sleep(TERMINAL_POLL_INTERVAL);
+            }
+            Err(error) => {
+                return Err(SshError::TerminalFailed(format!(
+                    "调整终端大小失败: {error}"
+                )))
+            }
+        }
+    }
+}
+
 fn emit_event(
     state_handle: &Arc<Mutex<Option<AppHandle>>>,
     event: &str,
@@ -424,6 +754,7 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     // 丢弃缓存会话即可关闭已损坏的传输连接；正在进行的传输任务可能仍会持有
     // 自己的 Arc，直到任务结束。
     state.connection_pool.write().unwrap().remove(id);
+    close_terminals_for_connection(state, id);
     if was_connected {
         emit_event(
             &state.app_handle,
@@ -741,8 +1072,8 @@ fn rename_remote_file(
                 {
                     return Err(fallback_error);
                 }
-        // 较旧的服务器有时完全不支持通过重命名覆盖文件。只有在用户明确要求
-        // 覆盖非目录项目时，才使用这个最后的降级方案。
+                // 较旧的服务器有时完全不支持通过重命名覆盖文件。只有在用户明确要求
+                // 覆盖非目录项目时，才使用这个最后的降级方案。
                 sftp.unlink(target_path)
                     .and_then(|_| sftp.rename(source_path, target_path, Some(RenameFlags::empty())))
                     .map_err(|fallback_error| {
@@ -1151,6 +1482,7 @@ pub fn add_ssh_connection(
     };
 
     validate_connection(&connection)?;
+    close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     state
         .connections
@@ -1192,6 +1524,7 @@ pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>
 pub fn connect_ssh(state: State<SshState>, id: String) -> Result<ConnectResult, SshError> {
     let connection = connection_info(&state, &id, false)?;
     validate_connection(&connection)?;
+    close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     if let Some(item) = state.connections.write().unwrap().get_mut(&id) {
         item.connected = false;
@@ -1234,6 +1567,7 @@ fn remove_cached_session(state: &SshState, id: &str) {
 #[tauri::command]
 pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshError> {
     let _ = connection_info(&state, &id, false)?;
+    close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     if let Some(connection) = state.connections.write().unwrap().get_mut(&id) {
         connection.connected = false;
@@ -1251,8 +1585,8 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
 
     match result {
         Ok(_) => Ok(true),
-    // 非阻塞保活可能暂时返回 EAGAIN；下一次探测会重试，
-    // 这并不代表 SSH 连接已经断开。
+        // 非阻塞保活可能暂时返回 EAGAIN；下一次探测会重试，
+        // 这并不代表 SSH 连接已经断开。
         Err(error) if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN)) => Ok(true),
         Err(error) => {
             let message = error.to_string();
@@ -1266,6 +1600,7 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
 
 #[tauri::command]
 pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
+    close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     Ok(state.connections.write().unwrap().remove(&id).is_some())
 }
@@ -1491,6 +1826,76 @@ pub fn get_sftp_user_home(state: State<SshState>, id: String) -> Result<String, 
         })?
         .to_string_lossy()
         .to_string())
+}
+
+#[tauri::command]
+pub async fn open_ssh_terminal(
+    state: State<'_, SshState>,
+    id: String,
+    terminal_id: String,
+    columns: u32,
+    rows: u32,
+) -> Result<bool, SshError> {
+    if terminal_id.trim().is_empty() {
+        return Err(SshError::TerminalFailed("终端标识不能为空".to_string()));
+    }
+    let connection = connection_info(state.inner(), &id, true)?;
+    close_terminal_session(&state.terminal_sessions, &terminal_id);
+    let channel = tauri::async_runtime::spawn_blocking(move || {
+        open_terminal_channel(&connection, columns, rows)
+    })
+    .await
+    .map_err(|error| SshError::TerminalFailed(format!("终端启动任务失败: {error}")))??;
+    let terminal = Arc::new(TerminalSession {
+        connection_id: id,
+        channel: Arc::new(Mutex::new(channel)),
+        stop: Arc::new(AtomicBool::new(false)),
+        write_lock: Mutex::new(()),
+    });
+    state
+        .terminal_sessions
+        .write()
+        .unwrap()
+        .insert(terminal_id.clone(), Arc::clone(&terminal));
+    spawn_terminal_reader(state.inner().clone(), terminal_id, terminal);
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn write_ssh_terminal(
+    state: State<'_, SshState>,
+    terminal_id: String,
+    data: String,
+) -> Result<bool, SshError> {
+    if data.len() > MAX_TERMINAL_INPUT_BYTES {
+        return Err(SshError::TerminalInputTooLong);
+    }
+    let terminal = terminal_session_for(state.inner(), &terminal_id)?;
+    tauri::async_runtime::spawn_blocking(move || write_terminal_input(&terminal, data.as_bytes()))
+        .await
+        .map_err(|error| SshError::TerminalFailed(format!("终端输入任务失败: {error}")))??;
+    Ok(true)
+}
+
+#[tauri::command]
+pub async fn resize_ssh_terminal(
+    state: State<'_, SshState>,
+    terminal_id: String,
+    columns: u32,
+    rows: u32,
+) -> Result<bool, SshError> {
+    let terminal = terminal_session_for(state.inner(), &terminal_id)?;
+    let (columns, rows) = normalize_terminal_dimensions(columns, rows);
+    tauri::async_runtime::spawn_blocking(move || resize_terminal(&terminal, columns, rows))
+        .await
+        .map_err(|error| SshError::TerminalFailed(format!("终端调整任务失败: {error}")))??;
+    Ok(true)
+}
+
+#[tauri::command]
+pub fn close_ssh_terminal(state: State<SshState>, terminal_id: String) -> Result<bool, SshError> {
+    close_terminal_session(&state.terminal_sessions, &terminal_id);
+    Ok(true)
 }
 
 fn transfer_progress(

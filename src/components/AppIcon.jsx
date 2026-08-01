@@ -29,6 +29,12 @@ const ICON_PATHS = {
       <path d="M8 3.5h8" />
     </>
   ),
+  terminal: (
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <path d="m7 9.5 3 2.5-3 2.5M12.5 14.5h4" />
+    </>
+  ),
   trash: (
     <>
       <path d="M7.5 7.5h9l-.8 11.2a2 2 0 0 1-2 1.8h-3.4a2 2 0 0 1-2-1.8z" fill="currentColor" fillOpacity=".16" />

@@ -3,6 +3,7 @@ import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Uplo
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
+import TerminalModal from './TerminalModal.jsx'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as dialog from '@tauri-apps/plugin-dialog'
@@ -77,6 +78,7 @@ const FileBrowser = ({
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
+  const [ terminalOpen, setTerminalOpen ] = React.useState(false)
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
@@ -469,6 +471,14 @@ const FileBrowser = ({
           </span>
         </div>
         <div className="connection-actions">
+          <Button
+            size="small"
+            icon={<AppIcon name="terminal" />}
+            onClick={() => setTerminalOpen(true)}
+            aria-label="打开远程终端"
+          >
+            终端
+          </Button>
           <Button size="small" icon={<AppIcon name="upload" />} loading={uploadSubmitting} onClick={handleUpload}>
             上传
           </Button>
@@ -679,6 +689,12 @@ const FileBrowser = ({
           onKeyUp={event => event.stopPropagation()}
         />
       </Modal>
+      <TerminalModal
+        open={terminalOpen}
+        onClose={() => setTerminalOpen(false)}
+        connectionId={currentConnectionId}
+        connection={currentConnection}
+      />
     </div>
   )
 }

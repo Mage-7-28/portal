@@ -184,6 +184,40 @@ class SftpManager {
     return true
   }
 
+  async openTerminal(connectionId, terminalId, columns, rows) {
+    this.requireConnected(connectionId)
+    return invoke('open_ssh_terminal', {
+      id: connectionId,
+      terminalId,
+      columns,
+      rows
+    })
+  }
+
+  async writeTerminal(terminalId, data) {
+    return invoke('write_ssh_terminal', {
+      terminalId,
+      data
+    })
+  }
+
+  async resizeTerminal(terminalId, columns, rows) {
+    return invoke('resize_ssh_terminal', {
+      terminalId,
+      columns,
+      rows
+    })
+  }
+
+  async closeTerminal(terminalId) {
+    try {
+      return await invoke('close_ssh_terminal', { terminalId })
+    } catch {
+      // 连接断开后 Rust 端可能已经清理会话，关闭操作可以安全忽略。
+      return false
+    }
+  }
+
   async uploadFile(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId) {
     return this.transfer('upload', connectionId, {
       localPath,

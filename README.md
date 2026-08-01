@@ -11,6 +11,7 @@ Portal 是一个基于 Tauri 2、React 和 Rust `ssh2` 的跨平台 SFTP 桌面�
 - 远程目录浏览、路径跳转、返回上级和刷新
 - 文件预览、新建目录、重命名、删除
 - 多文件上传、下载、实时进度和取消
+- 独立 SSH PTY 终端，支持命令历史、Tab 补全、ANSI 颜色和交互式程序
 - 通过菜单栏“下载路径”维护本地下载目录，窗口底部显示当前生效路径
 - 临时文件 + 原子替换，避免中断传输留下半成品
 - macOS、Windows、Linux 原生窗口和路径处理
@@ -54,8 +55,8 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 安全说明
 
-Portal 不接受任意远程 shell 命令，文件操作全部通过 SFTP 专用接口完成。首次连接必须确认主机指纹；指纹变化会阻止连接。请勿把密码、私钥或私钥口令写入连接配置、日志、截图或 Gitee Issue。
+文件操作全部通过 SFTP 专用接口完成；远程终端使用独立 SSH PTY 会话，因此不会阻塞文件传输。首次连接必须确认主机指纹；指纹变化会阻止连接。请勿把密码、私钥或私钥口令写入连接配置、日志、截图或 Gitee Issue。
 
 ## 许可证
 
-本项目采用 MIT License，见 [`LICENSE`](./LICENSE)。第三方依赖及其许可证见 [`DEPENDENCIES.md`](./DEPENDENCIES.md) 和 [`license-report.csv`](./license-report.csv)。
+本项目采用 MIT License，见 [`LICENSE`](./LICENSE)。第三方依赖及其许可证记录见 [`license-report.csv`](./license-report.csv)。
