@@ -2,9 +2,9 @@ import React, { useEffect, useState } from 'react'
 import { Button, Form, Input, Modal, Radio, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import * as dialog from '@tauri-apps/plugin-dialog'
-import toast from 'react-hot-toast'
 import sftpManager from '../utils/sftpUtils.js'
-import { msgBoxStyle, normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
+import { normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
+import { notification } from '../utils/notificationUtils.js'
 
 const { Text } = Typography
 
@@ -60,7 +60,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
         )
         if (!accepted) {
           setTestResult({ ...result, trusted: false })
-          toast.error('未信任服务器指纹，连接测试已取消', { id: 'msgBoxGlobal', style: msgBoxStyle })
+          void notification.error('未信任服务器指纹，连接测试已取消')
           return
         }
 
@@ -73,13 +73,13 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
       }
 
       if (result.success) {
-        toast.success('连接测试成功，服务器指纹已信任', { id: 'msgBoxGlobal', style: msgBoxStyle })
+        void notification.success('连接测试成功，服务器指纹已信任')
       } else {
-        toast.error(`连接测试失败：${ result.error }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        void notification.error(`连接测试失败：${ result.error }`)
       }
     } catch (error) {
       if (error?.errorFields) return
-      toast.error(`连接测试失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`连接测试失败：${ normalizeError(error) }`)
     } finally {
       setTesting(false)
     }
@@ -101,10 +101,10 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
 
     try {
       await onAddSuccess(profile, { password: values.password || '', passphrase: values.passphrase || '' })
-      toast.success('连接配置已保存，凭据仅保存在当前会话', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success('连接配置已保存，凭据仅保存在当前会话')
       onCancel()
     } catch (error) {
-      toast.error(`保存连接失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`保存连接失败：${ normalizeError(error) }`)
     }
   }
 

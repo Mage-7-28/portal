@@ -6,10 +6,10 @@ import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import toast from 'react-hot-toast'
-import { GlobalFontFamily, msgBoxStyle, normalizeError, StoreKeys, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR_FALLBACK, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from './utils/common.js'
-import { store, useStoreValue } from './utils/storeUtils.js'
 import { Toaster } from 'react-hot-toast'
+import { GlobalFontFamily, normalizeError, StoreKeys, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR_FALLBACK, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from './utils/common.js'
+import { store, useStoreValue } from './utils/storeUtils.js'
+import { notification } from './utils/notificationUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import portalLogo from '../src-tauri/icons/128x128.png'
@@ -40,7 +40,7 @@ function App() {
       await invoke('exit_application')
     } catch (error) {
       exitRequestedRef.current = false
-      toast.error('退出应用失败：' + normalizeError(error), { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error('退出应用失败：' + normalizeError(error))
     } finally {
       exitConfirmingRef.current = false
     }
@@ -62,9 +62,9 @@ function App() {
             })
             if (typeof result !== 'string' || !result) return
             await store.set(StoreKeys.DOWNLOAD_PATH, result)
-            toast.success('下载路径已更新', { id: 'msgBoxGlobal', style: msgBoxStyle })
+            void notification.success('下载路径已更新')
           } catch (error) {
-            toast.error('设置下载路径失败：' + normalizeError(error), { id: 'msgBoxGlobal', style: msgBoxStyle })
+            void notification.error('设置下载路径失败：' + normalizeError(error))
           }
         })
         if (active) {

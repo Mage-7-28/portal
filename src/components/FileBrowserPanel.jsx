@@ -1,16 +1,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { Modal, Progress } from 'antd'
-import toast from 'react-hot-toast'
 import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
-import { SftpConnectionStatus, StoreKeys, msgBoxStyle, normalizeError } from '../utils/constants.js'
+import { SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
 import PasswordPromptModal from './PasswordPromptModal.jsx'
+import { notification } from '../utils/notificationUtils.js'
 
 const normalizeProfile = (profile, index) => {
   if (!profile || typeof profile !== 'object' || !profile.host || !profile.username) return null
@@ -145,10 +145,7 @@ function FileBrowserPanel() {
   useEffect(() => sftpManager.subscribeConnectionLost(({ id, reason }) => {
     if (activeConnectionIdRef.current !== id) return
     resetRemoteView()
-    toast.error(`连接已断开：${ reason || '服务器无响应，请重新连接' }`, {
-      id: 'msgBoxGlobal',
-      style: msgBoxStyle
-    })
+    void notification.error(`连接已断开：${ reason || '服务器无响应，请重新连接' }`)
   }), [resetRemoteView])
 
   // SSH 保活可以避免空闲 NAT 过期；主动探测也能在用户停留目录页面时
@@ -217,7 +214,7 @@ function FileBrowserPanel() {
       updated.delete(connectionId)
       return updated
     })
-    toast.success('连接已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+    void notification.success('连接已删除')
   }
 
   const updateProfile = async (connectionId, changes) => {
@@ -268,11 +265,11 @@ function FileBrowserPanel() {
       setDrives(deriveRemoteDrives(home || '/'))
       setCurrentPath(home || '/')
       await loadRemoteDirectory(home || '/', connectionId)
-      toast.success('连接成功', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success('连接成功')
       setPasswordPrompt(null)
     } catch (error) {
       await sftpManager.removeConnection(connection.id).catch(() => undefined)
-      toast.error(`连接失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`连接失败：${ normalizeError(error) }`)
     } finally {
       setLoading(false)
       setPasswordLoading(false)
@@ -355,11 +352,11 @@ function FileBrowserPanel() {
     }
     const descriptor = getPreviewDescriptor(entry.name)
     if (descriptor.kind === 'unsupported') {
-      toast.error(`暂不支持预览“${ entry.name }”，请下载后使用本地应用打开`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`暂不支持预览“${ entry.name }”，请下载后使用本地应用打开`)
       return
     }
     if (Number(entry.size) > MAX_PREVIEW_BYTES) {
-      toast.error(`文件超过 ${ formatFileSize(MAX_PREVIEW_BYTES) } 的预览限制，请下载后打开`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`文件超过 ${ formatFileSize(MAX_PREVIEW_BYTES) } 的预览限制，请下载后打开`)
       return
     }
     const currentPreviewRequest = ++previewRequestId.current
@@ -419,7 +416,7 @@ function FileBrowserPanel() {
       }
     } catch (previewError) {
       if (currentPreviewRequest === previewRequestId.current) {
-        toast.error(`预览失败：${ normalizeError(previewError) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        void notification.error(`预览失败：${ normalizeError(previewError) }`)
       }
     } finally {
       if (currentPreviewRequest === previewRequestId.current) {
@@ -451,7 +448,7 @@ function FileBrowserPanel() {
       downloadPath = await resolveDownloadPath()
       if (!downloadPath) return false
     } catch (error) {
-      toast.error(`下载失败：${ normalizeError(error) }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`下载失败：${ normalizeError(error) }`)
       return false
     }
 
@@ -568,16 +565,16 @@ function FileBrowserPanel() {
       return false
     }
     if (failedEntries.length === 0 && skippedCount === 0 && downloadedCount === entries.length) {
-      toast.success(`已下载 ${ entries.length } 个项目`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success(`已下载 ${ entries.length } 个项目`)
       return true
     }
     const failedNames = failedEntries.map(item => item.entry.name).join('、')
     const summary = `已下载 ${ downloadedCount } 个项目${ skippedCount > 0 ? `，跳过 ${ skippedCount } 个` : '' }${ failedEntries.length > 0 ? `，${ failedEntries.length } 个失败` : '' }`
     const summaryMessage = `${ summary }${ failedNames ? `：${ failedNames }` : '' }`
     if (failedEntries.length > 0) {
-      toast.error(summaryMessage, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(summaryMessage)
     } else {
-      toast.success(summaryMessage, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success(summaryMessage)
     }
     return false
   }
@@ -642,10 +639,10 @@ function FileBrowserPanel() {
       await deleteRemoteEntry(entry, status)
       status.update(92, '正在刷新目录...', { phase: 'refreshing' })
       await loadRemoteDirectory(currentPath)
-      toast.success('已删除', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success('已删除')
     } catch (deleteError) {
       const message = normalizeError(deleteError)
-      toast.error(`删除失败：${ message }`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.error(`删除失败：${ message }`)
     } finally {
       status.dismiss()
     }
@@ -698,14 +695,11 @@ function FileBrowserPanel() {
       })
       await loadRemoteDirectory(currentPath)
       if (failedEntries.length === 0 && deletedCount === entries.length) {
-        toast.success(`已删除 ${ entries.length } 个项目`, { id: 'msgBoxGlobal', style: msgBoxStyle })
+        void notification.success(`已删除 ${ entries.length } 个项目`)
         return true
       }
       const failedNames = failedEntries.map(item => item.entry.name).join('、')
-      toast.error(
-        `已删除 ${ deletedCount } 个项目，${ failedEntries.length } 个失败${ failedNames ? `：${ failedNames }` : '' }`,
-        { id: 'msgBoxGlobal', style: msgBoxStyle }
-      )
+      void notification.error(`已删除 ${ deletedCount } 个项目，${ failedEntries.length } 个失败${ failedNames ? `：${ failedNames }` : '' }`)
       return false
     } finally {
       status.dismiss()
@@ -725,7 +719,7 @@ function FileBrowserPanel() {
       )
       status.update(82, '正在刷新目录...')
       await loadRemoteDirectory(currentPath)
-      toast.success('已重命名', { id: 'msgBoxGlobal', style: msgBoxStyle })
+      void notification.success('已重命名')
     } catch (renameError) {
       // 保持弹窗打开，让用户修正名称或重新尝试。
       throw renameError
