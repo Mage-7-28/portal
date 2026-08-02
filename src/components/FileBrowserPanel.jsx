@@ -58,6 +58,15 @@ const deriveRemoteDrives = (path) => {
   return match ? [`${ match[1] }:/`] : []
 }
 
+// 让 loading 先完成一帧渲染，再调用原生 SSH 接口，避免等待期间看起来没有响应。
+const waitForNextPaint = () => new Promise(resolve => {
+  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+    window.requestAnimationFrame(() => resolve())
+    return
+  }
+  setTimeout(resolve, 0)
+})
+
 function FileBrowserPanel() {
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
@@ -229,6 +238,7 @@ function FileBrowserPanel() {
     setConnectingId(connection.id)
     setPasswordLoading(true)
     setLoading(true)
+    await waitForNextPaint()
     const credentialsValue = typeof credentialsForProfile === 'string'
       ? { password: credentialsForProfile, passphrase: '' }
       : (credentialsForProfile || { password: '', passphrase: '' })

@@ -650,6 +650,7 @@ html,
 }
 
 .connection-row.ant-list-item {
+  cursor: pointer;
   min-height: 54px;
   padding: 8px 10px !important;
   border: 1px solid #3c3f41 !important;
@@ -661,6 +662,22 @@ html,
 .connection-row.ant-list-item:hover {
   border-color: #53565a !important;
   background: #2b2b2b;
+}
+
+.connection-row.ant-list-item.is-connecting,
+.connection-row.ant-list-item.is-connecting:hover {
+  border-color: lab(68.9646% 33.16 32.3692) !important;
+  background: #332b27;
+}
+
+.connection-row.ant-list-item:focus-visible {
+  outline: 2px solid rgba(192, 138, 102, 0.72);
+  outline-offset: 1px;
+}
+
+.connection-row .ant-list-item-action,
+.connection-row .ant-list-item-action button {
+  cursor: default;
 }
 
 .connection-row .ant-list-item-meta {
@@ -696,6 +713,20 @@ html,
 
 .connection-row .ant-list-item-action > li {
   padding: 0 0 0 5px;
+}
+
+.connection-row-loading {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  color: lab(68.9646% 33.16 32.3692);
+}
+
+.connection-loading .ant-spin-dot-item,
+.connection-row-loading .ant-spin-dot-item {
+  background-color: lab(68.9646% 33.16 32.3692);
 }
 
 .connection-row-icon {

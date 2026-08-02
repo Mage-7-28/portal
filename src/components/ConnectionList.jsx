@@ -12,6 +12,7 @@ const ConnectionList = ({
 }) => {
   // 弹窗状态
   const [ addModalVisible, setAddModalVisible ] = useState(false)
+  const connectingConnection = connections.find(item => item.id === connectingId)
 
   return (
     <div
@@ -49,18 +50,26 @@ const ConnectionList = ({
               rowKey={item => item.id}
               renderItem={item => (
                 <List.Item
-                  className="connection-row"
+                  className={`connection-row${ connectingId === item.id ? ' is-connecting' : '' }`}
+                  aria-busy={connectingId === item.id}
+                  title={`双击连接 ${ item.name }`}
+                  onDoubleClick={event => {
+                    // 操作区只负责自身操作，避免双击删除按钮时误触发连接。
+                    if (event.target.closest('button')) return
+                    if (connectingId) return
+                    void handleConnect(item)
+                  }}
                   actions={[
-                    <Button
-                      key={`${ item.id }-connect`}
-                      type="primary"
-                      size="small"
-                      onClick={() => handleConnect(item)}
-                      disabled={connectingId !== null && connectingId !== item.id}
-                      loading={connectingId === item.id}
-                    >
-                      连接
-                    </Button>,
+                    ...(connectingId === item.id ? [
+                      <span
+                        key={`${ item.id }-connecting`}
+                        className="connection-row-loading"
+                        role="status"
+                        aria-label="正在连接"
+                      >
+                        <Spin size="small" />
+                      </span>
+                    ] : []),
                     <Tooltip title="删除连接" key={`${ item.id }-delete-tooltip`}>
                       <Button
                         key={`${ item.id }-delete`}
@@ -95,7 +104,7 @@ const ConnectionList = ({
             className="connection-loading"
           >
             <Spin size="small" />
-            <span>正在连接服务器...</span>
+            <span>{connectingConnection ? `正在连接 ${ connectingConnection.name }...` : '正在连接服务器...'}</span>
           </div>
         )}
       </div>
