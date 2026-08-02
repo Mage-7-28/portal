@@ -23,6 +23,7 @@ const ConnectionList = ({
         <div>
           <h1>SSH 连接</h1>
           <span>{connections.length} 个配置</span>
+          {connections.length > 0 && <span className="connection-header-hint">双击连接</span>}
         </div>
         <Button
           type="primary"

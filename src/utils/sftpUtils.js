@@ -69,7 +69,17 @@ class SftpManager {
     try {
       return await invoke(command, args)
     } catch (error) {
-      if (this.isConnectionLossError(error)) this.markConnectionLost(connectionId, error)
+      if (this.isConnectionLossError(error)) {
+        this.markConnectionLost(connectionId, error)
+      } else {
+        // 某些 SFTP 失效只返回通用 failure，先用保活探测区分断线和权限/路径错误。
+        try {
+          const alive = await this.checkConnection(connectionId)
+          if (!alive) this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+        } catch {
+          this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+        }
+      }
       throw error
     }
   }
@@ -475,9 +485,14 @@ class SftpManager {
       const result = await invoke('check_ssh_connection', { id: connectionId })
       const info = this.connections.get(connectionId)
       if (info) info.lastActivity = Date.now()
-      return Boolean(result)
+      const healthy = Boolean(result)
+      if (!healthy) this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+      return healthy
     } catch (error) {
-      if (this.isConnectionLossError(error)) this.markConnectionLost(connectionId, error)
+      this.markConnectionLost(
+        connectionId,
+        this.isConnectionLossError(error) ? error : '服务器无响应或网络已断开'
+      )
       throw error
     }
   }

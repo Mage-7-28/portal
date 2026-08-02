@@ -169,11 +169,11 @@ function FileBrowserPanel() {
       probing = true
       try {
         await sftpManager.checkConnection(connectionId)
-      } catch {
-        // Rust 会为传输故障发送 ssh-disconnected；如果事件延迟，连接管理器
-        // 的本地降级逻辑仍然可以发现连接状态变化。
-        if (!disposed && sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
+      } catch (probeError) {
+        // 探测失败本身就说明当前会话不可用，不能只依赖连接管理器是否已经更新状态。
+        if (!disposed && activeConnectionIdRef.current === connectionId) {
           resetRemoteView()
+          void notification.error(`连接已断开：${ normalizeError(probeError) }`)
         }
       } finally {
         probing = false
@@ -337,8 +337,15 @@ function FileBrowserPanel() {
     } catch (requestError) {
       if (currentRequest === requestId.current) {
         setFiles([])
+        const connectionStillActive = activeConnectionIdRef.current === connectionId
         if (sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
-          resetRemoteView()
+          if (connectionStillActive) {
+            resetRemoteView()
+            void notification.error(`连接已断开：${ normalizeError(requestError) }`)
+          }
+        } else if (!connectionStillActive) {
+          // 连接丢失事件已经完成页面重置，忽略这次过期请求的错误。
+          return
         } else {
           setError(normalizeError(requestError))
         }
