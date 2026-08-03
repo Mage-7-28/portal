@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Button, Modal, Spin } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
-import '@xterm/xterm/css/xterm.css'
 import { listen } from '@tauri-apps/api/event'
 import AppIcon from './AppIcon'
 import sftpManager from '../utils/sftpUtils.js'
@@ -39,20 +38,56 @@ const TERMINAL_THEME = {
   brightWhite: '#f0ede6'
 }
 
-const LOG_HIGHLIGHTS = [
-  { pattern: /\b(?:FATAL|ERROR|EXCEPTION|TRACEBACK)\b/gi, color: '38;2;225;132;125' },
-  { pattern: /\b(?:WARN|WARNING)\b/gi, color: '38;2;220;177;105' },
-  { pattern: /\b(?:INFO|NOTICE|SUCCESS)\b/gi, color: '38;2;145;181;151' },
-  { pattern: /\b(?:DEBUG|TRACE)\b/gi, color: '38;2;158;162;173' }
-]
+// 终端优先使用等宽字体，按 macOS、Windows、Linux 的常见字体顺序回退。
+const TERMINAL_FONT_FAMILY = '"SF Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace'
 
-const highlightTerminalOutput = (data) => {
-  // ANSI 输出交给 xterm 原样解析，避免干扰 vim、top 等交互式程序。
-  if (data.includes('\x1b')) return data
-  return LOG_HIGHLIGHTS.reduce(
-    (output, { pattern, color }) => output.replace(pattern, value => `\x1b[${ color }m${ value }\x1b[0m`),
-    data
-  )
+const LOG_HIGHLIGHT_COLORS = {
+  FATAL: '38;2;225;132;125',
+  ERROR: '38;2;225;132;125',
+  EXCEPTION: '38;2;225;132;125',
+  TRACEBACK: '38;2;225;132;125',
+  WARN: '38;2;220;177;105',
+  WARNING: '38;2;220;177;105',
+  INFO: '38;2;145;181;151',
+  NOTICE: '38;2;145;181;151',
+  SUCCESS: '38;2;145;181;151',
+  DEBUG: '38;2;158;162;173',
+  TRACE: '38;2;158;162;173'
+}
+
+const LOG_HIGHLIGHT_PATTERN = /\b(FATAL|ERROR|EXCEPTION|TRACEBACK|WARN(?:ING)?|INFO|NOTICE|SUCCESS|DEBUG|TRACE)\b/gi
+const ANSI_SEQUENCE_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g
+const UNSUPPORTED_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/
+
+const highlightPlainText = text => text.replace(
+  LOG_HIGHLIGHT_PATTERN,
+  value => `\x1b[${ LOG_HIGHLIGHT_COLORS[value.toUpperCase()] }m${ value }\x1b[0m`
+)
+
+const decorateTerminalOutput = data => {
+  // 控制字符可能属于光标、清屏或全屏程序；这类数据必须原样交给 xterm。
+  if (!data || UNSUPPORTED_CONTROL_PATTERN.test(data)) return data
+
+  const matches = [...data.matchAll(ANSI_SEQUENCE_PATTERN)]
+  if (!data.includes('\x1b')) return highlightPlainText(data)
+  if (!matches.length) return data
+
+  let cursor = 0
+  let hasNonSgrSequence = false
+  let decorated = ''
+  for (const match of matches) {
+    const sequence = match[0]
+    const start = match.index ?? cursor
+    decorated += highlightPlainText(data.slice(cursor, start))
+    decorated += sequence
+    cursor = start + sequence.length
+    if (!/^\x1b\[[0-9;?]*m$/.test(sequence)) hasNonSgrSequence = true
+  }
+
+  // 不认识的 ESC 序列可能是跨 IPC 数据块的半截序列，不能对其前后的文本做改写。
+  if (hasNonSgrSequence || data.slice(cursor).includes('\x1b')) return data
+  decorated += highlightPlainText(data.slice(cursor))
+  return decorated
 }
 
 const TerminalModal = ({ open, onClose, connectionId, connection }) => {
@@ -62,6 +97,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
   const closingRef = useRef(false)
   const writeErrorShownRef = useRef(false)
   const closeTerminalRef = useRef(() => {})
+  const fitTerminalRef = useRef(() => {})
   const [ status, setStatus ] = useState('closed')
   const [ statusMessage, setStatusMessage ] = useState('')
 
@@ -87,7 +123,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
       cursorBlink: true,
       cursorStyle: 'bar',
       disableStdin: true,
-      fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", monospace',
+      fontFamily: TERMINAL_FONT_FAMILY,
       fontSize: 12,
       lineHeight: 1.18,
       scrollback: 5000,
@@ -107,12 +143,30 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
 
     const fitTerminal = () => {
       if (disposed) return
+      const container = containerRef.current
+      // Modal 的开场动画结束前容器可能为 0 尺寸，此时跳过测量，交给 ResizeObserver 重试。
+      if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return
       try {
         fitAddon.fit()
       } catch {
         return
       }
     }
+    fitTerminalRef.current = fitTerminal
+
+    let fitFrame = 0
+    const scheduleFit = () => {
+      if (disposed || fitFrame) return
+      fitFrame = window.requestAnimationFrame(() => {
+        fitFrame = 0
+        fitTerminal()
+      })
+    }
+    const ResizeObserverConstructor = typeof window !== 'undefined' ? window.ResizeObserver : undefined
+    const resizeObserver = typeof ResizeObserverConstructor === 'function'
+      ? new ResizeObserverConstructor(scheduleFit)
+      : null
+    resizeObserver?.observe(containerRef.current)
 
     const dataDisposable = terminal.onData(data => {
       if (disposed || !backendReadyRef.current) return
@@ -137,7 +191,9 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
           listen('ssh-terminal-data', event => {
             const payload = event.payload || {}
             if (disposed || payload.terminalId !== terminalId || typeof payload.data !== 'string') return
-            terminal.write(highlightTerminalOutput(payload.data))
+            // xterm 自带 VT/ANSI 解析器；普通日志只增强关键词颜色，交互式控制序列原样传递。
+            // 这样不会按 IPC 数据块破坏 vim、top 等程序的转义序列。
+            terminal.write(decorateTerminalOutput(payload.data))
           }),
           listen('ssh-terminal-error', event => {
             const payload = event.payload || {}
@@ -193,9 +249,11 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
 
     return () => {
       disposed = true
+      if (fitFrame) window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(firstFrame)
       window.cancelAnimationFrame(secondFrame)
       window.removeEventListener('resize', fitTerminal)
+      resizeObserver?.disconnect()
       backendReadyRef.current = false
       dataDisposable.dispose()
       resizeDisposable.dispose()
@@ -205,6 +263,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
       terminal.dispose()
       terminalRef.current = null
       closeTerminalRef.current = () => {}
+      fitTerminalRef.current = () => {}
     }
   }, [ open, connectionId ])
 
@@ -230,6 +289,12 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
       keyboard
       forceRender
       destroyOnHidden
+      afterOpenChange={visible => {
+        if (!visible) return
+        // 等待 Modal 过渡完成后再适配，确保 canvas、字体和滚动区域使用真实尺寸。
+        fitTerminalRef.current()
+        window.requestAnimationFrame(() => fitTerminalRef.current())
+      }}
     >
       <div className="terminal-connection-meta">
         <AppIcon name="terminal" />

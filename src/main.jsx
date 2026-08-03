@@ -3,8 +3,13 @@ import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
 
 // 引入样式文件
+// Ant Design 和 react-hot-toast 的静态样式用于生产包，避免 CSP 阻止运行时注入导致组件退化为原生 HTML。
+import './style/antd-theme.css'
+import './style/react-hot-toast.css'
 import './style/index.css'
 import './style/fonts.css'
+// xterm 官方要求在应用入口加载基础 CSS，终端组件只负责创建实例和写入 PTY 数据。
+import '@xterm/xterm/css/xterm.css'
 import { GlobalFontFamily } from './utils/common.js'
 import { initStore } from './utils/storeUtils.js'
 import { initNotification } from './utils/notificationUtils.js'

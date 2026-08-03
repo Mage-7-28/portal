@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Button, ConfigProvider, Modal, theme } from 'antd'
+import { Button, ConfigProvider, Modal } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -7,7 +7,8 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { Toaster } from 'react-hot-toast'
-import { GlobalFontFamily, normalizeError, StoreKeys, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR_FALLBACK, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from './utils/common.js'
+import { normalizeError, StoreKeys } from './utils/common.js'
+import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
@@ -134,38 +135,7 @@ function App() {
   }, [requestApplicationExit])
 
   return (
-    <ConfigProvider theme={ {
-      token: {
-        colorPrimary: THEME_PRIMARY_COLOR_FALLBACK,
-        colorBgBase: THEME_BG_PRIMARY,
-        colorBgContainer: THEME_BG_SECONDARY,
-        colorBgElevated: THEME_BG_INPUT,
-        colorBorder: THEME_BORDER_COLOR,
-        colorText: THEME_TEXT_PRIMARY,
-        colorTextSecondary: THEME_TEXT_SECONDARY,
-        colorLink: THEME_TEXT_LINK,
-        borderRadius: 5,
-        fontFamily: GlobalFontFamily,
-        fontSize: 14,
-        fontSizeSM: 13,
-        controlHeight: 32,
-        controlHeightSM: 28,
-        lineHeight: 1.4
-      },
-      algorithm: [ theme.darkAlgorithm, theme.compactAlgorithm ],
-      components: {
-        Popover: {
-          colorBgElevated: THEME_BG_INPUT
-        },
-        Card: {
-          headerBg: THEME_BG_SECONDARY,
-          actionsBg: THEME_BG_SECONDARY
-        },
-        Modal: {
-          titleFontSize: 15
-        }
-      }
-    } } locale={ zhCN } componentSize="small">
+    <ConfigProvider theme={ AntdThemeConfig } locale={ zhCN } componentSize="small">
       <div className="app-shell">
         <div className="app-frame">
           <div className="app-content">

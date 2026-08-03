@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "generate:styles": "node scripts/generate-antd-theme.mjs && node scripts/generate-react-hot-toast-style.mjs",
+    "prebuild": "pnpm generate:styles",
     "build": "vite build",
     "preview": "vite preview",
     "tauri:dev": "tauri dev --config src-tauri/tauri.dev.conf.json",
@@ -36,6 +38,7 @@
     "valtio": "^2.3.1"
   },
   "devDependencies": {
+    "@ant-design/static-style-extract": "2.1.0",
     "@eslint/eslintrc": "^3.3.5",
     "@tauri-apps/cli": "^2",
     "@typescript-eslint/eslint-plugin": "^8.57.1",
@@ -46,6 +49,7 @@
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
+    "goober": "2.1.18",
     "license-checker": "^25.0.1",
     "vite": "^7.0.4"
   }
