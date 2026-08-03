@@ -1420,8 +1420,40 @@ html,
 }
 
 .terminal-emulator .xterm-rows {
+  pointer-events: none;
   color: #e8e5de !important;
   line-height: 1.18 !important;
+  white-space: pre;
+}
+
+.terminal-emulator .xterm-rows span {
+  display: inline-block;
+  height: 100%;
+  vertical-align: top;
+}
+
+.terminal-emulator .xterm-rows > div {
+  overflow: hidden;
+}
+
+.terminal-emulator .xterm-rows span.xterm-bold {
+  font-weight: 700;
+}
+
+.terminal-emulator .xterm-rows span.xterm-italic {
+  font-style: italic;
+}
+
+.terminal-emulator .xterm-rows .xterm-cursor-bar {
+  box-shadow: 1px 0 0 #c08a66 inset;
+}
+
+.terminal-emulator .xterm-rows .xterm-cursor-underline {
+  border-bottom: 1px solid #c08a66;
+}
+
+.terminal-emulator .xterm-selection div {
+  background-color: rgba(192, 138, 102, 0.35);
 }
 
 /* ANSI 基础色与终端主题保持一致，避免动态 style 标签被系统 WebView 拦截后颜色退化。 */

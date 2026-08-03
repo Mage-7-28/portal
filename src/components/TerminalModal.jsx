@@ -56,7 +56,6 @@ const LOG_HIGHLIGHT_COLORS = {
 }
 
 const LOG_HIGHLIGHT_PATTERN = /\b(FATAL|ERROR|EXCEPTION|TRACEBACK|WARN(?:ING)?|INFO|NOTICE|SUCCESS|DEBUG|TRACE)\b/gi
-const ANSI_SEQUENCE_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g
 const UNSUPPORTED_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/
 
 const highlightPlainText = text => text.replace(
@@ -65,29 +64,9 @@ const highlightPlainText = text => text.replace(
 )
 
 const decorateTerminalOutput = data => {
-  // 控制字符可能属于光标、清屏或全屏程序；这类数据必须原样交给 xterm。
-  if (!data || UNSUPPORTED_CONTROL_PATTERN.test(data)) return data
-
-  const matches = [...data.matchAll(ANSI_SEQUENCE_PATTERN)]
-  if (!data.includes('\x1b')) return highlightPlainText(data)
-  if (!matches.length) return data
-
-  let cursor = 0
-  let hasNonSgrSequence = false
-  let decorated = ''
-  for (const match of matches) {
-    const sequence = match[0]
-    const start = match.index ?? cursor
-    decorated += highlightPlainText(data.slice(cursor, start))
-    decorated += sequence
-    cursor = start + sequence.length
-    if (!/^\x1b\[[0-9;?]*m$/.test(sequence)) hasNonSgrSequence = true
-  }
-
-  // 不认识的 ESC 序列可能是跨 IPC 数据块的半截序列，不能对其前后的文本做改写。
-  if (hasNonSgrSequence || data.slice(cursor).includes('\x1b')) return data
-  decorated += highlightPlainText(data.slice(cursor))
-  return decorated
+  // 含有 ESC 或其他控制字符的数据可能属于 ANSI、光标控制或全屏程序，必须原样交给 xterm。
+  if (!data || data.includes('\x1b') || UNSUPPORTED_CONTROL_PATTERN.test(data)) return data
+  return highlightPlainText(data)
 }
 
 const TerminalModal = ({ open, onClose, connectionId, connection }) => {
