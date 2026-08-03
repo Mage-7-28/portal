@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { Button, Form, Input, Modal, Radio, Typography } from 'antd'
+import { Button, Form, Input, Modal, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import sftpManager from '../utils/sftpUtils.js'
@@ -17,7 +17,6 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   const [form] = Form.useForm()
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
-  const authMethod = Form.useWatch('authMethod', form) || 'password'
   const testResultColor = testResult?.success
     ? THEME_SUCCESS
     : testResult?.requiresHostKeyConfirmation
@@ -41,9 +40,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
         port: Number(values.port),
         username: values.username.trim(),
         password: values.password,
-        authMethod: values.authMethod,
-        privateKeyPath: values.privateKeyPath,
-        passphrase: values.passphrase
+        authMethod: 'password'
       }
       let result = await sftpManager.testConnection(config)
       setTestResult(result)
@@ -92,15 +89,14 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
       host: values.host.trim(),
       port: Number(values.port),
       username: values.username.trim(),
-      authMethod: values.authMethod,
-      privateKeyPath: values.privateKeyPath || null,
+      authMethod: 'password',
       hostKeyFingerprint: testResult?.trusted ? testResult?.hostKey?.fingerprint || null : null,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
 
     try {
-      await onAddSuccess(profile, { password: values.password || '', passphrase: values.passphrase || '' })
+      await onAddSuccess(profile, { password: values.password || '' })
       void notification.success('连接配置已保存，凭据仅保存在当前会话')
       onCancel()
     } catch (error) {
@@ -116,7 +112,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
       onCancel={onCancel}
       centered
       footer={null}
-      width="min(440px, calc(100vw - 24px))"
+      width="min(420px, calc(100vw - 24px))"
       destroyOnHidden
     >
       <Form
@@ -154,46 +150,6 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
           </Form.Item>
         </div>
 
-        <Form.Item name="authMethod" label="认证方式" initialValue="password">
-          <Radio.Group optionType="button" buttonStyle="solid">
-            <Radio.Button value="password"><AppIcon name="lock" /> 密码</Radio.Button>
-            <Radio.Button value="key"><AppIcon name="key" /> 私钥</Radio.Button>
-            <Radio.Button value="agent">SSH Agent</Radio.Button>
-          </Radio.Group>
-        </Form.Item>
-
-        {authMethod === 'key' && (
-          <>
-            <Form.Item
-              name="privateKeyPath"
-              label={<span><AppIcon name="key" /> 私钥文件</span>}
-              rules={[{ required: true, message: '请选择私钥文件' }]}
-            >
-              <Input
-                readOnly
-                placeholder="选择 ~/.ssh/id_ed25519"
-                addonAfter={<Button
-                  className="compact-icon-button"
-                  type="text"
-                  size="small"
-                  icon={<AppIcon name="file" />}
-                  aria-label="选择私钥文件"
-                  onClick={async () => {
-                    const selected = await dialog.open({ title: '选择 SSH 私钥', multiple: false, directory: false })
-                    if (typeof selected === 'string') form.setFieldValue('privateKeyPath', selected)
-                  }}
-                />}
-              />
-            </Form.Item>
-            <Form.Item name="passphrase" label="私钥口令（可选）">
-              <Input.Password
-                placeholder="私钥有口令时填写"
-                iconRender={visible => <AppIcon name={visible ? 'eye' : 'eyeOff'} />}
-              />
-            </Form.Item>
-          </>
-        )}
-
         <div className="form-row">
           <Form.Item
             name="username"
@@ -202,7 +158,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
           >
             <Input placeholder="root" />
           </Form.Item>
-          {authMethod === 'password' && <Form.Item
+          <Form.Item
             name="password"
             label={<span><AppIcon name="lock" /> 密码</span>}
             rules={[{ required: true, message: '请输入密码' }]}
@@ -212,7 +168,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
               autoComplete="current-password"
               iconRender={visible => <AppIcon name={visible ? 'eye' : 'eyeOff'} />}
             />
-          </Form.Item>}
+          </Form.Item>
         </div>
 
         {testResult && (
@@ -248,7 +204,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
         )}
 
         <Text type="secondary" className="credential-note" style={{ color: THEME_TEXT_SECONDARY }}>
-          <AppIcon name="key" /> 密码和私钥口令不会写入本地配置文件，只在本次运行期间保留。
+          <AppIcon name="lock" /> 密码不会写入本地配置文件，只在本次运行期间保留。
         </Text>
 
         <div className="modal-actions">

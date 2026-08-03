@@ -6,7 +6,7 @@ Portal 是一个基于 Tauri 2、React 和 Rust `ssh2` 的跨平台 SFTP 桌面�
 
 ## 功能
 
-- SSH 密码、私钥和 SSH Agent 认证
+- SSH 账户密码认证
 - 首次连接显示并校验服务器 SHA-256 主机指纹（TOFU）
 - 远程目录浏览、路径跳转、返回上级和刷新
 - 文件预览、新建目录、重命名、删除
@@ -15,7 +15,7 @@ Portal 是一个基于 Tauri 2、React 和 Rust `ssh2` 的跨平台 SFTP 桌面�
 - 通过菜单栏“下载路径”维护本地下载目录，窗口底部显示当前生效路径
 - 临时文件 + 原子替换，避免中断传输留下半成品
 - macOS、Windows、Linux 原生窗口和路径处理
-- 连接配置可持久化，密码和私钥口令仅保存在当前运行内存中
+- 连接配置可持久化，密码仅保存在当前运行内存中
 
 ## 开发环境
 
@@ -43,7 +43,7 @@ pnpm run tauri:linux     # Linux deb + AppImage
 pnpm run tauri:build     # 当前平台默认目标
 ```
 
-Windows 交叉编译需要安装 `x86_64-pc-windows-msvc` target 和 Visual Studio Build Tools；Linux 构建需要 Tauri 文档列出的 WebKitGTK、GTK 和 AppImage 依赖。发布前应在三种系统分别验证文件对话框、键盘快捷键、路径分隔符、通知权限和 SSH Agent。
+Windows 交叉编译需要安装 `x86_64-pc-windows-msvc` target 和 Visual Studio Build Tools；Linux 构建需要 Tauri 文档列出的 WebKitGTK、GTK 和 AppImage 依赖。发布前应在三种系统分别验证文件对话框、键盘快捷键、路径分隔符和通知权限。
 
 ## 质量检查
 
@@ -55,7 +55,7 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 安全说明
 
-文件操作全部通过 SFTP 专用接口完成；远程终端使用独立 SSH PTY 会话，因此不会阻塞文件传输。首次连接必须确认主机指纹；指纹变化会阻止连接。请勿把密码、私钥或私钥口令写入连接配置、日志、截图或 Gitee Issue。
+文件操作全部通过 SFTP 专用接口完成；远程终端使用独立 SSH PTY 会话，因此不会阻塞文件传输。首次连接必须确认主机指纹；指纹变化会阻止连接。请勿把密码写入连接配置、日志、截图或 Gitee Issue。
 
 ## 许可证
 

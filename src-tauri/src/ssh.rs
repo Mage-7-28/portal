@@ -112,12 +112,9 @@ pub struct SshConnection {
     pub port: u16,
     pub username: String,
     pub auth_method: String,
-    pub private_key_path: Option<String>,
     pub host_key_fingerprint: Option<String>,
     #[serde(skip_serializing)]
     pub password: String,
-    #[serde(skip_serializing)]
-    pub passphrase: Option<String>,
     pub connected: bool,
 }
 
@@ -326,17 +323,10 @@ fn validate_connection(connection: &SshConnection) -> Result<(), SshError> {
         ));
     }
     match connection.auth_method.as_str() {
-        "password" | "agent" => Ok(()),
-        "key"
-            if connection
-                .private_key_path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty()) =>
-        {
-            Ok(())
-        }
-        "key" => Err(SshError::UnsupportedAuth("未提供私钥路径".to_string())),
-        method => Err(SshError::UnsupportedAuth(method.to_string())),
+        "password" | "" => Ok(()),
+        _ => Err(SshError::UnsupportedAuth(
+            "当前版本仅支持账户密码认证".to_string(),
+        )),
     }
 }
 
@@ -354,23 +344,12 @@ fn verify_host_key(connection: &SshConnection, host_key: &HostKeyInfo) -> Result
 }
 
 fn authenticate(session: &Session, connection: &SshConnection) -> Result<(), SshError> {
-    let result = match connection.auth_method.as_str() {
-        "agent" => session.userauth_agent(&connection.username),
-        "key" => {
-            let path = connection
-                .private_key_path
-                .as_deref()
-                .ok_or_else(|| SshError::UnsupportedAuth("未提供私钥路径".to_string()))?;
-            session.userauth_pubkey_file(
-                &connection.username,
-                None,
-                Path::new(path),
-                connection.passphrase.as_deref(),
-            )
-        }
-        "password" | "" => session.userauth_password(&connection.username, &connection.password),
-        method => return Err(SshError::UnsupportedAuth(method.to_string())),
-    };
+    if !matches!(connection.auth_method.as_str(), "password" | "") {
+        return Err(SshError::UnsupportedAuth(
+            "当前版本仅支持账户密码认证".to_string(),
+        ));
+    }
+    let result = session.userauth_password(&connection.username, &connection.password);
 
     result.map_err(|error| SshError::AuthFailed(error.to_string()))?;
     if session.authenticated() {
@@ -1412,8 +1391,6 @@ pub fn test_sftp_connection(
     username: String,
     password: String,
     auth_method: Option<String>,
-    private_key_path: Option<String>,
-    passphrase: Option<String>,
     timeout: Option<u64>,
     host_key_fingerprint: Option<String>,
 ) -> Result<ConnectionTestResult, SshError> {
@@ -1423,10 +1400,8 @@ pub fn test_sftp_connection(
         port,
         username,
         auth_method: auth_method.unwrap_or_else(|| "password".to_string()),
-        private_key_path,
         host_key_fingerprint,
         password,
-        passphrase,
         connected: false,
     };
 
@@ -1464,8 +1439,6 @@ pub fn add_ssh_connection(
     username: String,
     password: String,
     auth_method: Option<String>,
-    private_key_path: Option<String>,
-    passphrase: Option<String>,
     host_key_fingerprint: Option<String>,
 ) -> Result<String, SshError> {
     let connection = SshConnection {
@@ -1474,10 +1447,8 @@ pub fn add_ssh_connection(
         port,
         username,
         auth_method: auth_method.unwrap_or_else(|| "password".to_string()),
-        private_key_path,
         host_key_fingerprint,
         password,
-        passphrase,
         connected: false,
     };
 
@@ -2643,13 +2614,29 @@ mod tests {
             port: 22,
             username: "user".to_string(),
             auth_method: "password".to_string(),
-            private_key_path: None,
             host_key_fingerprint: None,
             password: "secret".to_string(),
-            passphrase: None,
             connected: false,
         };
         assert!(validate_connection(&connection).is_err());
+    }
+
+    #[test]
+    fn rejects_non_password_authentication() {
+        let connection = SshConnection {
+            id: "test".to_string(),
+            host: "example.com".to_string(),
+            port: 22,
+            username: "user".to_string(),
+            auth_method: "key".to_string(),
+            host_key_fingerprint: None,
+            password: "secret".to_string(),
+            connected: false,
+        };
+        let error = validate_connection(&connection).expect_err("应拒绝非密码认证");
+        assert!(
+            matches!(error, SshError::UnsupportedAuth(message) if message == "当前版本仅支持账户密码认证")
+        );
     }
 
     #[test]

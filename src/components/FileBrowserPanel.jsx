@@ -21,8 +21,8 @@ const normalizeProfile = (profile, index) => {
     host: profile.host,
     port: Number(profile.port) || 22,
     username: profile.username,
-    authMethod: profile.authMethod || 'password',
-    privateKeyPath: profile.privateKeyPath || null,
+    // 旧版本可能保存过私钥或 SSH Agent 配置，统一迁移为账户密码认证。
+    authMethod: 'password',
     hostKeyFingerprint: profile.hostKeyFingerprint || null,
     createdAt: profile.createdAt || new Date().toISOString(),
     updatedAt: profile.updatedAt || profile.createdAt || new Date().toISOString()
@@ -234,7 +234,7 @@ function FileBrowserPanel() {
     await saveConnections(next)
     setCredentials(previous => {
       const updated = new Map(previous)
-      updated.set(profile.id, credentialsForProfile || { password: '', passphrase: '' })
+      updated.set(profile.id, { password: credentialsForProfile?.password || '' })
       return updated
     })
   }
@@ -271,8 +271,8 @@ function FileBrowserPanel() {
     setLoading(true)
     await waitForNextPaint()
     const credentialsValue = typeof credentialsForProfile === 'string'
-      ? { password: credentialsForProfile, passphrase: '' }
-      : (credentialsForProfile || { password: '', passphrase: '' })
+      ? { password: credentialsForProfile }
+      : { password: credentialsForProfile?.password || '' }
     let connectionId = null
     let retryMessage = ''
     try {
@@ -348,9 +348,8 @@ function FileBrowserPanel() {
 
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
-    const credentialsValue = credentials.get(connection.id) || { password: '', passphrase: '' }
-    if ((connection.authMethod === 'password' && !credentialsValue.password)
-      || (connection.authMethod === 'key' && !credentials.has(connection.id))) {
+    const credentialsValue = credentials.get(connection.id) || { password: '' }
+    if (!credentialsValue.password) {
       setPasswordLoading(false)
       setPasswordPromptError('')
       setPasswordPrompt(connection)
@@ -370,7 +369,7 @@ function FileBrowserPanel() {
     const connection = passwordPrompt
     void connectWithPassword(
       connection,
-      connection.authMethod === 'key' ? { passphrase: password } : { password }
+      { password }
     )
   }
 

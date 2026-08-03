@@ -12,7 +12,7 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading,
   return (
     <Modal
       rootClassName="compact-modal"
-      title={`输入 ${ connection?.name || '服务器' } 的${ connection?.authMethod === 'key' ? '私钥口令' : '密码' }`}
+      title={`输入 ${ connection?.name || '服务器' } 的密码`}
       open={visible}
       onCancel={onCancel}
       footer={null}
@@ -30,19 +30,17 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading,
         />
       )}
       <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>
-        <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中">
-          <Input value={connection?.username || ''} readOnly prefix={<AppIcon name="lock" />} />
+        <Form.Item label="用户名" help="密码只会保存在本次运行的内存中">
+          <Input value={connection?.username || ''} readOnly prefix={<AppIcon name="user" />} />
         </Form.Item>
         <Form.Item
           name="password"
-          label={connection?.authMethod === 'key' ? '私钥口令' : '密码'}
-          rules={connection?.authMethod === 'key'
-            ? []
-            : [{ required: true, message: '请输入密码' }]}
+          label="密码"
+          rules={[{ required: true, message: '请输入密码' }]}
         >
           <Input.Password
             autoFocus
-            placeholder={connection?.authMethod === 'key' ? '无口令私钥可留空' : '请输入密码'}
+            placeholder="请输入密码"
             autoComplete="current-password"
             iconRender={visible => <AppIcon name={visible ? 'eye' : 'eyeOff'} />}
           />

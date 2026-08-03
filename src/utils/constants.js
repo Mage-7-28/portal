@@ -118,9 +118,7 @@ export const isCredentialError = (error) => {
     || normalized.includes('auth failed')
     || normalized.includes('认证失败')
     || normalized.includes('password')
-    || normalized.includes('passphrase')
     || normalized.includes('permission denied')
-    || normalized.includes('publickey')
 }
 
 // 将底层 SSH 错误转换成用户可以直接处理的提示，避免把 libssh2 的内部信息暴露给用户。
@@ -138,7 +136,7 @@ export const getReadableConnectionError = (error) => {
     return '服务器需要确认主机指纹，请重新连接并确认服务器身份'
   }
   if (isCredentialError(error)) {
-    return '密码或私钥口令错误，请检查后重试'
+    return '账户密码错误，请检查后重试'
   }
   if (normalized.includes('unsupportedauth') || normalized.includes('认证方式不支持')) {
     return '当前认证方式不可用，请检查认证配置'

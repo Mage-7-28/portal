@@ -31,7 +31,7 @@ const buildTerminalUrl = (connection) => {
     window: 'terminal',
     connectionId: String(connection?.id || '')
   })
-  // 只传递显示所需的非敏感连接信息，密码和私钥口令永远不进入 URL。
+  // 只传递显示所需的非敏感连接信息，密码永远不进入 URL。
   if (connection?.host) params.set('host', String(connection.host))
   if (connection?.username) params.set('username', String(connection.username))
   if (connection?.port) params.set('port', String(connection.port))

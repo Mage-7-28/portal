@@ -91,9 +91,7 @@ class SftpManager {
         port: Number(config.port),
         username: config.username,
         password: config.password || '',
-        authMethod: config.authMethod || 'password',
-        privateKeyPath: config.privateKeyPath || null,
-        passphrase: config.passphrase || null,
+        authMethod: 'password',
         timeout,
         hostKeyFingerprint: config.hostKeyFingerprint || null
       })
@@ -119,7 +117,7 @@ class SftpManager {
       ...config,
       id,
       port: Number(config.port),
-      authMethod: config.authMethod || 'password',
+      authMethod: 'password',
       hostKeyFingerprint: config.hostKeyFingerprint || null
     }
 
@@ -134,9 +132,7 @@ class SftpManager {
       port: normalized.port,
       username: normalized.username,
       password: normalized.password || '',
-      authMethod: normalized.authMethod,
-      privateKeyPath: normalized.privateKeyPath || null,
-      passphrase: normalized.passphrase || null,
+      authMethod: 'password',
       hostKeyFingerprint: normalized.hostKeyFingerprint
     })
 
