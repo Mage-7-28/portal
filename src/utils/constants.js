@@ -97,6 +97,79 @@ export const normalizeError = (error) => {
   return '未知错误'
 }
 
+const getErrorCode = (error) => {
+  if (!error) return ''
+  if (typeof error === 'string') {
+    try {
+      return getErrorCode(JSON.parse(error))
+    } catch {
+      return ''
+    }
+  }
+  return typeof error.code === 'string' ? error.code : ''
+}
+
+export const isCredentialError = (error) => {
+  const message = normalizeError(error)
+  const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()
+  if (normalized.includes('用户名不能为空')) return false
+  return normalized.includes('authfailed')
+    || normalized.includes('authentication failed')
+    || normalized.includes('auth failed')
+    || normalized.includes('认证失败')
+    || normalized.includes('password')
+    || normalized.includes('passphrase')
+    || normalized.includes('permission denied')
+    || normalized.includes('publickey')
+}
+
+// 将底层 SSH 错误转换成用户可以直接处理的提示，避免把 libssh2 的内部信息暴露给用户。
+export const getReadableConnectionError = (error) => {
+  const message = normalizeError(error)
+  const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()
+
+  if (normalized.includes('用户名不能为空')) {
+    return '用户名不能为空，请检查连接配置'
+  }
+  if (normalized.includes('hostkeymismatch') || normalized.includes('主机密钥不匹配')) {
+    return '服务器指纹发生变化，请确认服务器身份后重试'
+  }
+  if (normalized.includes('hostkeyverificationrequired') || normalized.includes('主机密钥需要确认')) {
+    return '服务器需要确认主机指纹，请重新连接并确认服务器身份'
+  }
+  if (isCredentialError(error)) {
+    return '密码或私钥口令错误，请检查后重试'
+  }
+  if (normalized.includes('unsupportedauth') || normalized.includes('认证方式不支持')) {
+    return '当前认证方式不可用，请检查认证配置'
+  }
+  if (
+    normalized.includes('timeout')
+    || normalized.includes('timed out')
+    || normalized.includes('超时')
+  ) {
+    return '连接超时，请检查服务器地址、端口和网络'
+  }
+  if (
+    normalized.includes('connectionfailed')
+    || normalized.includes('connection refused')
+    || normalized.includes('拒绝连接')
+    || normalized.includes('无法连接到服务器')
+  ) {
+    return '无法连接服务器，请检查地址、端口和 SSH 服务'
+  }
+  if (
+    normalized.includes('handshakefailed')
+    || normalized.includes('握手失败')
+  ) {
+    return 'SSH 握手失败，请检查服务器地址、端口和协议配置'
+  }
+  if (normalized.includes('connectionnotfound') || normalized.includes('连接不存在')) {
+    return '连接已失效，请重新连接服务器'
+  }
+  return '连接失败，请检查服务器地址、端口和认证信息'
+}
+
 export const layoutStyle = {
   display: 'flex',
   flexDirection: 'column',

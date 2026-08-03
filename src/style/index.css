@@ -1718,6 +1718,15 @@ html,
   flex-wrap: wrap;
 }
 
+.password-prompt-error {
+  margin-bottom: 12px;
+}
+
+.password-prompt-error .ant-alert-message {
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .connection-test-result {
   display: flex;
   gap: 11px;

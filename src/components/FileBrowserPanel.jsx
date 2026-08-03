@@ -3,7 +3,7 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { Modal, Progress } from 'antd'
 import { store } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
-import { SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
+import { getReadableConnectionError, isCredentialError, SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
@@ -59,13 +59,35 @@ const deriveRemoteDrives = (path) => {
   return match ? [`${ match[1] }:/`] : []
 }
 
-// 让 loading 先完成一帧渲染，再调用原生 SSH 接口，避免等待期间看起来没有响应。
+// rAF 回调发生在重绘前，再通过宏任务让浏览器先完成 loading 绘制，然后才调用原生 SSH 接口。
+const CONNECTION_LOADING_DELAY_MS = 80
 const waitForNextPaint = () => new Promise(resolve => {
-  if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-    window.requestAnimationFrame(() => resolve())
+  if (typeof window === 'undefined') {
+    setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
     return
   }
-  setTimeout(resolve, 0)
+
+  let fallbackTimer
+  let settled = false
+  const settleAfterPaint = () => {
+    if (settled) return
+    settled = true
+    if (fallbackTimer) window.clearTimeout(fallbackTimer)
+    window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
+  }
+
+  if (typeof window.requestAnimationFrame === 'function') {
+    // 窗口最小化时部分 WebView 会暂停 rAF，兜底定时器避免连接流程被无限推迟。
+    fallbackTimer = window.setTimeout(() => {
+      if (!settled) {
+        settled = true
+        resolve()
+      }
+    }, CONNECTION_LOADING_DELAY_MS * 2)
+    window.requestAnimationFrame(settleAfterPaint)
+    return
+  }
+  window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
 })
 
 function FileBrowserPanel() {
@@ -80,6 +102,7 @@ function FileBrowserPanel() {
   const [ homeDir, setHomeDir ] = useState('')
   const [ drives, setDrives ] = useState([])
   const [ passwordPrompt, setPasswordPrompt ] = useState(null)
+  const [ passwordPromptError, setPasswordPromptError ] = useState('')
   const [ passwordLoading, setPasswordLoading ] = useState(false)
   const [ connectingId, setConnectingId ] = useState(null)
   const [ preview, setPreview ] = useState(null)
@@ -91,6 +114,7 @@ function FileBrowserPanel() {
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
   const activeConnectionIdRef = useRef(null)
+  const connectingIdRef = useRef(null)
   const operationStatusSequence = useRef(0)
 
   const createOperationStatus = (operation, fileName) => {
@@ -237,6 +261,11 @@ function FileBrowserPanel() {
   }
 
   const connectWithPassword = async (connection, credentialsForProfile) => {
+    if (connectingIdRef.current) return
+    connectingIdRef.current = connection.id
+    // 提交凭据后立即关闭输入框，让连接列表的 loading 状态先呈现出来。
+    setPasswordPrompt(null)
+    setPasswordPromptError('')
     setConnectingId(connection.id)
     setPasswordLoading(true)
     setLoading(true)
@@ -244,13 +273,10 @@ function FileBrowserPanel() {
     const credentialsValue = typeof credentialsForProfile === 'string'
       ? { password: credentialsForProfile, passphrase: '' }
       : (credentialsForProfile || { password: '', passphrase: '' })
+    let connectionId = null
+    let retryMessage = ''
     try {
-      setCredentials(previous => {
-        const updated = new Map(previous)
-        updated.set(connection.id, credentialsValue)
-        return updated
-      })
-      const connectionId = await sftpManager.createConnection({ ...connection, ...credentialsValue })
+      connectionId = await sftpManager.createConnection({ ...connection, ...credentialsValue })
       let result = await sftpManager.connect(connectionId)
 
       if (result.requiresHostKeyConfirmation) {
@@ -277,29 +303,75 @@ function FileBrowserPanel() {
       setDrives(deriveRemoteDrives(home || '/'))
       setCurrentPath(home || '/')
       await loadRemoteDirectory(home || '/', connectionId)
+      if (
+        activeConnectionIdRef.current !== connectionId
+        || sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED
+      ) {
+        throw new Error('连接已断开')
+      }
+      setCredentials(previous => {
+        const updated = new Map(previous)
+        updated.set(connection.id, credentialsValue)
+        return updated
+      })
       void notification.success('连接成功')
-      setPasswordPrompt(null)
     } catch (error) {
-      await sftpManager.removeConnection(connection.id).catch(() => undefined)
-      void notification.error(`连接失败：${ normalizeError(error) }`)
+      if (connectionId) {
+        await sftpManager.removeConnection(connectionId).catch(() => undefined)
+      } else {
+        await sftpManager.removeConnection(connection.id).catch(() => undefined)
+      }
+      setCredentials(previous => {
+        const updated = new Map(previous)
+        updated.delete(connection.id)
+        return updated
+      })
+      const readableError = getReadableConnectionError(error)
+      retryMessage = isCredentialError(error) ? readableError : ''
+      void notification.error(readableError)
     } finally {
-      setLoading(false)
-      setPasswordLoading(false)
-      setConnectingId(null)
+      if (connectingIdRef.current === connection.id) {
+        connectingIdRef.current = null
+        setLoading(false)
+        setPasswordLoading(false)
+        setConnectingId(null)
+      }
+      if (retryMessage) {
+        setPasswordPrompt(connection)
+        setPasswordPromptError(retryMessage)
+      } else {
+        setPasswordPrompt(null)
+        setPasswordPromptError('')
+      }
     }
   }
 
   const handleConnect = async (connection) => {
-    if (connectingId) return
-    setConnectingId(connection.id)
+    if (connectingId || connectingIdRef.current) return
     const credentialsValue = credentials.get(connection.id) || { password: '', passphrase: '' }
     if ((connection.authMethod === 'password' && !credentialsValue.password)
       || (connection.authMethod === 'key' && !credentials.has(connection.id))) {
-      setConnectingId(null)
+      setPasswordLoading(false)
+      setPasswordPromptError('')
       setPasswordPrompt(connection)
       return
     }
     await connectWithPassword(connection, credentialsValue)
+  }
+
+  const handlePasswordPromptCancel = () => {
+    setPasswordPrompt(null)
+    setPasswordPromptError('')
+    setPasswordLoading(false)
+  }
+
+  const handlePasswordPromptSubmit = ({ password }) => {
+    if (!passwordPrompt || connectingId || connectingIdRef.current) return
+    const connection = passwordPrompt
+    void connectWithPassword(
+      connection,
+      connection.authMethod === 'key' ? { passphrase: password } : { password }
+    )
   }
 
   const handleDisconnect = async ({ skipConfirm = false } = {}) => {
@@ -840,11 +912,9 @@ function FileBrowserPanel() {
           visible={Boolean(passwordPrompt)}
           connection={passwordPrompt}
           loading={passwordLoading}
-          onCancel={() => setPasswordPrompt(null)}
-          onSubmit={({ password }) => passwordPrompt && connectWithPassword(
-            passwordPrompt,
-            passwordPrompt.authMethod === 'key' ? { passphrase: password } : { password }
-          )}
+          errorMessage={passwordPromptError}
+          onCancel={handlePasswordPromptCancel}
+          onSubmit={handlePasswordPromptSubmit}
         />
       </>
     )
@@ -863,11 +933,9 @@ function FileBrowserPanel() {
         visible={Boolean(passwordPrompt)}
         connection={passwordPrompt}
         loading={passwordLoading}
-        onCancel={() => setPasswordPrompt(null)}
-        onSubmit={({ password }) => passwordPrompt && connectWithPassword(
-          passwordPrompt,
-          passwordPrompt.authMethod === 'key' ? { passphrase: password } : { password }
-        )}
+        errorMessage={passwordPromptError}
+        onCancel={handlePasswordPromptCancel}
+        onSubmit={handlePasswordPromptSubmit}
       />
     </>
   )

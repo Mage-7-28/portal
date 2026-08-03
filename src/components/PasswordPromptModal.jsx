@@ -1,8 +1,8 @@
 import React, { useEffect } from 'react'
-import { Button, Form, Input, Modal } from 'antd'
+import { Alert, Button, Form, Input, Modal } from 'antd'
 import AppIcon from './AppIcon'
 
-const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading }) => {
+const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading, errorMessage }) => {
   const [form] = Form.useForm()
 
   useEffect(() => {
@@ -20,6 +20,15 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading 
       width="min(360px, calc(100vw - 24px))"
       destroyOnHidden
     >
+      {errorMessage && (
+        <Alert
+          className="password-prompt-error"
+          type="error"
+          showIcon
+          icon={<AppIcon name="warningCircle" />}
+          message={errorMessage}
+        />
+      )}
       <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>
         <Form.Item label="用户名" help="凭据只会保存在本次运行的内存中">
           <Input value={connection?.username || ''} readOnly prefix={<AppIcon name="lock" />} />
