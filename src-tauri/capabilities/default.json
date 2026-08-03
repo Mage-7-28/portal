@@ -4,7 +4,8 @@
   "description": "Capability for the main window and standalone terminal window",
   "windows": [
     "Portal",
-    "PortalTerminal"
+    "PortalTerminal",
+    "PortalTerminal-*"
   ],
   "permissions": [
     "core:default",

@@ -79,6 +79,7 @@ const FileBrowser = ({
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
   const [ terminalOpening, setTerminalOpening ] = React.useState(false)
+  const terminalOpeningCountRef = React.useRef(0)
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
@@ -146,14 +147,16 @@ const FileBrowser = ({
   const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
 
   const handleOpenTerminal = async () => {
-    if (terminalOpening || !currentConnectionId || !currentConnection) return
+    if (!currentConnectionId || !currentConnection) return
+    terminalOpeningCountRef.current += 1
     setTerminalOpening(true)
     try {
       await openTerminalWindow({ ...currentConnection, id: currentConnectionId })
     } catch (openError) {
       void notification.error(`打开终端失败：${ openError?.message || '未知错误' }`)
     } finally {
-      setTerminalOpening(false)
+      terminalOpeningCountRef.current = Math.max(0, terminalOpeningCountRef.current - 1)
+      if (terminalOpeningCountRef.current === 0) setTerminalOpening(false)
     }
   }
 

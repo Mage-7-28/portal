@@ -14,7 +14,7 @@ import { notification } from './utils/notificationUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import TerminalWindow from './components/TerminalWindow.jsx'
-import { closeTerminalWindow } from './utils/terminalWindow.js'
+import { closeTerminalWindows } from './utils/terminalWindow.js'
 import portalLogo from '../src-tauri/icons/128x128.png'
 import packageInfo from '../package.json'
 
@@ -55,7 +55,7 @@ function MainApp() {
       if (!confirmed) return
 
       exitRequestedRef.current = true
-      await closeTerminalWindow().catch(() => undefined)
+      await closeTerminalWindows().catch(() => undefined)
       await invoke('exit_application')
     } catch (error) {
       exitRequestedRef.current = false
