@@ -13,10 +13,27 @@ import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
+import TerminalWindow from './components/TerminalWindow.jsx'
+import { closeTerminalWindow } from './utils/terminalWindow.js'
 import portalLogo from '../src-tauri/icons/128x128.png'
 import packageInfo from '../package.json'
 
-function App() {
+const getTerminalWindowParams = () => {
+  const params = new window.URLSearchParams(window.location.search)
+  if (params.get('window') !== 'terminal') return null
+  const connectionId = params.get('connectionId') || ''
+  return {
+    connectionId,
+    connection: {
+      id: connectionId,
+      host: params.get('host') || '',
+      username: params.get('username') || '',
+      port: Number(params.get('port')) || 22
+    }
+  }
+}
+
+function MainApp() {
   const storedDownloadPath = useStoreValue(StoreKeys.DOWNLOAD_PATH)
   const downloadPath = typeof storedDownloadPath === 'string' ? storedDownloadPath : ''
   const downloadPathHint = downloadPath || '尚未设置（首次下载时选择）'
@@ -38,6 +55,7 @@ function App() {
       if (!confirmed) return
 
       exitRequestedRef.current = true
+      await closeTerminalWindow().catch(() => undefined)
       await invoke('exit_application')
     } catch (error) {
       exitRequestedRef.current = false
@@ -180,6 +198,14 @@ function App() {
       <Toaster />
     </ConfigProvider>
   )
+}
+
+function App() {
+  const terminalWindowParams = getTerminalWindowParams()
+  if (terminalWindowParams) {
+    return <TerminalWindow {...terminalWindowParams} />
+  }
+  return <MainApp />
 }
 
 export default App

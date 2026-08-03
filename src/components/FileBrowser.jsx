@@ -3,7 +3,6 @@ import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Uplo
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
-import TerminalModal from './TerminalModal.jsx'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as dialog from '@tauri-apps/plugin-dialog'
@@ -11,6 +10,7 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
+import { openTerminalWindow } from '../utils/terminalWindow.js'
 
 const localPathName = (path) => String(path || '')
   .replace(/[\\/]+$/, '')
@@ -78,7 +78,7 @@ const FileBrowser = ({
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
-  const [ terminalOpen, setTerminalOpen ] = React.useState(false)
+  const [ terminalOpening, setTerminalOpening ] = React.useState(false)
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
@@ -144,6 +144,18 @@ const FileBrowser = ({
   }
 
   const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
+
+  const handleOpenTerminal = async () => {
+    if (terminalOpening || !currentConnectionId || !currentConnection) return
+    setTerminalOpening(true)
+    try {
+      await openTerminalWindow({ ...currentConnection, id: currentConnectionId })
+    } catch (openError) {
+      void notification.error(`打开终端失败：${ openError?.message || '未知错误' }`)
+    } finally {
+      setTerminalOpening(false)
+    }
+  }
 
   const handleBatchDownload = async () => {
     if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
@@ -474,7 +486,8 @@ const FileBrowser = ({
           <Button
             size="small"
             icon={<AppIcon name="terminal" />}
-            onClick={() => setTerminalOpen(true)}
+            loading={terminalOpening}
+            onClick={handleOpenTerminal}
             aria-label="打开远程终端"
           >
             终端
@@ -689,12 +702,6 @@ const FileBrowser = ({
           onKeyUp={event => event.stopPropagation()}
         />
       </Modal>
-      <TerminalModal
-        open={terminalOpen}
-        onClose={() => setTerminalOpen(false)}
-        connectionId={currentConnectionId}
-        connection={currentConnection}
-      />
     </div>
   )
 }

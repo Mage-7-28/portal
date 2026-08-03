@@ -11,6 +11,7 @@ import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
 import PasswordPromptModal from './PasswordPromptModal.jsx'
 import { notification } from '../utils/notificationUtils.js'
+import { closeTerminalWindow } from '../utils/terminalWindow.js'
 
 const normalizeProfile = (profile, index) => {
   if (!profile || typeof profile !== 'object' || !profile.host || !profile.username) return null
@@ -128,6 +129,7 @@ function FileBrowserPanel() {
   }, [releasePreviewUrl])
 
   const resetRemoteView = useCallback(() => {
+    void closeTerminalWindow().catch(() => undefined)
     activeConnectionIdRef.current = null
     requestId.current += 1
     setCurrentConnection(null)
@@ -316,6 +318,7 @@ function FileBrowserPanel() {
     const connectionId = currentConnectionId
     // 用户主动断开时忽略正在传输中的连接事件；只有意外断开才显示重连提示。
     activeConnectionIdRef.current = null
+    await closeTerminalWindow().catch(() => undefined)
     if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
     resetRemoteView()
   }

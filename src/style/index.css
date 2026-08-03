@@ -1319,6 +1319,54 @@ html,
   color: #b69a6d;
 }
 
+/* 独立终端窗口占满自己的 WebView，同时保留紧凑的标题和状态区域。 */
+.terminal-window-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  padding: 10px 12px 8px;
+  overflow: hidden;
+  background: #1f1f1f;
+  color: #e8e5de;
+}
+
+.terminal-window-header {
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 2px 7px;
+}
+
+.terminal-window-title {
+  color: #e8e5de;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.terminal-window-subtitle {
+  color: #817d75;
+  font-size: 11px;
+}
+
+.terminal-window-shell .terminal-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.terminal-window-shell .terminal-emulator {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
 .compact-modal .ant-modal-close {
   top: 10px;
   inset-inline-end: 11px;

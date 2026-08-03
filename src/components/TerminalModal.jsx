@@ -2,9 +2,9 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Button, Modal, Spin } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
+import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import AppIcon from './AppIcon'
-import sftpManager from '../utils/sftpUtils.js'
 import { normalizeError } from '../utils/constants.js'
 
 const createTerminalId = () => {
@@ -69,21 +69,25 @@ const decorateTerminalOutput = data => {
   return highlightPlainText(data)
 }
 
-const TerminalModal = ({ open, onClose, connectionId, connection }) => {
+/**
+ * 终端视图只负责 xterm 与后端 PTY 的生命周期，外层可以是模态框或独立窗口。
+ * 通过直接调用 Tauri 命令，独立 WebView 不需要复制主窗口的连接缓存。
+ */
+export const TerminalView = ({ connectionId, connection, onRequestClose, onCloseReady }) => {
   const containerRef = useRef(null)
   const terminalRef = useRef(null)
   const backendReadyRef = useRef(false)
   const closingRef = useRef(false)
   const writeErrorShownRef = useRef(false)
-  const closeTerminalRef = useRef(() => {})
-  const fitTerminalRef = useRef(() => {})
+  const closeTerminalRef = useRef(() => Promise.resolve())
   const [ status, setStatus ] = useState('closed')
   const [ statusMessage, setStatusMessage ] = useState('')
 
   useEffect(() => {
-    if (!open || !connectionId || !containerRef.current) {
+    if (!connectionId || !containerRef.current) {
       setStatus('closed')
       setStatusMessage('')
+      onCloseReady?.(() => Promise.resolve())
       return undefined
     }
 
@@ -116,14 +120,16 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
     const closeBackend = () => {
       closingRef.current = true
       backendReadyRef.current = false
-      void sftpManager.closeTerminal(terminalId)
+      // 关闭命令幂等，重复调用可以覆盖“窗口关闭早于 PTY 创建完成”的竞态。
+      return invoke('close_ssh_terminal', { terminalId }).catch(() => false)
     }
     closeTerminalRef.current = closeBackend
+    onCloseReady?.(closeBackend)
 
     const fitTerminal = () => {
       if (disposed) return
       const container = containerRef.current
-      // Modal 的开场动画结束前容器可能为 0 尺寸，此时跳过测量，交给 ResizeObserver 重试。
+      // 窗口初始布局完成前容器可能为 0 尺寸，此时跳过测量，交给 ResizeObserver 重试。
       if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return
       try {
         fitAddon.fit()
@@ -131,8 +137,6 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
         return
       }
     }
-    fitTerminalRef.current = fitTerminal
-
     let fitFrame = 0
     const scheduleFit = () => {
       if (disposed || fitFrame) return
@@ -149,7 +153,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
 
     const dataDisposable = terminal.onData(data => {
       if (disposed || !backendReadyRef.current) return
-      void sftpManager.writeTerminal(terminalId, data).catch(error => {
+      void invoke('write_ssh_terminal', { terminalId, data }).catch(error => {
         if (disposed || writeErrorShownRef.current) return
         writeErrorShownRef.current = true
         backendReadyRef.current = false
@@ -161,7 +165,11 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
     })
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
       if (disposed || !backendReadyRef.current) return
-      void sftpManager.resizeTerminal(terminalId, cols, rows).catch(() => undefined)
+      void invoke('resize_ssh_terminal', {
+        terminalId,
+        columns: cols,
+        rows
+      }).catch(() => undefined)
     })
 
     const setupTerminal = async () => {
@@ -200,7 +208,12 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
         }
         listenerCleanups = [ dataUnlisten, errorUnlisten, closedUnlisten ]
         fitTerminal()
-        await sftpManager.openTerminal(connectionId, terminalId, terminal.cols, terminal.rows)
+        await invoke('open_ssh_terminal', {
+          id: connectionId,
+          terminalId,
+          columns: terminal.cols,
+          rows: terminal.rows
+        })
         if (disposed || closingRef.current) {
           closeBackend()
           return
@@ -238,17 +251,21 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
       resizeDisposable.dispose()
       listenerCleanups.forEach(cleanup => cleanup())
       closeBackend()
+      onCloseReady?.(() => Promise.resolve())
       fitAddon.dispose()
       terminal.dispose()
       terminalRef.current = null
-      closeTerminalRef.current = () => {}
-      fitTerminalRef.current = () => {}
+      closeTerminalRef.current = () => Promise.resolve()
     }
-  }, [ open, connectionId ])
+  }, [ connectionId, onCloseReady ])
 
   const handleClose = () => {
-    closeTerminalRef.current()
-    onClose()
+    // 由外层宿主统一负责“清理 PTY + 关闭容器”，避免等待远端异常通道导致按钮无响应。
+    if (onRequestClose) {
+      void onRequestClose()
+      return
+    }
+    void closeTerminalRef.current()
   }
 
   const statusLabel = status === 'connecting'
@@ -256,25 +273,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
     : statusMessage || (status === 'connected' ? '已连接' : '未连接')
 
   return (
-    <Modal
-      rootClassName="compact-modal terminal-modal"
-      title="远程终端"
-      open={open}
-      centered
-      footer={null}
-      width="min(1120px, calc(100vw - 32px))"
-      onCancel={handleClose}
-      maskClosable
-      keyboard
-      forceRender
-      destroyOnHidden
-      afterOpenChange={visible => {
-        if (!visible) return
-        // 等待 Modal 过渡完成后再适配，确保 canvas、字体和滚动区域使用真实尺寸。
-        fitTerminalRef.current()
-        window.requestAnimationFrame(() => fitTerminalRef.current())
-      }}
-    >
+    <div className="terminal-view">
       <div className="terminal-connection-meta">
         <AppIcon name="terminal" />
         <span>{connection?.username || '用户'}@{connection?.host || '服务器'}:{connection?.port || 22}</span>
@@ -301,6 +300,30 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
           关闭终端
         </Button>
       </div>
+    </div>
+  )
+}
+
+const TerminalModal = ({ open, onClose, connectionId, connection }) => {
+  if (!open) return null
+  return (
+    <Modal
+      rootClassName="compact-modal terminal-modal"
+      title="远程终端"
+      open
+      centered
+      footer={null}
+      width="min(1120px, calc(100vw - 32px))"
+      onCancel={onClose}
+      maskClosable
+      keyboard
+      destroyOnHidden
+    >
+      <TerminalView
+        connectionId={connectionId}
+        connection={connection}
+        onRequestClose={onClose}
+      />
     </Modal>
   )
 }
