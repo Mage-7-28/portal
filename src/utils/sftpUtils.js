@@ -9,6 +9,17 @@ const randomId = (prefix) => {
   return `${ prefix }-${ Date.now() }-${ Math.random().toString(16).slice(2) }`
 }
 
+const DIRECTORY_SIZE_CACHE_TTL_MS = 45 * 1000
+const MAX_DIRECTORY_SIZE_CACHE_ENTRIES = 500
+const DIRECTORY_SIZE_CANCELLED_MESSAGE = '目录大小统计已取消'
+
+const normalizeDirectorySizeOptions = (options) => {
+  if (options && typeof options.addEventListener === 'function' && 'aborted' in options) {
+    return { signal: options }
+  }
+  return options || {}
+}
+
 class SftpManager {
   constructor() {
     this.connections = new Map()
@@ -17,6 +28,14 @@ class SftpManager {
     this.retryAttempts = 3
     this.retryDelay = 1000
     this.connectionEventUnlisten = null
+    // 同一 SSH 会话内的 SFTP 操作会串行化，单任务统计可避免目录扫描相互抢占。
+    this.directorySizeQueue = []
+    this.directorySizeRequests = new Map()
+    this.directorySizeCache = new Map()
+    // 远端写入后推进代次，已启动的旧扫描结果不能回写到新视图的缓存。
+    this.directorySizeCacheEpochs = new Map()
+    this.activeDirectorySizeRequests = 0
+    this.maxDirectorySizeRequests = 1
     void this.listenForConnectionLoss()
   }
 
@@ -54,6 +73,9 @@ class SftpManager {
       : message
     info.status = SftpConnectionStatus.DISCONNECTED
     info.lastError = message
+    this.cancelDirectorySizeRequests(connectionId, message)
+    this.invalidateDirectorySizeCache(connectionId)
+    this.pumpDirectorySizeQueue()
     if (!wasActive) return false
     const event = { id: connectionId, reason: connectionMessage }
     this.connectionLostListeners.forEach(listener => listener(event))
@@ -170,6 +192,7 @@ class SftpManager {
       }
       info.status = SftpConnectionStatus.CONNECTED
       info.lastActivity = Date.now()
+      this.invalidateDirectorySizeCache(connectionId)
       return result
     } catch (error) {
       info.status = SftpConnectionStatus.ERROR
@@ -186,6 +209,9 @@ class SftpManager {
     } finally {
       info.status = SftpConnectionStatus.DISCONNECTED
       info.lastError = null
+      this.cancelDirectorySizeRequests(connectionId, '连接已断开')
+      this.invalidateDirectorySizeCache(connectionId)
+      this.pumpDirectorySizeQueue()
     }
     return true
   }
@@ -334,6 +360,7 @@ class SftpManager {
       }, 30 * 60 * 1000)
       const result = await completion
       info.lastActivity = Date.now()
+      if (isUpload) this.invalidateDirectorySizeCache(connectionId)
       return result
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle)
@@ -386,9 +413,206 @@ class SftpManager {
     })
   }
 
+  getDirectorySizeCacheEpoch(connectionId) {
+    return this.directorySizeCacheEpochs.get(connectionId) || 0
+  }
+
+  getDirectorySizeCacheKey(connectionId, remotePath, cacheVersion, cacheEpoch) {
+    const normalizedPath = String(remotePath || '/').replaceAll('\\', '/').replace(/\/+$/, '') || '/'
+    return `${ connectionId }\u0000${ normalizedPath }\u0000${ cacheVersion == null ? '' : String(cacheVersion) }\u0000${ cacheEpoch }`
+  }
+
+  normalizeDirectorySizeResult(result) {
+    const size = Number(typeof result === 'object' ? result?.size : result)
+    if (!Number.isFinite(size) || size < 0) throw new Error('目录大小无效')
+    return {
+      size,
+      complete: result?.complete !== false,
+      inaccessibleCount: Math.max(0, Math.trunc(Number(result?.inaccessibleCount) || 0)),
+      scannedEntries: Math.max(0, Math.trunc(Number(result?.scannedEntries) || 0))
+    }
+  }
+
+  getCachedDirectorySize(cacheKey) {
+    const cached = this.directorySizeCache.get(cacheKey)
+    if (!cached) return null
+    if (cached.expiresAt <= Date.now()) {
+      this.directorySizeCache.delete(cacheKey)
+      return null
+    }
+    return cached.result
+  }
+
+  cacheDirectorySize(cacheKey, connectionId, cacheEpoch, result) {
+    if (this.getDirectorySizeCacheEpoch(connectionId) !== cacheEpoch) return
+    this.directorySizeCache.delete(cacheKey)
+    while (this.directorySizeCache.size >= MAX_DIRECTORY_SIZE_CACHE_ENTRIES) {
+      const oldestKey = this.directorySizeCache.keys().next().value
+      if (!oldestKey) break
+      this.directorySizeCache.delete(oldestKey)
+    }
+    this.directorySizeCache.set(cacheKey, {
+      connectionId,
+      expiresAt: Date.now() + DIRECTORY_SIZE_CACHE_TTL_MS,
+      result
+    })
+  }
+
+  invalidateDirectorySizeCache(connectionId) {
+    if (!connectionId) return
+    this.directorySizeCacheEpochs.set(
+      connectionId,
+      this.getDirectorySizeCacheEpoch(connectionId) + 1
+    )
+    this.directorySizeCache.forEach((cached, cacheKey) => {
+      if (cached.connectionId === connectionId) this.directorySizeCache.delete(cacheKey)
+    })
+  }
+
+  createDirectorySizeTask(connectionId, remotePath, cacheKey, cacheEpoch) {
+    return {
+      cacheKey,
+      connectionId,
+      remotePath,
+      cacheEpoch,
+      operationId: randomId('directory-size'),
+      subscribers: new Set(),
+      started: false,
+      cancelled: false,
+      settled: false
+    }
+  }
+
+  settleDirectorySizeTask(task, error, result) {
+    if (task.settled) return
+    task.settled = true
+    if (this.directorySizeRequests.get(task.cacheKey) === task) {
+      this.directorySizeRequests.delete(task.cacheKey)
+    }
+    task.subscribers.forEach(subscriber => {
+      subscriber.signal?.removeEventListener('abort', subscriber.onAbort)
+      if (error) subscriber.reject(error)
+      else subscriber.resolve(result)
+    })
+    task.subscribers.clear()
+  }
+
+  cancelDirectorySizeTask(task) {
+    if (task.cancelled || task.settled) return
+    task.cancelled = true
+    if (this.directorySizeRequests.get(task.cacheKey) === task) {
+      this.directorySizeRequests.delete(task.cacheKey)
+    }
+    if (task.started) {
+      void invoke('cancel_sftp_directory_size', { operationId: task.operationId }).catch(() => undefined)
+      return
+    }
+    this.directorySizeQueue = this.directorySizeQueue.filter(queuedTask => queuedTask !== task)
+  }
+
+  subscribeDirectorySizeTask(task, signal) {
+    // 相同目录共享一次后端扫描；只有最后一个订阅者取消时才终止实际任务。
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(new Error(DIRECTORY_SIZE_CANCELLED_MESSAGE))
+        return
+      }
+      const subscriber = {
+        signal,
+        resolve,
+        reject,
+        onAbort: null
+      }
+      subscriber.onAbort = () => {
+        if (!task.subscribers.delete(subscriber)) return
+        signal?.removeEventListener('abort', subscriber.onAbort)
+        reject(new Error(DIRECTORY_SIZE_CANCELLED_MESSAGE))
+        if (task.subscribers.size === 0) {
+          this.cancelDirectorySizeTask(task)
+          this.pumpDirectorySizeQueue()
+        }
+      }
+      task.subscribers.add(subscriber)
+      signal?.addEventListener('abort', subscriber.onAbort, { once: true })
+    })
+  }
+
+  cancelDirectorySizeRequests(connectionId, reason = '连接已断开') {
+    const error = new Error(reason)
+    Array.from(this.directorySizeRequests.values()).forEach(task => {
+      if (task.connectionId !== connectionId) return
+      this.cancelDirectorySizeTask(task)
+      this.settleDirectorySizeTask(task, error)
+    })
+  }
+
+  pumpDirectorySizeQueue() {
+    while (
+      this.activeDirectorySizeRequests < this.maxDirectorySizeRequests
+      && this.directorySizeQueue.length > 0
+    ) {
+      const task = this.directorySizeQueue.shift()
+      if (task.cancelled || task.settled || task.subscribers.size === 0) {
+        continue
+      }
+      if (this.getConnectionStatus(task.connectionId) !== SftpConnectionStatus.CONNECTED) {
+        this.settleDirectorySizeTask(task, new Error('连接已断开'))
+        continue
+      }
+
+      this.activeDirectorySizeRequests += 1
+      task.started = true
+      void (async () => {
+        try {
+          const result = await this.invokeRemote(
+            task.connectionId,
+            'get_sftp_directory_size',
+            {
+              id: task.connectionId,
+              remotePath: task.remotePath,
+              operationId: task.operationId
+            }
+          )
+          const info = this.connections.get(task.connectionId)
+          if (info) info.lastActivity = Date.now()
+          if (task.cancelled || task.settled) return
+          const normalizedResult = this.normalizeDirectorySizeResult(result)
+          this.cacheDirectorySize(task.cacheKey, task.connectionId, task.cacheEpoch, normalizedResult)
+          this.settleDirectorySizeTask(task, null, normalizedResult)
+        } catch (error) {
+          if (!task.cancelled && !task.settled) this.settleDirectorySizeTask(task, error)
+        } finally {
+          this.activeDirectorySizeRequests -= 1
+          this.pumpDirectorySizeQueue()
+        }
+      })()
+    }
+  }
+
+  async getRemoteDirectorySize(connectionId, remotePath, options) {
+    this.requireConnected(connectionId)
+    const { signal, cacheVersion } = normalizeDirectorySizeOptions(options)
+    if (signal?.aborted) throw new Error(DIRECTORY_SIZE_CANCELLED_MESSAGE)
+    const cacheEpoch = this.getDirectorySizeCacheEpoch(connectionId)
+    const cacheKey = this.getDirectorySizeCacheKey(connectionId, remotePath, cacheVersion, cacheEpoch)
+    const cached = this.getCachedDirectorySize(cacheKey)
+    if (cached) return cached
+
+    let task = this.directorySizeRequests.get(cacheKey)
+    if (!task) {
+      task = this.createDirectorySizeTask(connectionId, remotePath, cacheKey, cacheEpoch)
+      this.directorySizeRequests.set(cacheKey, task)
+      this.directorySizeQueue.push(task)
+    }
+    const result = this.subscribeDirectorySizeTask(task, signal)
+    this.pumpDirectorySizeQueue()
+    return result
+  }
+
   async createRemoteDirectory(connectionId, remotePath) {
     this.requireConnected(connectionId)
     await this.invokeRemote(connectionId, 'sftp_mkdir', { id: connectionId, remotePath })
+    this.invalidateDirectorySizeCache(connectionId)
     return true
   }
 
@@ -434,6 +658,7 @@ class SftpManager {
       })
       await completion
       info.lastActivity = Date.now()
+      this.invalidateDirectorySizeCache(connectionId)
       return true
     } finally {
       unlistenProgress?.()
@@ -444,6 +669,7 @@ class SftpManager {
   async renameRemoteItem(connectionId, sourcePath, targetPath, overwrite = false) {
     this.requireConnected(connectionId)
     await this.invokeRemote(connectionId, 'sftp_rename', { id: connectionId, sourcePath, targetPath, overwrite })
+    this.invalidateDirectorySizeCache(connectionId)
     return true
   }
 

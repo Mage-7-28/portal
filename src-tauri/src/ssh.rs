@@ -72,6 +72,8 @@ pub enum SshError {
     TransferLimitReached,
     #[error("传输已取消")]
     TransferCancelled,
+    #[error("目录大小统计已取消")]
+    DirectorySizeCancelled,
     #[error("预览文件超过大小限制")]
     PreviewTooLarge,
     #[error("终端会话不存在")]
@@ -100,6 +102,7 @@ pub struct SshState {
     pub connection_pool: Arc<RwLock<HashMap<String, Arc<Mutex<Session>>>>>,
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
+    directory_size_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     pub active_transfers: Arc<AtomicUsize>,
     terminal_sessions: Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
 }
@@ -152,6 +155,15 @@ pub struct RemoteEntry {
     pub size: u64,
     pub modified_at: Option<u64>,
     pub permissions: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteDirectorySize {
+    pub size: u64,
+    pub complete: bool,
+    pub inaccessible_count: usize,
+    pub scanned_entries: usize,
 }
 
 struct FolderUploadFile {
@@ -787,6 +799,15 @@ fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
 
 fn is_sftp_missing_path(error: &ssh2::Error) -> bool {
     matches!(error.code(), ErrorCode::SFTP(LIBSSH2_FX_NO_SUCH_FILE))
+}
+
+// 递归统计时，子目录的权限或瞬时删除不应丢弃已经得出的统计结果。
+// 会话层错误仍按连接异常处理，避免把断线误显示为不完整的目录大小。
+fn is_recoverable_directory_size_error(error: &ssh2::Error) -> bool {
+    matches!(error.code(), ErrorCode::SFTP(code) if !matches!(
+        code,
+        LIBSSH2_FX_NO_CONNECTION | LIBSSH2_FX_CONNECTION_LOST
+    ))
 }
 
 fn join_remote_path(base_path: &str, relative_path: &Path) -> Result<String, SshError> {
@@ -1642,6 +1663,125 @@ pub fn list_sftp_directory(
         });
     }
     Ok(files)
+}
+
+/// 递归统计远程目录大小，不跟随符号链接，避免循环引用和越界扫描。
+fn calculate_sftp_directory_size(
+    state: &SshState,
+    id: &str,
+    remote_path: &str,
+    cancellation: &AtomicBool,
+) -> Result<RemoteDirectorySize, SshError> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    let sftp = sftp_for(state, id)?;
+    let mut pending = vec![(PathBuf::from(remote_path), true)];
+    let mut total_size = 0_u64;
+    let mut inaccessible_count = 0_usize;
+    let mut scanned_entries = 0_usize;
+
+    while let Some((directory, is_root_directory)) = pending.pop() {
+        if cancellation.load(Ordering::Acquire) {
+            return Err(SshError::DirectorySizeCancelled);
+        }
+        let entries = match sftp.readdir(&directory) {
+            Ok(entries) => entries,
+            Err(error) => {
+                mark_ssh_error_if_connection_lost(state, id, &error);
+                if is_root_directory || !is_recoverable_directory_size_error(&error) {
+                    return Err(SshError::ReadDirFailed(format!(
+                        "读取远程文件夹“{}”失败: {error}",
+                        directory.display()
+                    )));
+                }
+                inaccessible_count = inaccessible_count.saturating_add(1);
+                continue;
+            }
+        };
+
+        for (path, stat) in entries {
+            if cancellation.load(Ordering::Acquire) {
+                return Err(SshError::DirectorySizeCancelled);
+            }
+            let name = path
+                .file_name()
+                .map(|value| value.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if name == "." || name == ".." {
+                continue;
+            }
+            scanned_entries = scanned_entries.saturating_add(1);
+
+            // 目录项元数据可能来自符号链接的目标，显式排除链接后再决定是否递归。
+            if stat.file_type() != ssh2::FileType::Symlink && stat.is_dir() {
+                pending.push((path, false));
+            } else {
+                // 普通文件和符号链接只计入自身返回的大小，不主动跟随链接。
+                total_size = total_size.saturating_add(stat.size.unwrap_or(0));
+            }
+        }
+    }
+
+    Ok(RemoteDirectorySize {
+        size: total_size,
+        complete: inaccessible_count == 0,
+        inaccessible_count,
+        scanned_entries,
+    })
+}
+
+#[tauri::command]
+pub async fn get_sftp_directory_size(
+    state: State<'_, SshState>,
+    id: String,
+    remote_path: String,
+    operation_id: String,
+) -> Result<RemoteDirectorySize, SshError> {
+    if operation_id.trim().is_empty() {
+        return Err(SshError::FileOperationFailed(
+            "目录大小统计标识不能为空".to_string(),
+        ));
+    }
+
+    let state = state.inner().clone();
+    let cancellation = Arc::new(AtomicBool::new(false));
+    state
+        .directory_size_cancellations
+        .lock()
+        .unwrap()
+        .insert(operation_id.clone(), cancellation.clone());
+    let state_for_task = state.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        calculate_sftp_directory_size(&state_for_task, &id, &remote_path, cancellation.as_ref())
+    })
+    .await
+    .map_err(|error| SshError::ReadDirFailed(format!("目录大小统计任务失败: {error}")))
+    .and_then(|result| result);
+
+    state
+        .directory_size_cancellations
+        .lock()
+        .unwrap()
+        .remove(&operation_id);
+    result
+}
+
+#[tauri::command]
+pub fn cancel_sftp_directory_size(
+    state: State<SshState>,
+    operation_id: String,
+) -> Result<bool, SshError> {
+    // 取消请求允许晚于任务结束到达，找不到任务时保持幂等成功。
+    if let Some(cancellation) = state
+        .directory_size_cancellations
+        .lock()
+        .unwrap()
+        .get(&operation_id)
+    {
+        cancellation.store(true, Ordering::Release);
+    }
+    Ok(true)
 }
 
 fn preview_progress(
@@ -2686,6 +2826,22 @@ mod tests {
         assert!(!is_connection_loss(&ssh2::Error::new(
             ErrorCode::SFTP(2),
             "no such file"
+        )));
+    }
+
+    #[test]
+    fn keeps_partial_directory_size_for_child_path_errors() {
+        assert!(is_recoverable_directory_size_error(&ssh2::Error::new(
+            ErrorCode::SFTP(3),
+            "permission denied"
+        )));
+        assert!(is_recoverable_directory_size_error(&ssh2::Error::new(
+            ErrorCode::SFTP(LIBSSH2_FX_NO_SUCH_FILE),
+            "no such file"
+        )));
+        assert!(!is_recoverable_directory_size_error(&ssh2::Error::new(
+            ErrorCode::SFTP(LIBSSH2_FX_CONNECTION_LOST),
+            "connection lost"
         )));
     }
 

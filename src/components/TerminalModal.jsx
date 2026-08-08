@@ -289,7 +289,7 @@ export const TerminalView = ({ connectionId, connection, onRequestClose, onClose
         onClick={() => terminalRef.current?.focus()}
       />
       <div className="terminal-hint">
-        <span>远程 Shell 会话</span>
+        <span className="terminal-session-label">远程 Shell · 独立 SSH 会话</span>
         <Button
           type="text"
           size="small"

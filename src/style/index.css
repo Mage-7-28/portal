@@ -1186,10 +1186,47 @@ html,
 }
 
 .file-item-size {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
   min-width: 72px;
   color: #b8b4ab;
   font-size: 11.5px;
   text-align: right;
+}
+
+/* 目录大小统计期间固定占位，避免 loading 图标和文字改变行宽。 */
+.directory-size-loading {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.directory-size-loading .ant-spin {
+  line-height: 1;
+}
+
+/* Ant Design 6 的无子节点 Spin 默认带有绝对定位，需要恢复为目录行内元素。 */
+.directory-size-spinner.ant-spin.ant-spin-section {
+  position: static;
+  top: auto;
+  left: auto;
+  display: inline-flex;
+  flex: 0 0 auto;
+  transform: none;
+}
+
+.directory-size-unavailable {
+  cursor: help;
+  white-space: nowrap;
+}
+
+.directory-size-partial {
+  color: #d0b37f;
+  cursor: help;
+  white-space: nowrap;
 }
 
 .compact-modal .ant-modal-content {
@@ -1334,7 +1371,7 @@ html,
   color: #b69a6d;
 }
 
-/* 独立终端窗口占满自己的 WebView，同时保留紧凑的标题和状态区域。 */
+/* 独立终端窗口占满自己的 WebView，让终端内容获得最大的可用高度。 */
 .terminal-window-shell {
   display: flex;
   flex-direction: column;
@@ -1347,25 +1384,6 @@ html,
   overflow: hidden;
   background: #1f1f1f;
   color: #e8e5de;
-}
-
-.terminal-window-header {
-  display: flex;
-  min-height: 28px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 2px 7px;
-}
-
-.terminal-window-title {
-  color: #e8e5de;
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.terminal-window-subtitle {
-  color: #817d75;
-  font-size: 11px;
 }
 
 .terminal-window-shell .terminal-view {
@@ -1563,6 +1581,13 @@ html,
   gap: 8px;
   color: #817d75;
   font-size: 11px;
+}
+
+.terminal-session-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .terminal-close-button.ant-btn {

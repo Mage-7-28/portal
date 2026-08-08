@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { Button, Input, List, Modal, Tooltip } from 'antd'
+import React, { useEffect, useState } from 'react'
+import { Button, Input, List, Modal, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import { confirm } from '@tauri-apps/plugin-dialog'
@@ -8,15 +8,74 @@ import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 
+const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
+
+const normalizeDirectorySizeResult = (result) => {
+  const size = Number(typeof result === 'object' ? result?.size : result)
+  if (!Number.isFinite(size) || size < 0) throw new Error('目录大小无效')
+  return {
+    size,
+    complete: result?.complete !== false,
+    inaccessibleCount: Math.max(0, Math.trunc(Number(result?.inaccessibleCount) || 0)),
+    scannedEntries: Math.max(0, Math.trunc(Number(result?.scannedEntries) || 0))
+  }
+}
+
+const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
+  const inaccessibleHint = inaccessibleCount > 0
+    ? `${ inaccessibleCount } 个子目录无法读取`
+    : '部分子目录无法读取'
+  const scannedHint = scannedEntries > 0 ? `，已扫描 ${ scannedEntries } 项` : ''
+  return `已统计可访问项目；${ inaccessibleHint }，实际大小可能更大${ scannedHint }`
+}
+
 const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActivate, onDelete, onRename }) => {
   const [ downloading, setDownloading ] = useState(false)
   const [ deleting, setDeleting ] = useState(false)
   const [ renameOpen, setRenameOpen ] = useState(false)
   const [ renameValue, setRenameValue ] = useState(entry.name)
   const [ renaming, setRenaming ] = useState(false)
+  const [ directorySize, setDirectorySize ] = useState(null)
+  const [ directorySizeLoading, setDirectorySizeLoading ] = useState(Boolean(entry.isDirectory))
+  const [ directorySizeError, setDirectorySizeError ] = useState(false)
   const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
 
-  const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
+  useEffect(() => {
+    let disposed = false
+    const abortController = typeof window !== 'undefined' && typeof window.AbortController === 'function'
+      ? new window.AbortController()
+      : null
+    if (!entry.isDirectory) {
+      setDirectorySize(null)
+      setDirectorySizeLoading(false)
+      setDirectorySizeError(false)
+      return undefined
+    }
+
+    const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
+    setDirectorySize(null)
+    setDirectorySizeLoading(true)
+    setDirectorySizeError(false)
+    sftpManager.getRemoteDirectorySize(connectionId, remotePath, {
+      signal: abortController?.signal,
+      cacheVersion: entry.modifiedAt
+    })
+      .then(result => {
+        if (disposed) return
+        setDirectorySize(normalizeDirectorySizeResult(result))
+        setDirectorySizeLoading(false)
+      })
+      .catch(() => {
+        if (disposed) return
+        setDirectorySizeLoading(false)
+        setDirectorySizeError(true)
+      })
+
+    return () => {
+      disposed = true
+      abortController?.abort()
+    }
+  }, [ connectionId, currentPath, entry ])
 
   const handleDownload = async (event) => {
     event.stopPropagation()
@@ -184,7 +243,22 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
         />
         <div className="file-item-actions" onDoubleClick={event => event.stopPropagation()}>
           <span className="file-item-size">
-            {entry.isDirectory ? '' : formatFileSize(entry.size)}
+            {entry.isDirectory ? (
+              directorySizeLoading ? (
+                <span className="directory-size-loading" aria-label="正在计算目录大小">
+                  <Spin className="directory-size-spinner" size="small" />
+                  <span>计算中</span>
+                </span>
+              ) : directorySizeError ? (
+                <Tooltip title="暂时无法统计目录大小">
+                  <span className="directory-size-unavailable">不可用</span>
+                </Tooltip>
+              ) : directorySize?.complete === false ? (
+                <Tooltip title={getPartialDirectorySizeHint(directorySize)}>
+                  <span className="directory-size-partial">≥ {formatFileSize(directorySize.size)}</span>
+                </Tooltip>
+              ) : formatFileSize(directorySize?.size || 0)
+            ) : formatFileSize(entry.size)}
           </span>
           <Tooltip title={entry.isDirectory ? '下载文件夹' : '下载文件'}>
             <Button

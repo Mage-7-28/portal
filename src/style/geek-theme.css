@@ -51,25 +51,6 @@
   }
 }
 
-@keyframes portal-scanline {
-  0%,
-  15% {
-    opacity: 0;
-    transform: translateX(-160%);
-  }
-
-  35%,
-  65% {
-    opacity: 0.7;
-  }
-
-  85%,
-  100% {
-    opacity: 0;
-    transform: translateX(460%);
-  }
-}
-
 /* 主界面采用 IDEA 的深炭灰画布，细网格只提供设备面板的空间感。 */
 body {
   background:
@@ -535,6 +516,14 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.directory-size-loading .ant-spin-dot-item {
+  background: var(--portal-geek-primary);
+}
+
+.directory-size-unavailable {
+  color: var(--portal-geek-text-muted);
+}
+
 .file-item-actions {
   gap: 6px;
 }
@@ -636,49 +625,6 @@ body {
   padding: 8px 12px;
 }
 
-.terminal-window-header {
-  position: relative;
-  overflow: hidden;
-  margin-bottom: var(--terminal-window-gap);
-  padding: 0 5px 8px;
-  border-bottom: 1px solid var(--portal-geek-line-soft);
-}
-
-.terminal-window-header::after {
-  position: absolute;
-  bottom: -1px;
-  left: 0;
-  width: 24%;
-  height: 1px;
-  background: linear-gradient(90deg, transparent, var(--portal-geek-primary), transparent);
-  content: '';
-  pointer-events: none;
-  animation: portal-scanline 7s ease-in-out infinite;
-}
-
-.terminal-window-title {
-  display: inline-flex;
-  align-items: center;
-  color: var(--portal-geek-text);
-  letter-spacing: 0.05em;
-}
-
-.terminal-window-title::before {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-right: 8px;
-  border: 1px solid var(--portal-geek-primary);
-  content: '';
-  transform: rotate(45deg);
-  animation: portal-accent-breathe 3.2s ease-in-out infinite;
-}
-
-.terminal-window-subtitle {
-  color: var(--portal-geek-teal);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-}
-
 .terminal-connection-meta {
   padding: 0 3px;
   color: #c0c4ca;
@@ -711,6 +657,46 @@ body {
   box-shadow:
     inset 0 0 0 1px rgba(127, 166, 164, 0.08),
     0 0 0 1px rgba(127, 166, 164, 0.14);
+}
+
+/* 终端缓冲区使用低对比度滚动条，Chromium 与 WebKit 同时提供稳定的轨道留白。 */
+.terminal-emulator .xterm-viewport {
+  scrollbar-color: #646970 rgba(0, 0, 0, 0.14);
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  overscroll-behavior: contain;
+}
+
+.terminal-emulator .xterm-viewport::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.terminal-emulator .xterm-viewport::-webkit-scrollbar-track {
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.14);
+}
+
+.terminal-emulator .xterm-viewport::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
+  background-color: #5b6067;
+}
+
+.terminal-emulator .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background-color: #777c85;
+}
+
+.terminal-emulator .xterm-viewport::-webkit-scrollbar-thumb:active {
+  background-color: var(--portal-geek-teal);
+}
+
+@media (forced-colors: active) {
+  .terminal-emulator .xterm-viewport {
+    scrollbar-color: auto;
+  }
 }
 
 .terminal-hint {

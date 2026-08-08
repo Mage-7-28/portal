@@ -94,10 +94,6 @@ const TerminalWindow = ({ connectionId, connection }) => {
   return (
     <ConfigProvider theme={ AntdThemeConfig } locale={ zhCN } componentSize="small">
       <main className="terminal-window-shell">
-        <header className="terminal-window-header">
-          <span className="terminal-window-title">远程终端</span>
-          <span className="terminal-window-subtitle">独立 SSH 会话</span>
-        </header>
         <TerminalView
           connectionId={connectionId}
           connection={connection}
