@@ -403,6 +403,8 @@ function FileBrowserPanel() {
     const currentRequest = ++requestId.current
     setLoading(true)
     setError(null)
+    // 目录统计属于低优先级任务，切换和刷新目录时必须先让出同一条 SFTP 会话。
+    sftpManager.cancelDirectorySizeRequests(connectionId, '正在切换目录')
     try {
       const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath)
       if (currentRequest !== requestId.current) return

@@ -28,14 +28,14 @@ class SftpManager {
     this.retryAttempts = 3
     this.retryDelay = 1000
     this.connectionEventUnlisten = null
-    // 同一 SSH 会话内的 SFTP 操作会串行化，单任务统计可避免目录扫描相互抢占。
+    // 目录统计使用独立 SSH 会话；限制为四个工作者，兼顾扫描速度和远端会话压力。
     this.directorySizeQueue = []
     this.directorySizeRequests = new Map()
     this.directorySizeCache = new Map()
     // 远端写入后推进代次，已启动的旧扫描结果不能回写到新视图的缓存。
     this.directorySizeCacheEpochs = new Map()
     this.activeDirectorySizeRequests = 0
-    this.maxDirectorySizeRequests = 1
+    this.maxDirectorySizeRequests = 4
     void this.listenForConnectionLoss()
   }
 
@@ -87,13 +87,13 @@ class SftpManager {
     return /(socket|broken pipe|connection (?:lost|reset|aborted|closed|not connected)|network|timed out|timeout|连接(?:不存在|未建立|已断开|已关闭|丢失|超时)|套接字|网络)/i.test(message)
   }
 
-  async invokeRemote(connectionId, command, args) {
+  async invokeRemote(connectionId, command, args, options = {}) {
     try {
       return await invoke(command, args)
     } catch (error) {
       if (this.isConnectionLossError(error)) {
         this.markConnectionLost(connectionId, error)
-      } else {
+      } else if (!options.suppressHealthCheck?.()) {
         // 某些 SFTP 失效只返回通用 failure，先用保活探测区分断线和权限/路径错误。
         try {
           const alive = await this.checkConnection(connectionId)
@@ -571,7 +571,9 @@ class SftpManager {
               id: task.connectionId,
               remotePath: task.remotePath,
               operationId: task.operationId
-            }
+            },
+            // 已取消的统计无需再发起一次保活探测，避免它排在用户的目录切换请求之前。
+            { suppressHealthCheck: () => task.cancelled || task.settled }
           )
           const info = this.connections.get(task.connectionId)
           if (info) info.lastActivity = Date.now()

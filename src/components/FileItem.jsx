@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { Button, Input, List, Modal, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
@@ -36,32 +36,69 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
   const [ renameValue, setRenameValue ] = useState(entry.name)
   const [ renaming, setRenaming ] = useState(false)
   const [ directorySize, setDirectorySize ] = useState(null)
-  const [ directorySizeLoading, setDirectorySizeLoading ] = useState(Boolean(entry.isDirectory))
+  const [ directorySizeLoading, setDirectorySizeLoading ] = useState(false)
   const [ directorySizeError, setDirectorySizeError ] = useState(false)
+  const [ directorySizeVisible, setDirectorySizeVisible ] = useState(false)
+  const rowRef = useRef(null)
+  const completedDirectorySizeKeyRef = useRef('')
   const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
+  const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
+  const directorySizeCacheVersion = entry.modifiedAt
+  const directorySizeKey = `${ connectionId }\u0000${ remotePath }\u0000${ directorySizeCacheVersion ?? '' }`
+
+  useEffect(() => {
+    if (!entry.isDirectory) {
+      setDirectorySizeVisible(false)
+      return undefined
+    }
+
+    const row = rowRef.current
+    if (!row || typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function') {
+      setDirectorySizeVisible(true)
+      return undefined
+    }
+
+    const observer = new window.IntersectionObserver(entries => {
+      setDirectorySizeVisible(Boolean(entries[0]?.isIntersecting))
+    }, {
+      root: row.closest('.file-list-shell'),
+      // 预先计算即将进入视区的少量目录，滚动时无需等待新的完整扫描。
+      rootMargin: '160px 0px',
+      threshold: 0
+    })
+    observer.observe(row)
+    return () => observer.disconnect()
+  }, [ entry.isDirectory, remotePath ])
+
+  useEffect(() => {
+    completedDirectorySizeKeyRef.current = ''
+    setDirectorySize(null)
+    setDirectorySizeLoading(false)
+    setDirectorySizeError(false)
+  }, [ directorySizeKey, entry.isDirectory ])
 
   useEffect(() => {
     let disposed = false
     const abortController = typeof window !== 'undefined' && typeof window.AbortController === 'function'
       ? new window.AbortController()
       : null
-    if (!entry.isDirectory) {
-      setDirectorySize(null)
+
+    if (!entry.isDirectory || !directorySizeVisible) {
       setDirectorySizeLoading(false)
-      setDirectorySizeError(false)
       return undefined
     }
 
-    const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
-    setDirectorySize(null)
+    if (completedDirectorySizeKeyRef.current === directorySizeKey) return undefined
+
     setDirectorySizeLoading(true)
     setDirectorySizeError(false)
     sftpManager.getRemoteDirectorySize(connectionId, remotePath, {
       signal: abortController?.signal,
-      cacheVersion: entry.modifiedAt
+      cacheVersion: directorySizeCacheVersion
     })
       .then(result => {
         if (disposed) return
+        completedDirectorySizeKeyRef.current = directorySizeKey
         setDirectorySize(normalizeDirectorySizeResult(result))
         setDirectorySizeLoading(false)
       })
@@ -75,7 +112,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
       disposed = true
       abortController?.abort()
     }
-  }, [ connectionId, currentPath, entry ])
+  }, [ connectionId, directorySizeCacheVersion, directorySizeKey, directorySizeVisible, entry.isDirectory, remotePath ])
 
   const handleDownload = async (event) => {
     event.stopPropagation()
@@ -202,6 +239,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
 
   return (
     <div
+      ref={rowRef}
       className={`file-item-row${ selected ? ' is-selected' : '' }`}
       title={entry.isDirectory ? '单击选择，双击进入目录' : '单击选择，双击预览文件'}
       onClick={onSelect}
@@ -257,7 +295,9 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
                 <Tooltip title={getPartialDirectorySizeHint(directorySize)}>
                   <span className="directory-size-partial">≥ {formatFileSize(directorySize.size)}</span>
                 </Tooltip>
-              ) : formatFileSize(directorySize?.size || 0)
+              ) : directorySize ? formatFileSize(directorySize.size) : (
+                <span className="directory-size-pending" aria-label="等待计算目录大小">--</span>
+              )
             ) : formatFileSize(entry.size)}
           </span>
           <Tooltip title={entry.isDirectory ? '下载文件夹' : '下载文件'}>

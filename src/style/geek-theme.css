@@ -507,7 +507,7 @@ body {
 
 .file-item-name {
   font-size: 13.5px;
-  line-height: 28px;
+  line-height: 1.35;
 }
 
 .file-item-size {

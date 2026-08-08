@@ -1,10 +1,10 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,6 +18,10 @@ const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const TRANSFER_BUFFER_SIZE: usize = 64 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u32 = 30;
 const MAX_CONCURRENT_TRANSFERS: usize = 4;
+// 目录大小统计最多同时使用 4 个独立工作会话，兼顾速度与远端 SSH 会话压力。
+const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
+// 同一工作会话连续处理少量子目录，降低反复创建 SFTP 子会话的开销，同时保留调度公平性。
+const DIRECTORY_SIZE_WORKER_BATCH_SIZE: usize = 8;
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
 const TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -74,6 +78,8 @@ pub enum SshError {
     TransferCancelled,
     #[error("目录大小统计已取消")]
     DirectorySizeCancelled,
+    #[error("目录大小统计任务数量已达到上限")]
+    DirectorySizeLimitReached,
     #[error("预览文件超过大小限制")]
     PreviewTooLarge,
     #[error("终端会话不存在")]
@@ -102,7 +108,10 @@ pub struct SshState {
     pub connection_pool: Arc<RwLock<HashMap<String, Arc<Mutex<Session>>>>>,
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
-    directory_size_cancellations: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
+    directory_size_cancellations: Arc<Mutex<HashMap<String, DirectorySizeCancellation>>>,
+    directory_size_worker_pools: Arc<RwLock<HashMap<String, Arc<Mutex<DirectorySizeWorkerPool>>>>>,
+    active_directory_size_workers: Arc<AtomicUsize>,
+    directory_size_worker_wait: Arc<DirectorySizeWorkerWait>,
     pub active_transfers: Arc<AtomicUsize>,
     terminal_sessions: Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
 }
@@ -230,6 +239,184 @@ struct TerminalSession {
     channel: Arc<Mutex<Channel>>,
     stop: Arc<AtomicBool>,
     write_lock: Mutex<()>,
+}
+
+// 统计任务使用独立 SSH 会话；保留所属连接标识，主连接关闭时可一并取消。
+struct DirectorySizeCancellation {
+    connection_id: String,
+    signal: Arc<AtomicBool>,
+    wake: Arc<Condvar>,
+}
+
+// 工作会话达到上限时，等待者通过条件变量休眠，避免忙等占用 CPU。
+struct DirectorySizeWorkerWait {
+    wait_lock: Mutex<()>,
+    wake: Condvar,
+}
+
+impl Default for DirectorySizeWorkerWait {
+    fn default() -> Self {
+        Self {
+            wait_lock: Mutex::new(()),
+            wake: Condvar::new(),
+        }
+    }
+}
+
+// RAII 保证统计任务无论成功、失败还是被取消，都会归还并发名额并唤醒等待者。
+struct DirectorySizeWorkerSlot {
+    active_workers: Arc<AtomicUsize>,
+    worker_wait: Arc<DirectorySizeWorkerWait>,
+}
+
+impl Drop for DirectorySizeWorkerSlot {
+    fn drop(&mut self) {
+        self.active_workers.fetch_sub(1, Ordering::AcqRel);
+        self.worker_wait.wake.notify_all();
+    }
+}
+
+#[derive(Default)]
+struct DirectorySizeWorkerPool {
+    workers: Vec<Arc<DirectorySizeWorker>>,
+    opening_workers: usize,
+    active_tasks: usize,
+}
+
+struct DirectorySizeWorker {
+    session: Arc<Mutex<Session>>,
+    in_use: AtomicBool,
+}
+
+// 建立统计会话时也占用池内名额；异常或取消时由 RAII 自动归还预留数量。
+struct DirectorySizeOpeningLease {
+    pool: Arc<Mutex<DirectorySizeWorkerPool>>,
+}
+
+impl Drop for DirectorySizeOpeningLease {
+    fn drop(&mut self) {
+        if let Ok(mut pool) = self.pool.lock() {
+            pool.opening_workers = pool.opening_workers.saturating_sub(1);
+        }
+    }
+}
+
+// 独占一个统计工作会话，释放时将它归还给同一连接的复用池。
+struct DirectorySizeWorkerLease {
+    worker: Arc<DirectorySizeWorker>,
+}
+
+impl Drop for DirectorySizeWorkerLease {
+    fn drop(&mut self) {
+        self.worker.in_use.store(false, Ordering::Release);
+    }
+}
+
+// 字段按声明顺序释放，确保 SFTP 子会话先关闭，再归还底层 SSH 工作会话。
+struct DirectorySizeSftpSession {
+    sftp: Sftp,
+    _worker_lease: DirectorySizeWorkerLease,
+}
+
+// 一个扫描任务共享待处理目录和聚合结果；工作者完成一个目录后继续取下一个目录。
+struct DirectorySizeScan {
+    state: Mutex<DirectorySizeScanState>,
+    wake: Arc<Condvar>,
+    cancellation: Arc<AtomicBool>,
+}
+
+struct DirectorySizeScanState {
+    pending: VecDeque<(PathBuf, bool)>,
+    pending_count: usize,
+    waiting_workers: usize,
+    total_size: u64,
+    inaccessible_count: usize,
+    scanned_entries: usize,
+    error: Option<SshError>,
+    finished: bool,
+}
+
+impl DirectorySizeScan {
+    fn new(remote_path: &str, cancellation: Arc<AtomicBool>, wake: Arc<Condvar>) -> Self {
+        let mut pending = VecDeque::new();
+        pending.push_back((PathBuf::from(remote_path), true));
+        Self {
+            state: Mutex::new(DirectorySizeScanState {
+                pending,
+                pending_count: 1,
+                waiting_workers: 0,
+                total_size: 0,
+                inaccessible_count: 0,
+                scanned_entries: 0,
+                error: None,
+                finished: false,
+            }),
+            wake,
+            cancellation,
+        }
+    }
+
+    fn fail(&self, error: SshError) {
+        let Ok(mut scan) = self.state.lock() else {
+            self.wake.notify_all();
+            return;
+        };
+        if !scan.finished {
+            scan.error = Some(error);
+            scan.finished = true;
+        }
+        self.wake.notify_all();
+    }
+
+    fn complete_directory(
+        &self,
+        child_directories: Vec<PathBuf>,
+        file_size: u64,
+        scanned_entries: usize,
+        inaccessible_count: usize,
+    ) {
+        let Ok(mut scan) = self.state.lock() else {
+            self.wake.notify_all();
+            return;
+        };
+        if scan.finished {
+            self.wake.notify_all();
+            return;
+        }
+        scan.total_size = scan.total_size.saturating_add(file_size);
+        scan.scanned_entries = scan.scanned_entries.saturating_add(scanned_entries);
+        scan.inaccessible_count = scan.inaccessible_count.saturating_add(inaccessible_count);
+        for directory in child_directories {
+            scan.pending.push_back((directory, false));
+            scan.pending_count = scan.pending_count.saturating_add(1);
+        }
+        scan.pending_count = scan.pending_count.saturating_sub(1);
+        if scan.pending_count == 0 {
+            scan.finished = true;
+        }
+        self.wake.notify_all();
+    }
+
+    fn result(&self) -> Result<RemoteDirectorySize, SshError> {
+        let mut scan = self
+            .state
+            .lock()
+            .map_err(|_| SshError::ReadDirFailed("目录大小统计状态已损坏".to_string()))?;
+        if let Some(error) = scan.error.take() {
+            return Err(error);
+        }
+        if !scan.finished {
+            return Err(SshError::ReadDirFailed(
+                "目录大小统计未正常完成".to_string(),
+            ));
+        }
+        Ok(RemoteDirectorySize {
+            size: scan.total_size,
+            complete: scan.inaccessible_count == 0,
+            inaccessible_count: scan.inaccessible_count,
+            scanned_entries: scan.scanned_entries,
+        })
+    }
 }
 
 fn connection_info(
@@ -768,6 +955,8 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     // 丢弃缓存会话即可关闭已损坏的传输连接；正在进行的传输任务可能仍会持有
     // 自己的 Arc，直到任务结束。
     state.connection_pool.write().unwrap().remove(id);
+    cancel_directory_size_tasks_for_connection(state, id);
+    remove_directory_size_worker_pool(state, id);
     close_terminals_for_connection(state, id);
     if was_connected {
         emit_event(
@@ -1133,6 +1322,146 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     })
 }
 
+// 统计任务开始时登记引用，避免另一个任务结束时误清理仍在使用的会话池。
+fn begin_directory_size_task(
+    state: &SshState,
+    id: &str,
+) -> Result<Arc<Mutex<DirectorySizeWorkerPool>>, SshError> {
+    let mut pools = state
+        .directory_size_worker_pools
+        .write()
+        .map_err(|_| SshError::SftpFailed("目录统计会话池已损坏".to_string()))?;
+    let pool = pools
+        .entry(id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(DirectorySizeWorkerPool::default())))
+        .clone();
+    let mut pool_state = pool
+        .lock()
+        .map_err(|_| SshError::SftpFailed("目录统计会话池已损坏".to_string()))?;
+    pool_state.active_tasks = pool_state.active_tasks.saturating_add(1);
+    drop(pool_state);
+    Ok(pool)
+}
+
+// 最后一个统计任务结束时清空并移除会话池；下次统计按需重新建立，避免长期占用远端资源。
+fn end_directory_size_task(state: &SshState, id: &str, pool: &Arc<Mutex<DirectorySizeWorkerPool>>) {
+    let Ok(mut pools) = state.directory_size_worker_pools.write() else {
+        return;
+    };
+    let Some(current_pool) = pools.get(id) else {
+        return;
+    };
+    if !Arc::ptr_eq(current_pool, pool) {
+        return;
+    }
+    let Ok(mut pool_state) = pool.lock() else {
+        return;
+    };
+    pool_state.active_tasks = pool_state.active_tasks.saturating_sub(1);
+    if pool_state.active_tasks != 0 {
+        return;
+    }
+    // 所有任务均已等待结束，此时不会再有工作会话或建连动作持有该池。
+    pool_state.workers.clear();
+    drop(pool_state);
+
+    pools.remove(id);
+}
+
+fn remove_directory_size_worker_pool(state: &SshState, id: &str) {
+    // 移除池中的持有引用即可关闭空闲会话；正在执行的统计会在取消后自然释放。
+    state
+        .directory_size_worker_pools
+        .write()
+        .unwrap()
+        .remove(id);
+}
+
+fn checkout_directory_size_worker(
+    state: &SshState,
+    id: &str,
+    pool: &Arc<Mutex<DirectorySizeWorkerPool>>,
+    cancellation: &AtomicBool,
+) -> Result<DirectorySizeWorkerLease, SshError> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    let connection = connection_info(state, id, true)?;
+    let mut pool_state = pool
+        .lock()
+        .map_err(|_| SshError::SftpFailed("目录统计会话池已损坏".to_string()))?;
+
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    if let Some(worker) = pool_state.workers.iter().find(|worker| {
+        worker
+            .in_use
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+    }) {
+        return Ok(DirectorySizeWorkerLease {
+            worker: Arc::clone(worker),
+        });
+    }
+    if pool_state.workers.len() + pool_state.opening_workers
+        >= MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS
+    {
+        return Err(SshError::DirectorySizeLimitReached);
+    }
+    // 先预留名额再释放锁，允许多条 SSH 会话并行握手而不会超过上限。
+    pool_state.opening_workers = pool_state.opening_workers.saturating_add(1);
+    drop(pool_state);
+    let opening_lease = DirectorySizeOpeningLease {
+        pool: Arc::clone(pool),
+    };
+
+    // 首次使用时才建立工作会话；以后优先复用，避免反复 SSH 握手和认证。
+    let session = open_authenticated_session(&connection);
+    let mut pool_state = pool
+        .lock()
+        .map_err(|_| SshError::SftpFailed("目录统计会话池已损坏".to_string()))?;
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    let session = session?;
+    let worker = Arc::new(DirectorySizeWorker {
+        session: Arc::new(Mutex::new(session)),
+        in_use: AtomicBool::new(true),
+    });
+    pool_state.workers.push(Arc::clone(&worker));
+    drop(pool_state);
+    drop(opening_lease);
+    Ok(DirectorySizeWorkerLease { worker })
+}
+
+// 目录大小扫描使用独立、可复用的 SFTP 会话，避免递归 readdir 占用主会话传输锁。
+fn directory_size_sftp_for(
+    state: &SshState,
+    id: &str,
+    pool: &Arc<Mutex<DirectorySizeWorkerPool>>,
+    cancellation: &AtomicBool,
+) -> Result<DirectorySizeSftpSession, SshError> {
+    let worker_lease = checkout_directory_size_worker(state, id, pool, cancellation)?;
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    let session = worker_lease
+        .worker
+        .session
+        .lock()
+        .map_err(|_| SshError::SftpFailed("目录统计会话锁已损坏".to_string()))?;
+    let sftp = session.sftp().map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, id, &error);
+        SshError::SftpFailed(error.to_string())
+    })?;
+    drop(session);
+    Ok(DirectorySizeSftpSession {
+        sftp,
+        _worker_lease: worker_lease,
+    })
+}
+
 fn remote_delete_display_path(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1415,6 +1744,75 @@ fn transfer_slot(state: &SshState) -> Result<(), SshError> {
     }
 }
 
+fn try_directory_size_worker_slot(state: &SshState) -> Result<DirectorySizeWorkerSlot, SshError> {
+    loop {
+        let current = state.active_directory_size_workers.load(Ordering::Acquire);
+        if current >= MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS {
+            return Err(SshError::DirectorySizeLimitReached);
+        }
+        if state
+            .active_directory_size_workers
+            .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
+            .is_ok()
+        {
+            return Ok(DirectorySizeWorkerSlot {
+                active_workers: Arc::clone(&state.active_directory_size_workers),
+                worker_wait: Arc::clone(&state.directory_size_worker_wait),
+            });
+        }
+    }
+}
+
+// 动态工作者在会话满载时等待释放，而不是把后续子目录统计直接判定为失败。
+fn directory_size_worker_slot(
+    state: &SshState,
+    cancellation: &AtomicBool,
+) -> Result<DirectorySizeWorkerSlot, SshError> {
+    loop {
+        if cancellation.load(Ordering::Acquire) {
+            return Err(SshError::DirectorySizeCancelled);
+        }
+        match try_directory_size_worker_slot(state) {
+            Ok(slot) => return Ok(slot),
+            Err(SshError::DirectorySizeLimitReached) => {
+                let wait_guard = state
+                    .directory_size_worker_wait
+                    .wait_lock
+                    .lock()
+                    .map_err(|_| SshError::SftpFailed("目录统计等待状态已损坏".to_string()))?;
+                if cancellation.load(Ordering::Acquire) {
+                    return Err(SshError::DirectorySizeCancelled);
+                }
+                if state.active_directory_size_workers.load(Ordering::Acquire)
+                    >= MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS
+                {
+                    let (wait_guard, _) = state
+                        .directory_size_worker_wait
+                        .wake
+                        .wait_timeout(wait_guard, Duration::from_millis(100))
+                        .map_err(|_| SshError::SftpFailed("目录统计等待状态已损坏".to_string()))?;
+                    drop(wait_guard);
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn cancel_directory_size_tasks_for_connection(state: &SshState, connection_id: &str) {
+    state
+        .directory_size_cancellations
+        .lock()
+        .unwrap()
+        .values()
+        .filter(|task| task.connection_id == connection_id)
+        .for_each(|task| {
+            task.signal.store(true, Ordering::Release);
+            task.wake.notify_all();
+        });
+    state.directory_size_worker_wait.wake.notify_all();
+}
+
 fn is_cancelled(cancelled: &Arc<Mutex<HashSet<String>>>, transfer_id: &str) -> bool {
     cancelled.lock().unwrap().contains(transfer_id)
 }
@@ -1574,6 +1972,8 @@ pub fn connect_ssh(state: State<SshState>, id: String) -> Result<ConnectResult, 
 }
 
 fn remove_cached_session(state: &SshState, id: &str) {
+    cancel_directory_size_tasks_for_connection(state, id);
+    remove_directory_size_worker_pool(state, id);
     if let Some(session) = state.connection_pool.write().unwrap().remove(id) {
         if let Ok(session) = session.lock() {
             let _ = session.disconnect(None, "客户端关闭连接", None);
@@ -1665,70 +2065,255 @@ pub fn list_sftp_directory(
     Ok(files)
 }
 
-/// 递归统计远程目录大小，不跟随符号链接，避免循环引用和越界扫描。
-fn calculate_sftp_directory_size(
+// 从共享队列领取一个子目录。工作会话只在真正有任务时占用，避免空闲会话阻塞其他扫描。
+fn next_directory_size_job(
+    state: &SshState,
+    scan: &DirectorySizeScan,
+) -> Result<Option<(DirectorySizeWorkerSlot, PathBuf, bool)>, SshError> {
+    loop {
+        if scan.cancellation.load(Ordering::Acquire) {
+            return Err(SshError::DirectorySizeCancelled);
+        }
+
+        let mut scan_state = scan
+            .state
+            .lock()
+            .map_err(|_| SshError::ReadDirFailed("目录大小统计状态已损坏".to_string()))?;
+        if scan_state.finished {
+            return Ok(None);
+        }
+        if scan_state.pending.is_empty() {
+            if scan_state.pending_count == 0 {
+                scan_state.finished = true;
+                scan.wake.notify_all();
+                return Ok(None);
+            }
+            scan_state.waiting_workers = scan_state.waiting_workers.saturating_add(1);
+            let (mut scan_state, _) = scan
+                .wake
+                .wait_timeout(scan_state, Duration::from_millis(100))
+                .map_err(|_| SshError::ReadDirFailed("目录大小统计状态已损坏".to_string()))?;
+            scan_state.waiting_workers = scan_state.waiting_workers.saturating_sub(1);
+            drop(scan_state);
+            continue;
+        }
+        drop(scan_state);
+
+        // 先获取全局并发名额，再真正取出任务；若任务已被其他工作者领取，立即归还名额。
+        let worker_slot = directory_size_worker_slot(state, scan.cancellation.as_ref())?;
+        let mut scan_state = scan
+            .state
+            .lock()
+            .map_err(|_| SshError::ReadDirFailed("目录大小统计状态已损坏".to_string()))?;
+        if scan_state.finished {
+            drop(scan_state);
+            drop(worker_slot);
+            return Ok(None);
+        }
+        if scan.cancellation.load(Ordering::Acquire) {
+            drop(scan_state);
+            drop(worker_slot);
+            return Err(SshError::DirectorySizeCancelled);
+        }
+        if let Some((directory, is_root_directory)) = scan_state.pending.pop_front() {
+            return Ok(Some((worker_slot, directory, is_root_directory)));
+        }
+        drop(scan_state);
+        drop(worker_slot);
+    }
+}
+
+// 不等待地领取已就绪子目录。队列暂时为空时释放工作会话，把并发名额让给其他扫描任务。
+fn take_ready_directory_size_job(
+    scan: &DirectorySizeScan,
+) -> Result<Option<(PathBuf, bool)>, SshError> {
+    if scan.cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    let mut scan_state = scan
+        .state
+        .lock()
+        .map_err(|_| SshError::ReadDirFailed("目录大小统计状态已损坏".to_string()))?;
+    if scan_state.finished {
+        return Ok(None);
+    }
+    // 已有工作者等待新目录时，当前工作者让出会话，优先唤醒等待者参与并行扫描。
+    if scan_state.waiting_workers > 0 {
+        return Ok(None);
+    }
+    Ok(scan_state.pending.pop_front())
+}
+
+fn process_directory_size_job(
     state: &SshState,
     id: &str,
-    remote_path: &str,
-    cancellation: &AtomicBool,
+    scan: &DirectorySizeScan,
+    sftp: &Sftp,
+    directory: PathBuf,
+    is_root_directory: bool,
+) -> bool {
+    if scan.cancellation.load(Ordering::Acquire) {
+        scan.fail(SshError::DirectorySizeCancelled);
+        return false;
+    }
+    let entries = sftp.readdir(&directory);
+    match entries {
+        Ok(entries) => {
+            let mut child_directories = Vec::new();
+            let mut file_size = 0_u64;
+            let mut scanned_entries = 0_usize;
+            for (path, stat) in entries {
+                if scan.cancellation.load(Ordering::Acquire) {
+                    scan.fail(SshError::DirectorySizeCancelled);
+                    return false;
+                }
+                let name = path
+                    .file_name()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_default();
+                if name == "." || name == ".." {
+                    continue;
+                }
+                scanned_entries = scanned_entries.saturating_add(1);
+
+                // 目录项元数据可能来自符号链接的目标，显式排除链接后再决定是否递归。
+                if stat.file_type() != ssh2::FileType::Symlink && stat.is_dir() {
+                    child_directories.push(path);
+                } else {
+                    // 普通文件和符号链接只计入自身返回的大小，不主动跟随链接。
+                    file_size = file_size.saturating_add(stat.size.unwrap_or(0));
+                }
+            }
+            scan.complete_directory(child_directories, file_size, scanned_entries, 0);
+            true
+        }
+        Err(error) => {
+            mark_ssh_error_if_connection_lost(state, id, &error);
+            if is_root_directory || !is_recoverable_directory_size_error(&error) {
+                scan.fail(SshError::ReadDirFailed(format!(
+                    "读取远程文件夹“{}”失败: {error}",
+                    directory.display()
+                )));
+                return false;
+            }
+            // 子目录权限不足或被其他客户端删除时，保留已统计部分并标记为不完整。
+            scan.complete_directory(Vec::new(), 0, 0, 1);
+            true
+        }
+    }
+}
+
+// 每个工作者独占一个 SFTP 会话处理一小批子目录，减少建会话开销并保留动态调度能力。
+fn directory_size_worker_loop(
+    state: SshState,
+    id: String,
+    pool: Arc<Mutex<DirectorySizeWorkerPool>>,
+    scan: Arc<DirectorySizeScan>,
+) {
+    loop {
+        let (worker_slot, directory, is_root_directory) =
+            match next_directory_size_job(&state, &scan) {
+                Ok(Some(job)) => job,
+                Ok(None) => return,
+                Err(error) => {
+                    scan.fail(error);
+                    return;
+                }
+            };
+
+        let directory_size_session =
+            match directory_size_sftp_for(&state, &id, &pool, scan.cancellation.as_ref()) {
+                Ok(session) => session,
+                Err(error) => {
+                    scan.fail(error);
+                    return;
+                }
+            };
+
+        let mut job = Some((directory, is_root_directory));
+        let mut processed_count = 0_usize;
+        while let Some((directory, is_root_directory)) = job.take() {
+            if !process_directory_size_job(
+                &state,
+                &id,
+                &scan,
+                &directory_size_session.sftp,
+                directory,
+                is_root_directory,
+            ) {
+                return;
+            }
+            processed_count = processed_count.saturating_add(1);
+
+            // 根目录完成或尚有空闲并发名额时优先让出会话，让等待工作者尽快接手子目录。
+            // 四个名额均已在工作时才保留小批量处理，减少反复创建 SFTP 子会话的开销。
+            let has_idle_capacity = state.active_directory_size_workers.load(Ordering::Acquire)
+                < MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS;
+            if is_root_directory
+                || has_idle_capacity
+                || processed_count >= DIRECTORY_SIZE_WORKER_BATCH_SIZE
+            {
+                break;
+            }
+            job = match take_ready_directory_size_job(&scan) {
+                Ok(next_job) => next_job,
+                Err(error) => {
+                    scan.fail(error);
+                    return;
+                }
+            };
+        }
+        drop(directory_size_session);
+        drop(worker_slot);
+    }
+}
+
+/// 递归统计远程目录大小。子目录通过共享队列动态分发给空闲工作会话。
+fn calculate_sftp_directory_size(
+    state: SshState,
+    id: String,
+    remote_path: String,
+    cancellation: Arc<AtomicBool>,
+    wake: Arc<Condvar>,
+    pool: Arc<Mutex<DirectorySizeWorkerPool>>,
 ) -> Result<RemoteDirectorySize, SshError> {
     if cancellation.load(Ordering::Acquire) {
         return Err(SshError::DirectorySizeCancelled);
     }
-    let sftp = sftp_for(state, id)?;
-    let mut pending = vec![(PathBuf::from(remote_path), true)];
-    let mut total_size = 0_u64;
-    let mut inaccessible_count = 0_usize;
-    let mut scanned_entries = 0_usize;
 
-    while let Some((directory, is_root_directory)) = pending.pop() {
-        if cancellation.load(Ordering::Acquire) {
-            return Err(SshError::DirectorySizeCancelled);
-        }
-        let entries = match sftp.readdir(&directory) {
-            Ok(entries) => entries,
-            Err(error) => {
-                mark_ssh_error_if_connection_lost(state, id, &error);
-                if is_root_directory || !is_recoverable_directory_size_error(&error) {
-                    return Err(SshError::ReadDirFailed(format!(
-                        "读取远程文件夹“{}”失败: {error}",
-                        directory.display()
-                    )));
-                }
-                inaccessible_count = inaccessible_count.saturating_add(1);
-                continue;
+    let scan = Arc::new(DirectorySizeScan::new(&remote_path, cancellation, wake));
+    let mut workers = Vec::with_capacity(MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS);
+    for _ in 0..MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS {
+        let state_for_worker = state.clone();
+        let id_for_worker = id.clone();
+        let pool_for_worker = Arc::clone(&pool);
+        let scan_for_worker = Arc::clone(&scan);
+        let scan_for_failure = Arc::clone(&scan);
+        workers.push(thread::spawn(move || {
+            if std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                directory_size_worker_loop(
+                    state_for_worker,
+                    id_for_worker,
+                    pool_for_worker,
+                    scan_for_worker,
+                )
+            }))
+            .is_err()
+            {
+                scan_for_failure.fail(SshError::ReadDirFailed(
+                    "目录大小统计工作线程异常退出".to_string(),
+                ));
             }
-        };
-
-        for (path, stat) in entries {
-            if cancellation.load(Ordering::Acquire) {
-                return Err(SshError::DirectorySizeCancelled);
-            }
-            let name = path
-                .file_name()
-                .map(|value| value.to_string_lossy().to_string())
-                .unwrap_or_default();
-            if name == "." || name == ".." {
-                continue;
-            }
-            scanned_entries = scanned_entries.saturating_add(1);
-
-            // 目录项元数据可能来自符号链接的目标，显式排除链接后再决定是否递归。
-            if stat.file_type() != ssh2::FileType::Symlink && stat.is_dir() {
-                pending.push((path, false));
-            } else {
-                // 普通文件和符号链接只计入自身返回的大小，不主动跟随链接。
-                total_size = total_size.saturating_add(stat.size.unwrap_or(0));
-            }
+        }));
+    }
+    for worker in workers {
+        if worker.join().is_err() {
+            scan.fail(SshError::ReadDirFailed(
+                "目录大小统计工作线程异常退出".to_string(),
+            ));
         }
     }
-
-    Ok(RemoteDirectorySize {
-        size: total_size,
-        complete: inaccessible_count == 0,
-        inaccessible_count,
-        scanned_entries,
-    })
+    scan.result()
 }
 
 #[tauri::command]
@@ -1745,20 +2330,49 @@ pub async fn get_sftp_directory_size(
     }
 
     let state = state.inner().clone();
+    let _ = connection_info(&state, &id, true)?;
     let cancellation = Arc::new(AtomicBool::new(false));
-    state
-        .directory_size_cancellations
-        .lock()
-        .unwrap()
-        .insert(operation_id.clone(), cancellation.clone());
+    let wake = Arc::new(Condvar::new());
+    state.directory_size_cancellations.lock().unwrap().insert(
+        operation_id.clone(),
+        DirectorySizeCancellation {
+            connection_id: id.clone(),
+            signal: cancellation.clone(),
+            wake: Arc::clone(&wake),
+        },
+    );
+    let worker_pool = match begin_directory_size_task(&state, &id) {
+        Ok(pool) => pool,
+        Err(error) => {
+            state
+                .directory_size_cancellations
+                .lock()
+                .unwrap()
+                .remove(&operation_id);
+            return Err(error);
+        }
+    };
     let state_for_task = state.clone();
+    let id_for_task = id.clone();
+    let remote_path_for_task = remote_path.clone();
+    let cancellation_for_task = Arc::clone(&cancellation);
+    let wake_for_task = Arc::clone(&wake);
+    let worker_pool_for_task = Arc::clone(&worker_pool);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        calculate_sftp_directory_size(&state_for_task, &id, &remote_path, cancellation.as_ref())
+        calculate_sftp_directory_size(
+            state_for_task,
+            id_for_task,
+            remote_path_for_task,
+            cancellation_for_task,
+            wake_for_task,
+            worker_pool_for_task,
+        )
     })
     .await
     .map_err(|error| SshError::ReadDirFailed(format!("目录大小统计任务失败: {error}")))
     .and_then(|result| result);
 
+    end_directory_size_task(&state, &id, &worker_pool);
     state
         .directory_size_cancellations
         .lock()
@@ -1779,8 +2393,10 @@ pub fn cancel_sftp_directory_size(
         .unwrap()
         .get(&operation_id)
     {
-        cancellation.store(true, Ordering::Release);
+        cancellation.signal.store(true, Ordering::Release);
+        cancellation.wake.notify_all();
     }
+    state.directory_size_worker_wait.wake.notify_all();
     Ok(true)
 }
 
@@ -2843,6 +3459,124 @@ mod tests {
             ErrorCode::SFTP(LIBSSH2_FX_CONNECTION_LOST),
             "connection lost"
         )));
+    }
+
+    #[test]
+    fn limits_independent_directory_size_workers() {
+        let state = SshState::default();
+        let first = try_directory_size_worker_slot(&state).expect("应获得第一个统计工作者");
+        let second = try_directory_size_worker_slot(&state).expect("应获得第二个统计工作者");
+        let third = try_directory_size_worker_slot(&state).expect("应获得第三个统计工作者");
+        let fourth = try_directory_size_worker_slot(&state).expect("应获得第四个统计工作者");
+        assert!(matches!(
+            try_directory_size_worker_slot(&state),
+            Err(SshError::DirectorySizeLimitReached)
+        ));
+
+        drop(first);
+        let fifth = try_directory_size_worker_slot(&state).expect("释放后应可重新获取工作者");
+        drop(fifth);
+        drop(fourth);
+        drop(third);
+        drop(second);
+        assert_eq!(
+            state.active_directory_size_workers.load(Ordering::Acquire),
+            0
+        );
+    }
+
+    #[test]
+    fn dynamically_shares_directory_jobs_between_workers() {
+        let state = SshState::default();
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let scan = DirectorySizeScan::new(
+            "/workspace",
+            Arc::clone(&cancellation),
+            Arc::new(Condvar::new()),
+        );
+
+        let (root_slot, root_path, is_root) = next_directory_size_job(&state, &scan)
+            .expect("应领取根目录任务")
+            .expect("根目录任务不应为空");
+        assert!(is_root);
+        assert_eq!(root_path, PathBuf::from("/workspace"));
+        scan.complete_directory(
+            vec![
+                PathBuf::from("/workspace/a"),
+                PathBuf::from("/workspace/b"),
+                PathBuf::from("/workspace/c"),
+            ],
+            10,
+            1,
+            0,
+        );
+        drop(root_slot);
+
+        let mut child_slots = Vec::new();
+        for _ in 0..3 {
+            let (slot, _, is_root) = next_directory_size_job(&state, &scan)
+                .expect("子目录任务应可领取")
+                .expect("子目录任务不应为空");
+            assert!(!is_root);
+            child_slots.push(slot);
+        }
+        assert_eq!(
+            state.active_directory_size_workers.load(Ordering::Acquire),
+            3
+        );
+
+        scan.complete_directory(Vec::new(), 1, 1, 0);
+        scan.complete_directory(Vec::new(), 2, 1, 0);
+        scan.complete_directory(Vec::new(), 3, 1, 0);
+        drop(child_slots);
+
+        let result = scan.result().expect("动态队列应完成统计");
+        assert_eq!(result.size, 16);
+        assert_eq!(result.scanned_entries, 4);
+        assert!(result.complete);
+    }
+
+    #[test]
+    fn yields_ready_directory_to_waiting_worker() {
+        let scan = DirectorySizeScan::new(
+            "/workspace",
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(Condvar::new()),
+        );
+        scan.state.lock().unwrap().waiting_workers = 1;
+        assert!(take_ready_directory_size_job(&scan)
+            .expect("等待状态应可读取")
+            .is_none());
+
+        scan.state.lock().unwrap().waiting_workers = 0;
+        let (_, is_root) = take_ready_directory_size_job(&scan)
+            .expect("任务应可领取")
+            .expect("根目录任务不应为空");
+        assert!(is_root);
+    }
+
+    #[test]
+    fn clears_directory_worker_pool_after_last_task() {
+        let state = SshState::default();
+        let first_pool =
+            begin_directory_size_task(&state, "connection-a").expect("应创建第一个统计任务");
+        let second_pool =
+            begin_directory_size_task(&state, "connection-a").expect("应复用同一连接的会话池");
+        assert!(Arc::ptr_eq(&first_pool, &second_pool));
+
+        end_directory_size_task(&state, "connection-a", &first_pool);
+        assert!(state
+            .directory_size_worker_pools
+            .read()
+            .unwrap()
+            .contains_key("connection-a"));
+
+        end_directory_size_task(&state, "connection-a", &second_pool);
+        assert!(!state
+            .directory_size_worker_pools
+            .read()
+            .unwrap()
+            .contains_key("connection-a"));
     }
 
     #[test]
