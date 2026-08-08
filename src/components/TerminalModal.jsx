@@ -15,27 +15,27 @@ const createTerminalId = () => {
 }
 
 const TERMINAL_THEME = {
-  background: '#171717',
-  foreground: '#e8e5de',
-  cursor: '#c08a66',
-  cursorAccent: '#171717',
-  selectionBackground: 'rgba(192, 138, 102, 0.35)',
-  black: '#171717',
-  red: '#d18a82',
-  green: '#8fae91',
-  yellow: '#d3ad75',
-  blue: '#8fa6b8',
-  magenta: '#aa91a8',
-  cyan: '#8eaaa5',
-  white: '#d8d3c9',
-  brightBlack: '#817d75',
-  brightRed: '#e0a09a',
-  brightGreen: '#a8c3a5',
-  brightYellow: '#e6c68d',
-  brightBlue: '#aec3d2',
-  brightMagenta: '#c0a9bc',
-  brightCyan: '#acc9c4',
-  brightWhite: '#f0ede6'
+  background: '#1e1f22',
+  foreground: '#e6e8eb',
+  cursor: '#eb9070',
+  cursorAccent: '#1e1f22',
+  selectionBackground: 'rgba(235, 144, 112, 0.28)',
+  black: '#1e1f22',
+  red: '#d86f6f',
+  green: '#8fb996',
+  yellow: '#d0a965',
+  blue: '#7f9fb0',
+  magenta: '#a894b5',
+  cyan: '#7fa6a4',
+  white: '#d8dbe0',
+  brightBlack: '#858991',
+  brightRed: '#ed9088',
+  brightGreen: '#a8caa9',
+  brightYellow: '#e4c17a',
+  brightBlue: '#a2bfce',
+  brightMagenta: '#c0aacd',
+  brightCyan: '#a2c2bd',
+  brightWhite: '#f1f3f5'
 }
 
 // 终端优先使用等宽字体，按 macOS、Windows、Linux 的常见字体顺序回退。

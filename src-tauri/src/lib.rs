@@ -52,22 +52,20 @@ fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
 
     match std::fs::read_dir(path) {
         Ok(dir_entries) => {
-            for entry in dir_entries {
-                if let Ok(entry) = entry {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let is_directory = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                    let size = if is_directory {
-                        0
-                    } else {
-                        entry.metadata().map(|m| m.len()).unwrap_or(0)
-                    };
+            for entry in dir_entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let is_directory = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
+                let size = if is_directory {
+                    0
+                } else {
+                    entry.metadata().map(|m| m.len()).unwrap_or(0)
+                };
 
-                    entries.push(FileEntry {
-                        name,
-                        is_directory,
-                        size,
-                    });
-                }
+                entries.push(FileEntry {
+                    name,
+                    is_directory,
+                    size,
+                });
             }
             Ok(entries)
         }

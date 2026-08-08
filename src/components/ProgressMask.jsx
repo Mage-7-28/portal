@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import PubSub from 'pubsub-js'
-import { PubSubBusinessKeyEnum, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
+import { PubSubBusinessKeyEnum, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
 
 const { Text } = Typography
 
@@ -244,7 +244,7 @@ const styles = {
     animation: 'fadeIn 0.2s ease-out'
   },
   container: {
-    background: '#252526',
+    background: THEME_BG_SECONDARY,
     borderRadius: '8px',
     padding: '20px 24px',
     width: 'min(340px, calc(100vw - 24px))',

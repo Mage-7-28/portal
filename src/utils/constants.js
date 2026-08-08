@@ -50,20 +50,21 @@ export const MAX_CONCURRENT_TRANSFERS = 4
 // 目前只接受 RGB、HSL 和十六进制颜色，因此生成派生主题令牌时需要对应的 sRGB 降级色。
 export const THEME_PRIMARY_COLOR = 'lab(68.9646% 33.16 32.3692)'
 export const THEME_PRIMARY_COLOR_FALLBACK = '#eb9070'
-export const THEME_BG_PRIMARY = '#1f1f1f'
-export const THEME_BG_SECONDARY = '#252526'
-export const THEME_BG_INPUT = '#2b2b2b'
-export const THEME_BORDER_COLOR = '#3c3f41'
-export const THEME_TEXT_PRIMARY = '#ebe8e1'
-export const THEME_TEXT_SECONDARY = '#c0bcb4'
-export const THEME_TEXT_LINK = '#d0b47d'
-export const THEME_SUCCESS = '#7ea886'
-export const THEME_WARNING = '#c5a467'
-export const THEME_DANGER = '#d07878'
+// 基于 IDEA 深色新界面的炭灰分层：画布、岛屿面板和浮层保持明确层级。
+export const THEME_BG_PRIMARY = '#1e1f22'
+export const THEME_BG_SECONDARY = '#2b2d30'
+export const THEME_BG_INPUT = '#313438'
+export const THEME_BORDER_COLOR = '#45474d'
+export const THEME_TEXT_PRIMARY = '#e6e8eb'
+export const THEME_TEXT_SECONDARY = '#a9adb6'
+export const THEME_TEXT_LINK = '#7fa6a4'
+export const THEME_SUCCESS = '#8fb996'
+export const THEME_WARNING = '#d0a965'
+export const THEME_DANGER = '#d86f6f'
 
 export const PROGRESS_GRADIENT = {
   '0%': THEME_PRIMARY_COLOR,
-  '100%': '#c4aa78'
+  '100%': '#f0aa90'
 }
 
 export const WINDOW_DEFAULT_WIDTH = 920

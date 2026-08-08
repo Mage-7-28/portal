@@ -7,6 +7,7 @@ import App from './App.jsx'
 import './style/antd-theme.css'
 import './style/react-hot-toast.css'
 import './style/index.css'
+import './style/geek-theme.css'
 import './style/fonts.css'
 // xterm 官方要求在应用入口加载基础 CSS，终端组件只负责创建实例和写入 PTY 数据。
 import '@xterm/xterm/css/xterm.css'
@@ -33,7 +34,10 @@ Promise.all([
 // 应用加载完成后隐藏加载动画
 window.addEventListener('load', () => {
   setTimeout(() => {
-    document.getElementById('loading').style.display = 'none'
-    document.getElementById('root').style.display = 'block'
+    // 保留首屏加载动画；页面模板被二次定制时缺少节点也不会影响应用初始化。
+    const loadingElement = document.getElementById('loading')
+    const rootElement = document.getElementById('root')
+    if (loadingElement) loadingElement.style.display = 'none'
+    if (rootElement) rootElement.style.display = 'block'
   }, 200) // 增加一个小延迟，确保加载动画有足够的时间显示
 })

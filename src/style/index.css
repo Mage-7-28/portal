@@ -51,9 +51,13 @@
 }
 
 .download-status-label {
+  display: inline-flex;
   flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
   color: #e8e5de;
   font-weight: 600;
+  line-height: 1.2;
 }
 
 .download-status-path {
@@ -138,6 +142,7 @@
 .transfer-inline-progress .ant-progress-bg {
   height: 100% !important;
   border-radius: 999px;
+  background: #eb9070 !important;
   background: lab(68.9646% 33.16 32.3692) !important;
   box-shadow: none;
 }
@@ -391,6 +396,7 @@ html,
 
 .preview-progress-meta {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 0 5px;
@@ -602,12 +608,14 @@ html,
 
 .connection-header > div {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   min-width: 0;
   gap: 8px;
 }
 
 .connection-header h1 {
+  display: inline-flex;
+  align-items: center;
   margin: 0;
   color: #ebe8e1;
   font-size: 14px;
@@ -664,6 +672,7 @@ html,
 
 .connection-row.ant-list-item.is-connecting,
 .connection-row.ant-list-item.is-connecting:hover {
+  border-color: #eb9070 !important;
   border-color: lab(68.9646% 33.16 32.3692) !important;
   background: #332b27;
 }
@@ -719,11 +728,13 @@ html,
   height: 28px;
   align-items: center;
   justify-content: center;
+  color: #eb9070;
   color: lab(68.9646% 33.16 32.3692);
 }
 
 .connection-loading .ant-spin-dot-item,
 .connection-row-loading .ant-spin-dot-item {
+  background-color: #eb9070;
   background-color: lab(68.9646% 33.16 32.3692);
 }
 
@@ -889,22 +900,30 @@ html,
 
 .connection-summary {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   min-width: 0;
   gap: 7px;
-  overflow: hidden;
+  /* 状态点光晕不能被摘要容器截断，长文本仍由各自元素省略。 */
+  overflow: visible;
+  padding-inline-start: 7px;
   white-space: nowrap;
 }
 
 .connection-status-dot {
   width: 7px;
   height: 7px;
-  flex: 0 0 auto;
+  display: block;
+  flex: 0 0 7px;
+  align-self: center;
+  box-sizing: border-box;
   border-radius: 50%;
   background: #7ea886;
 }
 
 .connection-name {
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 180px;
   overflow: hidden;
   color: #e8e5de;
@@ -914,6 +933,8 @@ html,
 }
 
 .connection-endpoint {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   color: #b8b4ab;
   font-size: 12px;
@@ -986,6 +1007,7 @@ html,
 .file-item-row.is-selected .file-list-item,
 .file-item-row.is-selected:hover .file-list-item {
   background: #38312c;
+  box-shadow: inset 2px 0 0 #eb9070;
   box-shadow: inset 2px 0 0 lab(68.9646% 33.16 32.3692);
 }
 
@@ -1430,9 +1452,9 @@ html,
   min-height: 300px;
   padding: 10px 11px;
   overflow: hidden;
-  border: 1px solid #3c3f41;
+  border: 1px solid #45474d;
   border-radius: 5px;
-  background: #171717;
+  background: #1e1f22;
 }
 
 .terminal-emulator .xterm {
@@ -1462,7 +1484,7 @@ html,
 
 .terminal-emulator .xterm-rows {
   pointer-events: none;
-  color: #e8e5de !important;
+  color: #e6e8eb !important;
   line-height: 1.18 !important;
   white-space: pre;
 }
@@ -1486,52 +1508,52 @@ html,
 }
 
 .terminal-emulator .xterm-rows .xterm-cursor-bar {
-  box-shadow: 1px 0 0 #c08a66 inset;
+  box-shadow: 1px 0 0 #eb9070 inset;
 }
 
 .terminal-emulator .xterm-rows .xterm-cursor-underline {
-  border-bottom: 1px solid #c08a66;
+  border-bottom: 1px solid #eb9070;
 }
 
 .terminal-emulator .xterm-selection div {
-  background-color: rgba(192, 138, 102, 0.35);
+  background-color: rgba(235, 144, 112, 0.28);
 }
 
 /* ANSI 基础色与终端主题保持一致，避免动态 style 标签被系统 WebView 拦截后颜色退化。 */
-.terminal-emulator .xterm-rows .xterm-fg-0 { color: #171717 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-1 { color: #d18a82 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-2 { color: #8fae91 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-3 { color: #d3ad75 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-4 { color: #8fa6b8 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-5 { color: #aa91a8 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-6 { color: #8eaaa5 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-7 { color: #d8d3c9 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-8 { color: #817d75 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-9 { color: #e0a09a !important; }
-.terminal-emulator .xterm-rows .xterm-fg-10 { color: #a8c3a5 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-11 { color: #e6c68d !important; }
-.terminal-emulator .xterm-rows .xterm-fg-12 { color: #aec3d2 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-13 { color: #c0a9bc !important; }
-.terminal-emulator .xterm-rows .xterm-fg-14 { color: #acc9c4 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-15 { color: #f0ede6 !important; }
-.terminal-emulator .xterm-rows .xterm-fg-257 { color: #e8e5de !important; }
+.terminal-emulator .xterm-rows .xterm-fg-0 { color: #1e1f22 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-1 { color: #d86f6f !important; }
+.terminal-emulator .xterm-rows .xterm-fg-2 { color: #8fb996 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-3 { color: #d0a965 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-4 { color: #7f9fb0 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-5 { color: #a894b5 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-6 { color: #7fa6a4 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-7 { color: #d8dbe0 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-8 { color: #858991 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-9 { color: #ed9088 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-10 { color: #a8caa9 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-11 { color: #e4c17a !important; }
+.terminal-emulator .xterm-rows .xterm-fg-12 { color: #a2bfce !important; }
+.terminal-emulator .xterm-rows .xterm-fg-13 { color: #c0aacd !important; }
+.terminal-emulator .xterm-rows .xterm-fg-14 { color: #a2c2bd !important; }
+.terminal-emulator .xterm-rows .xterm-fg-15 { color: #f1f3f5 !important; }
+.terminal-emulator .xterm-rows .xterm-fg-257 { color: #e6e8eb !important; }
 
-.terminal-emulator .xterm-rows .xterm-bg-0 { background-color: #171717 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-1 { background-color: #d18a82 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-2 { background-color: #8fae91 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-3 { background-color: #d3ad75 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-4 { background-color: #8fa6b8 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-5 { background-color: #aa91a8 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-6 { background-color: #8eaaa5 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-7 { background-color: #d8d3c9 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-8 { background-color: #817d75 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-9 { background-color: #e0a09a !important; }
-.terminal-emulator .xterm-rows .xterm-bg-10 { background-color: #a8c3a5 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-11 { background-color: #e6c68d !important; }
-.terminal-emulator .xterm-rows .xterm-bg-12 { background-color: #aec3d2 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-13 { background-color: #c0a9bc !important; }
-.terminal-emulator .xterm-rows .xterm-bg-14 { background-color: #acc9c4 !important; }
-.terminal-emulator .xterm-rows .xterm-bg-15 { background-color: #f0ede6 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-0 { background-color: #1e1f22 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-1 { background-color: #d86f6f !important; }
+.terminal-emulator .xterm-rows .xterm-bg-2 { background-color: #8fb996 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-3 { background-color: #d0a965 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-4 { background-color: #7f9fb0 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-5 { background-color: #a894b5 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-6 { background-color: #7fa6a4 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-7 { background-color: #d8dbe0 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-8 { background-color: #858991 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-9 { background-color: #ed9088 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-10 { background-color: #a8caa9 !important; }
+.terminal-emulator .xterm-rows .xterm-bg-11 { background-color: #e4c17a !important; }
+.terminal-emulator .xterm-rows .xterm-bg-12 { background-color: #a2bfce !important; }
+.terminal-emulator .xterm-rows .xterm-bg-13 { background-color: #c0aacd !important; }
+.terminal-emulator .xterm-rows .xterm-bg-14 { background-color: #a2c2bd !important; }
+.terminal-emulator .xterm-rows .xterm-bg-15 { background-color: #f1f3f5 !important; }
 
 .terminal-hint {
   display: flex;
@@ -1621,7 +1643,9 @@ html,
 .about-meta {
   display: flex;
   width: 100%;
+  align-items: center;
   justify-content: center;
+  flex-wrap: wrap;
   gap: 15px;
   margin-top: 17px;
   padding-top: 12px;
@@ -1656,9 +1680,9 @@ html,
 
 .compact-form .ant-form-item-label .app-icon,
 .credential-note .app-icon {
+  flex: 0 0 auto;
   width: 1em;
   height: 1em;
-  vertical-align: -0.12em;
 }
 
 .compact-form .ant-form-item-explain,
@@ -1682,7 +1706,9 @@ html,
 }
 
 .credential-note {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 5px;
   margin-bottom: 11px;
   font-size: 11.5px;
   line-height: 17px;
@@ -1690,6 +1716,7 @@ html,
 
 .modal-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 7px;
   flex-wrap: wrap;
@@ -1789,7 +1816,7 @@ html,
 }
 .ant-switch-handle {
   top: 50%;
-  transform: translateY(20%);
+  transform: translateY(-50%);
 }
 
 .ant-pagination {

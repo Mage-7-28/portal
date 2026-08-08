@@ -184,6 +184,29 @@ struct RemoteDeleteTarget {
     is_directory: bool,
 }
 
+// 文件上传和下载共享的上下文，保证两条传输路径使用相同的连接与取消语义。
+struct FileTransferContext<'a> {
+    state: &'a SshState,
+    connection: &'a SshConnection,
+    sftp: &'a Sftp,
+    transfer_id: &'a str,
+    overwrite: bool,
+}
+
+// 文件夹传输进度的完整快照，统一承载事件所需的数据字段。
+struct FolderTransferProgress<'a> {
+    event: &'a str,
+    transfer_id: &'a str,
+    connection_id: &'a str,
+    file_name: &'a str,
+    file_index: usize,
+    file_total: usize,
+    current: u64,
+    total: u64,
+    completed_bytes: u64,
+    total_bytes: u64,
+}
+
 struct OpenSession {
     session: Session,
     host_key: HostKeyInfo,
@@ -212,7 +235,7 @@ fn connection_info(
 
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut output = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
     let mut index = 0;
     while index < bytes.len() {
         let first = bytes[index] as u32;
@@ -1431,6 +1454,8 @@ pub fn test_sftp_connection(
 }
 
 #[tauri::command]
+// 参数名称与前端既有 IPC 契约保持一致；此处有意保留较长签名，避免破坏旧版本调用方。
+#[allow(clippy::too_many_arguments)]
 pub fn add_ssh_connection(
     state: State<SshState>,
     id: String,
@@ -1895,65 +1920,57 @@ fn transfer_progress(
     );
 }
 
-fn folder_transfer_progress(
-    state: &SshState,
-    event: &str,
-    transfer_id: &str,
-    connection_id: &str,
-    file_name: &str,
-    file_index: usize,
-    file_total: usize,
-    current: u64,
-    total: u64,
-    completed_bytes: u64,
-    total_bytes: u64,
-) {
-    let progress = if total == 0 {
+fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'_>) {
+    let progress = if details.total == 0 {
         100
     } else {
-        ((current.saturating_mul(100)) / total).min(100)
+        ((details.current.saturating_mul(100)) / details.total).min(100)
     };
-    let overall_progress = if total_bytes == 0 {
-        if file_total == 0 {
+    let overall_progress = if details.total_bytes == 0 {
+        if details.file_total == 0 {
             100
         } else {
-            ((file_index.saturating_add(1).saturating_mul(100)) / file_total).min(100) as u64
+            ((details.file_index.saturating_add(1).saturating_mul(100)) / details.file_total)
+                .min(100) as u64
         }
     } else {
-        (((completed_bytes.saturating_add(current)).saturating_mul(100)) / total_bytes).min(100)
+        (((details.completed_bytes.saturating_add(details.current)).saturating_mul(100))
+            / details.total_bytes)
+            .min(100)
     };
     emit_event(
         &state.app_handle,
-        event,
+        details.event,
         json!({
-            "id": connection_id,
-            "transferId": transfer_id,
+            "id": details.connection_id,
+            "transferId": details.transfer_id,
             "progress": progress,
-            "current": current,
-            "total": total,
-            "fileName": file_name,
-            "fileIndex": file_index,
-            "fileTotal": file_total,
+            "current": details.current,
+            "total": details.total,
+            "fileName": details.file_name,
+            "fileIndex": details.file_index,
+            "fileTotal": details.file_total,
             "overallProgress": overall_progress,
-            "completedBytes": completed_bytes.saturating_add(current),
-            "totalBytes": total_bytes
+            "completedBytes": details.completed_bytes.saturating_add(details.current),
+            "totalBytes": details.total_bytes
         }),
     );
 }
 
 fn upload_file_to_sftp<F>(
-    state: &SshState,
-    connection: &SshConnection,
-    sftp: &Sftp,
-    transfer_id: &str,
+    context: &FileTransferContext<'_>,
     local_path: &Path,
     remote_path: &str,
-    overwrite: bool,
     mut report_progress: F,
 ) -> Result<u64, SshError>
 where
     F: FnMut(u64, u64),
 {
+    let state = context.state;
+    let connection = context.connection;
+    let sftp = context.sftp;
+    let transfer_id = context.transfer_id;
+    let overwrite = context.overwrite;
     let local_file = File::open(local_path)
         .map_err(|error| SshError::FileOperationFailed(format!("无法打开本地文件: {error}")))?;
     let total = local_file
@@ -2033,14 +2050,17 @@ fn run_upload(
     })?;
     drop(session);
 
-    upload_file_to_sftp(
+    let transfer_context = FileTransferContext {
         state,
         connection,
-        &sftp,
+        sftp: &sftp,
         transfer_id,
+        overwrite,
+    };
+    upload_file_to_sftp(
+        &transfer_context,
         Path::new(local_path),
         remote_path,
-        overwrite,
         |current, total| {
             transfer_progress(
                 state,
@@ -2079,6 +2099,13 @@ fn run_upload_directory(
     drop(session);
 
     ensure_remote_directory(state, &connection.id, &sftp, remote_path, overwrite)?;
+    let transfer_context = FileTransferContext {
+        state,
+        connection,
+        sftp: &sftp,
+        transfer_id,
+        overwrite,
+    };
     for relative_path in &plan.directories {
         if is_cancelled(&state.cancelled_transfers, transfer_id) {
             return Err(SshError::TransferCancelled);
@@ -2103,26 +2130,24 @@ fn run_upload_directory(
         let remote_file_path = join_remote_path(remote_path, &file.relative_path)?;
         let display_path = display_relative_path(&file.relative_path);
         let uploaded_size = upload_file_to_sftp(
-            state,
-            connection,
-            &sftp,
-            transfer_id,
+            &transfer_context,
             &file.local_path,
             &remote_file_path,
-            overwrite,
             |current, total| {
                 folder_transfer_progress(
                     state,
-                    "upload-progress",
-                    transfer_id,
-                    &connection.id,
-                    &display_path,
-                    file_index,
-                    file_total,
-                    current,
-                    total,
-                    completed_bytes,
-                    plan.total_bytes,
+                    &FolderTransferProgress {
+                        event: "upload-progress",
+                        transfer_id,
+                        connection_id: &connection.id,
+                        file_name: &display_path,
+                        file_index,
+                        file_total,
+                        current,
+                        total,
+                        completed_bytes,
+                        total_bytes: plan.total_bytes,
+                    },
                 );
             },
         )
@@ -2156,18 +2181,19 @@ fn run_upload_directory(
 }
 
 fn download_file_to_local<F>(
-    state: &SshState,
-    connection: &SshConnection,
-    sftp: &Sftp,
-    transfer_id: &str,
+    context: &FileTransferContext<'_>,
     remote_path: &str,
     target: &Path,
-    overwrite: bool,
     mut report_progress: F,
 ) -> Result<u64, SshError>
 where
     F: FnMut(u64, u64),
 {
+    let state = context.state;
+    let connection = context.connection;
+    let sftp = context.sftp;
+    let transfer_id = context.transfer_id;
+    let overwrite = context.overwrite;
     if let Ok(metadata) = fs::symlink_metadata(target) {
         if metadata.file_type().is_symlink() {
             return Err(SshError::FileOperationFailed(
@@ -2268,14 +2294,17 @@ fn run_download(
         SshError::SftpFailed(error.to_string())
     })?;
     drop(session);
-    download_file_to_local(
+    let transfer_context = FileTransferContext {
         state,
         connection,
-        &sftp,
+        sftp: &sftp,
         transfer_id,
+        overwrite,
+    };
+    download_file_to_local(
+        &transfer_context,
         remote_path,
         Path::new(local_path),
-        overwrite,
         |current, total| {
             transfer_progress(
                 state,
@@ -2334,6 +2363,13 @@ fn run_download_directory(
     }
     fs::create_dir_all(&target_root)
         .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地文件夹: {error}")))?;
+    let transfer_context = FileTransferContext {
+        state,
+        connection,
+        sftp: &sftp,
+        transfer_id,
+        overwrite,
+    };
     for relative_path in &plan.directories {
         if is_cancelled(&state.cancelled_transfers, transfer_id) {
             return Err(SshError::TransferCancelled);
@@ -2355,26 +2391,24 @@ fn run_download_directory(
         let display_path = display_relative_path(&file.relative_path);
         let target = target_root.join(&file.relative_path);
         let downloaded_size = download_file_to_local(
-            state,
-            connection,
-            &sftp,
-            transfer_id,
+            &transfer_context,
             &file.remote_path,
             &target,
-            overwrite,
             |current, total| {
                 folder_transfer_progress(
                     state,
-                    "download-progress",
-                    transfer_id,
-                    &connection.id,
-                    &display_path,
-                    file_index,
-                    file_total,
-                    current,
-                    total,
-                    completed_bytes,
-                    plan.total_bytes,
+                    &FolderTransferProgress {
+                        event: "download-progress",
+                        transfer_id,
+                        connection_id: &connection.id,
+                        file_name: &display_path,
+                        file_index,
+                        file_total,
+                        current,
+                        total,
+                        completed_bytes,
+                        total_bytes: plan.total_bytes,
+                    },
                 );
             },
         )
@@ -2441,7 +2475,7 @@ pub fn scp_upload(
                 "transferId": transfer_id_for_thread,
                 "success": result.is_ok(),
                 "cancelled": cancelled,
-                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+                "message": result.unwrap_or_else(|error| error.to_string())
             }),
         );
         finish_transfer(&state_handle, &transfer_id_for_thread);
@@ -2484,7 +2518,7 @@ pub fn sftp_upload_directory(
                 "transferId": transfer_id_for_thread,
                 "success": result.is_ok(),
                 "cancelled": cancelled,
-                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+                "message": result.unwrap_or_else(|error| error.to_string())
             }),
         );
         finish_transfer(&state_handle, &transfer_id_for_thread);
@@ -2527,7 +2561,7 @@ pub fn scp_download(
                 "transferId": transfer_id_for_thread,
                 "success": result.is_ok(),
                 "cancelled": cancelled,
-                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+                "message": result.unwrap_or_else(|error| error.to_string())
             }),
         );
         finish_transfer(&state_handle, &transfer_id_for_thread);
@@ -2570,7 +2604,7 @@ pub fn sftp_download_directory(
                 "transferId": transfer_id_for_thread,
                 "success": result.is_ok(),
                 "cancelled": cancelled,
-                "message": result.map(|message| message).unwrap_or_else(|error| error.to_string())
+                "message": result.unwrap_or_else(|error| error.to_string())
             }),
         );
         finish_transfer(&state_handle, &transfer_id_for_thread);
