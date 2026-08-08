@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use serde_json::json;
-use ssh2::{Channel, ErrorCode, HashType, RenameFlags, Session, Sftp};
+use ssh2::{Channel, ErrorCode, ExtendedData, HashType, RenameFlags, Session, Sftp};
 use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 
@@ -22,6 +22,9 @@ const MAX_CONCURRENT_TRANSFERS: usize = 4;
 const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
 // 同一工作会话连续处理少量子目录，降低反复创建 SFTP 子会话的开销，同时保留调度公平性。
 const DIRECTORY_SIZE_WORKER_BATCH_SIZE: usize = 8;
+// GNU/Linux 的远端 `du` 只返回一行汇总结果；限制输出大小，避免异常远端命令占满内存。
+const MAX_DIRECTORY_SIZE_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
+const DIRECTORY_SIZE_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
 const TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -110,6 +113,9 @@ pub struct SshState {
     pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
     directory_size_cancellations: Arc<Mutex<HashMap<String, DirectorySizeCancellation>>>,
     directory_size_worker_pools: Arc<RwLock<HashMap<String, Arc<Mutex<DirectorySizeWorkerPool>>>>>,
+    // 远端可能没有 POSIX shell 或兼容的 GNU `du`；只缓存已确认“不支持”的结果，
+    // 避免每个目录都重复握手后再回退到 SFTP 扫描。
+    directory_size_fast_path_support: Arc<Mutex<HashMap<String, bool>>>,
     active_directory_size_workers: Arc<AtomicUsize>,
     directory_size_worker_wait: Arc<DirectorySizeWorkerWait>,
     pub active_transfers: Arc<AtomicUsize>,
@@ -1322,6 +1328,183 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     })
 }
 
+fn shell_quote_remote_path(path: &str) -> Option<String> {
+    if path.as_bytes().contains(&0) {
+        return None;
+    }
+
+    let mut quoted = String::with_capacity(path.len() + 2);
+    quoted.push('\'');
+    for character in path.chars() {
+        if character == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(character);
+        }
+    }
+    quoted.push('\'');
+    Some(quoted)
+}
+
+fn is_absolute_posix_remote_path(path: &str) -> bool {
+    path.starts_with('/')
+}
+
+fn parse_remote_du_size(output: &[u8]) -> Option<u64> {
+    // GNU du 的汇总输出应以大小字段开头。若远端包装脚本额外输出了内容，
+    // 放弃快速路径并回退，避免把无关数字误显示为文件夹大小。
+    let line = output
+        .split(|byte| *byte == b'\n')
+        .find(|line| line.iter().any(|byte| !byte.is_ascii_whitespace()))?;
+    let value = line
+        .split(|byte| byte.is_ascii_whitespace())
+        .find(|part| !part.is_empty())?;
+    std::str::from_utf8(value).ok()?.parse::<u64>().ok()
+}
+
+fn remote_du_is_unavailable(output: &[u8]) -> bool {
+    let message = String::from_utf8_lossy(output).to_ascii_lowercase();
+    [
+        "command not found",
+        "not found",
+        "not recognized",
+        "invalid option",
+        "illegal option",
+        "unknown option",
+        "unrecognized option",
+        "usage:",
+    ]
+    .iter()
+    .any(|pattern| message.contains(pattern))
+}
+
+fn read_directory_size_command_output(
+    state: &SshState,
+    connection_id: &str,
+    channel: &mut Channel,
+    cancellation: &AtomicBool,
+) -> Result<Option<Vec<u8>>, SshError> {
+    let mut output = Vec::with_capacity(128);
+    let mut buffer = [0_u8; 4096];
+    loop {
+        if cancellation.load(Ordering::Acquire) {
+            let _ = channel.close();
+            return Err(SshError::DirectorySizeCancelled);
+        }
+
+        match channel.read(&mut buffer) {
+            // ssh2 的非阻塞读取在暂时没有数据时也可能返回 0；只有远端已发送
+            // EOF 才表示命令输出已完整读取。
+            Ok(0) if channel.eof() => return Ok(Some(output)),
+            Ok(0) => thread::sleep(DIRECTORY_SIZE_COMMAND_POLL_INTERVAL),
+            Ok(size) => {
+                output.extend_from_slice(&buffer[..size]);
+                if output.len() > MAX_DIRECTORY_SIZE_COMMAND_OUTPUT_BYTES {
+                    let _ = channel.close();
+                    return Ok(None);
+                }
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error
+                        .to_string()
+                        .to_ascii_lowercase()
+                        .contains("would block") =>
+            {
+                thread::sleep(DIRECTORY_SIZE_COMMAND_POLL_INTERVAL);
+            }
+            Err(error) => {
+                mark_io_error_if_connection_lost(state, connection_id, &error);
+                return Err(SshError::ReadFailed(error.to_string()));
+            }
+        }
+    }
+}
+
+// GNU/Linux 的 `du` 在服务器本机遍历目录，避免客户端通过 SFTP 为每个子目录
+// 往返一次。命令失败或服务器没有兼容的 `du` 时返回 None，由调用方走 SFTP 兜底。
+fn try_remote_directory_size(
+    state: &SshState,
+    connection: &SshConnection,
+    remote_path: &str,
+    cancellation: &AtomicBool,
+) -> Result<Option<RemoteDirectorySize>, SshError> {
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
+    // SFTP 的相对路径或 Windows 风格路径未必与 SSH Shell 的目录空间一致，
+    // 因此只为绝对 POSIX 路径启用远端 du；其他情况保持 SFTP 递归基线。
+    if !is_absolute_posix_remote_path(remote_path) {
+        return Ok(None);
+    }
+    if state
+        .directory_size_fast_path_support
+        .lock()
+        .unwrap()
+        .get(&connection.id)
+        .copied()
+        == Some(false)
+    {
+        return Ok(None);
+    }
+
+    let Some(quoted_path) = shell_quote_remote_path(remote_path) else {
+        return Ok(None);
+    };
+    let session = match open_authenticated_session(connection) {
+        Ok(session) => session,
+        Err(_) => return Ok(None),
+    };
+    let mut channel = match session.channel_session() {
+        Ok(channel) => channel,
+        Err(_) => return Ok(None),
+    };
+    if channel.handle_extended_data(ExtendedData::Merge).is_err() {
+        return Ok(None);
+    }
+    let command = format!("LC_ALL=C du -s -b -l -P -- {quoted_path}");
+    if channel.exec(&command).is_err() {
+        return Ok(None);
+    }
+
+    // 非阻塞读取允许取消请求及时终止长时间运行的远端 du。
+    session.set_blocking(false);
+    let output =
+        read_directory_size_command_output(state, &connection.id, &mut channel, cancellation)?;
+    session.set_blocking(true);
+    let Some(output) = output else {
+        return Ok(None);
+    };
+    if channel.wait_close().is_err() {
+        return Ok(None);
+    }
+    if channel.exit_status().unwrap_or(1) != 0 {
+        if remote_du_is_unavailable(&output) {
+            state
+                .directory_size_fast_path_support
+                .lock()
+                .unwrap()
+                .insert(connection.id.clone(), false);
+        }
+        return Ok(None);
+    }
+
+    let Some(size) = parse_remote_du_size(&output) else {
+        return Ok(None);
+    };
+    state
+        .directory_size_fast_path_support
+        .lock()
+        .unwrap()
+        .insert(connection.id.clone(), true);
+    Ok(Some(RemoteDirectorySize {
+        size,
+        complete: true,
+        inaccessible_count: 0,
+        scanned_entries: 0,
+    }))
+}
+
 // 统计任务开始时登记引用，避免另一个任务结束时误清理仍在使用的会话池。
 fn begin_directory_size_task(
     state: &SshState,
@@ -1900,6 +2083,11 @@ pub fn add_ssh_connection(
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     state
+        .directory_size_fast_path_support
+        .lock()
+        .unwrap()
+        .remove(&id);
+    state
         .connections
         .write()
         .unwrap()
@@ -2019,6 +2207,11 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
 pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
+    state
+        .directory_size_fast_path_support
+        .lock()
+        .unwrap()
+        .remove(&id);
     Ok(state.connections.write().unwrap().remove(&id).is_some())
 }
 
@@ -2272,6 +2465,7 @@ fn directory_size_worker_loop(
 fn calculate_sftp_directory_size(
     state: SshState,
     id: String,
+    connection: SshConnection,
     remote_path: String,
     cancellation: Arc<AtomicBool>,
     wake: Arc<Condvar>,
@@ -2279,6 +2473,12 @@ fn calculate_sftp_directory_size(
 ) -> Result<RemoteDirectorySize, SshError> {
     if cancellation.load(Ordering::Acquire) {
         return Err(SshError::DirectorySizeCancelled);
+    }
+
+    if let Some(result) =
+        try_remote_directory_size(&state, &connection, &remote_path, cancellation.as_ref())?
+    {
+        return Ok(result);
     }
 
     let scan = Arc::new(DirectorySizeScan::new(&remote_path, cancellation, wake));
@@ -2330,7 +2530,7 @@ pub async fn get_sftp_directory_size(
     }
 
     let state = state.inner().clone();
-    let _ = connection_info(&state, &id, true)?;
+    let connection = connection_info(&state, &id, true)?;
     let cancellation = Arc::new(AtomicBool::new(false));
     let wake = Arc::new(Condvar::new());
     state.directory_size_cancellations.lock().unwrap().insert(
@@ -2362,6 +2562,7 @@ pub async fn get_sftp_directory_size(
         calculate_sftp_directory_size(
             state_for_task,
             id_for_task,
+            connection,
             remote_path_for_task,
             cancellation_for_task,
             wake_for_task,
@@ -3394,6 +3595,38 @@ mod tests {
     fn encodes_sha256_fingerprint_bytes_as_base64() {
         assert_eq!(base64_encode(b"hello"), "aGVsbG8");
         assert_eq!(base64_encode(&[]), "");
+    }
+
+    #[test]
+    fn shell_quotes_remote_paths_without_allowing_command_injection() {
+        let quoted = shell_quote_remote_path("/srv/O'Reilly; touch /tmp/unsafe").unwrap();
+        assert_eq!(quoted, "'/srv/O'\\''Reilly; touch /tmp/unsafe'");
+        assert!(shell_quote_remote_path("/srv/unsafe\0path").is_none());
+    }
+
+    #[test]
+    fn parses_only_numeric_du_output() {
+        assert_eq!(parse_remote_du_size(b"12345\t/srv/data\n"), Some(12345));
+        assert_eq!(parse_remote_du_size(b"du: invalid option -- b\n"), None);
+        assert_eq!(parse_remote_du_size(b"notice\n12345\t/srv/data\n"), None);
+    }
+
+    #[test]
+    fn uses_du_only_for_absolute_posix_sftp_paths() {
+        assert!(is_absolute_posix_remote_path("/srv/data"));
+        assert!(!is_absolute_posix_remote_path("relative/path"));
+        assert!(!is_absolute_posix_remote_path("C:/data"));
+    }
+
+    #[test]
+    fn recognizes_unavailable_remote_du_messages() {
+        assert!(remote_du_is_unavailable(
+            b"du: illegal option -- b\nusage: du ..."
+        ));
+        assert!(remote_du_is_unavailable(b"sh: du: command not found\n"));
+        assert!(!remote_du_is_unavailable(
+            b"du: cannot read directory '/srv/private': Permission denied\n"
+        ));
     }
 
     #[test]
