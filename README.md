@@ -59,4 +59,4 @@ cargo check --manifest-path src-tauri/Cargo.toml
 
 ## 许可证
 
-本项目采用 MIT License，见 [`LICENSE`](./LICENSE)。第三方依赖及其许可证记录见 [`license-report.csv`](./license-report.csv)。
+本项目采用 MIT License，见 [`LICENSE`](./LICENSE)。第三方依赖的版权声明、许可证说明和当前版本清单见 [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md) 与 [`license-report.csv`](./license-report.csv)。第三方代码仍受其原始许可证约束；生产 Tauri 包会把这三份文件放入应用资源目录，发布二进制时请一并保留适用的第三方许可证和 NOTICE 文件。

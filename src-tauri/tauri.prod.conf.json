@@ -29,6 +29,11 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "resources": {
+      "../LICENSE": "licenses/LICENSE",
+      "../THIRD-PARTY-NOTICES.md": "licenses/THIRD-PARTY-NOTICES.md",
+      "../license-report.csv": "licenses/license-report.csv"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
