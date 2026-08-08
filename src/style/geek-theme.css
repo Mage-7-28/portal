@@ -1,0 +1,846 @@
+/*
+ * 基于 IDEA 深色群岛布局的低眩光科幻控制台主题。
+ * 仅覆盖视觉令牌与布局呈现，不改变任何连接、传输或文件操作逻辑。
+ */
+
+:root {
+  --portal-geek-primary: #eb9070;
+  --portal-geek-canvas: #1e1f22;
+  --portal-geek-surface-0: #242529;
+  --portal-geek-surface-1: #2b2d30;
+  --portal-geek-surface-2: #313438;
+  --portal-geek-surface-hover: #393b40;
+  --portal-geek-line-soft: #45474d;
+  --portal-geek-line-strong: #5b5e66;
+  --portal-geek-text: #e6e8eb;
+  --portal-geek-text-muted: #a9adb6;
+  --portal-geek-teal: #7fa6a4;
+  --portal-geek-success: #8fb996;
+  --portal-geek-shadow: rgba(0, 0, 0, 0.36);
+  color-scheme: dark;
+}
+
+@supports (color: lab(68.9646% 33.16 32.3692)) {
+  :root {
+    --portal-geek-primary: lab(68.9646% 33.16 32.3692);
+  }
+}
+
+/* 动效只用于状态反馈，不移动内容布局，避免终端输出和文件列表产生跳动。 */
+@keyframes portal-status-pulse {
+  0%,
+  100% {
+    opacity: 0.72;
+    box-shadow: 0 0 0 3px rgba(143, 185, 150, 0.08);
+  }
+
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 0 4px rgba(143, 185, 150, 0.16);
+  }
+}
+
+@keyframes portal-accent-breathe {
+  0%,
+  100% {
+    opacity: 0.68;
+  }
+
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes portal-scanline {
+  0%,
+  15% {
+    opacity: 0;
+    transform: translateX(-160%);
+  }
+
+  35%,
+  65% {
+    opacity: 0.7;
+  }
+
+  85%,
+  100% {
+    opacity: 0;
+    transform: translateX(460%);
+  }
+}
+
+/* 主界面采用 IDEA 的深炭灰画布，细网格只提供设备面板的空间感。 */
+body {
+  background:
+    linear-gradient(90deg, rgba(166, 173, 183, 0.014) 1px, transparent 1px),
+    linear-gradient(rgba(166, 173, 183, 0.014) 1px, transparent 1px),
+    var(--portal-geek-canvas);
+  background-size: 48px 48px;
+  color: var(--portal-geek-text);
+}
+
+::selection {
+  background: rgba(235, 144, 112, 0.36);
+  color: #ffffff;
+}
+
+.app-shell {
+  position: relative;
+  padding: 8px;
+  background-image:
+    linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(166, 173, 183, 0.018) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.app-frame {
+  border-color: var(--portal-geek-line-strong);
+  border-radius: 10px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 58px),
+    var(--portal-geek-surface-0);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.025),
+    0 14px 34px var(--portal-geek-shadow);
+}
+
+.app-content {
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.01) 1px, transparent 1px),
+    transparent;
+  background-size: 100% 100%;
+}
+
+.download-status {
+  min-height: 29px;
+  border-top-color: var(--portal-geek-line-soft);
+  border-radius: 0 0 9px 9px;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.045), transparent 38%),
+    var(--portal-geek-surface-1);
+  color: var(--portal-geek-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.download-status-label {
+  color: var(--portal-geek-text);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+}
+
+.download-status-label::before {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  margin: 0;
+  border-radius: 50%;
+  background: var(--portal-geek-teal);
+  content: '';
+}
+
+.transfer-inline-status {
+  color: #d4d7dc;
+}
+
+.transfer-inline-operation,
+.transfer-inline-pending-count {
+  color: var(--portal-geek-text);
+}
+
+.transfer-inline-progress .ant-progress-inner,
+.preview-progress .ant-progress-inner {
+  border-color: #50535a;
+  background: #3a3c42;
+}
+
+.transfer-inline-progress .ant-progress-bg,
+.preview-progress .ant-progress-bg {
+  background: var(--portal-geek-primary) !important;
+}
+
+.transfer-inline-percent {
+  color: #f0aa90;
+}
+
+/* 统一按钮、输入框与焦点的边界表现，保持柔和且明确的可访问性提示。 */
+.ant-btn {
+  border-color: var(--portal-geek-line-soft);
+  background: var(--portal-geek-surface-2);
+  color: var(--portal-geek-text);
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.ant-btn:not(:disabled):hover {
+  border-color: var(--portal-geek-line-strong);
+  background: var(--portal-geek-surface-hover);
+  color: #ffffff;
+}
+
+.ant-btn:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.ant-btn-primary:not(:disabled) {
+  border-color: #f0aa90 !important;
+  background: var(--portal-geek-primary) !important;
+  color: #ffffff !important;
+}
+
+.ant-btn-primary:not(:disabled):hover {
+  border-color: #ffc0a8 !important;
+  background: #ef9a7d !important;
+}
+
+.ant-btn-dangerous:not(:disabled) {
+  border-color: #b96d6b !important;
+  background: #944f51 !important;
+}
+
+.ant-btn-dangerous:not(:disabled):hover {
+  border-color: #e0807c !important;
+  background: #ae5d5d !important;
+}
+
+.ant-btn:focus-visible,
+.ant-input:focus,
+.ant-input-affix-wrapper-focused {
+  outline-color: rgba(235, 144, 112, 0.54);
+  box-shadow: 0 0 0 2px rgba(235, 144, 112, 0.12) !important;
+}
+
+.ant-input,
+.ant-input-affix-wrapper,
+.ant-input-number,
+.ant-input-number-input {
+  border-color: var(--portal-geek-line-soft) !important;
+  background: var(--portal-geek-canvas) !important;
+  color: var(--portal-geek-text) !important;
+}
+
+.ant-input::placeholder,
+.ant-input-number-input::placeholder {
+  color: #858991;
+}
+
+.ant-input-password-icon,
+.ant-typography-copy,
+.ant-typography-copy-success {
+  color: var(--portal-geek-text-muted);
+}
+
+.ant-input-password-icon:hover,
+.ant-typography-copy:hover,
+.ant-typography-copy-success:hover {
+  color: var(--portal-geek-primary);
+}
+
+/* 浮层也沿用设备面板语言，避免下拉菜单和提示框回退为默认组件观感。 */
+.ant-modal-mask {
+  background: rgba(15, 16, 18, 0.68) !important;
+}
+
+.ant-dropdown .ant-dropdown-menu,
+.ant-popover .ant-popover-inner,
+.ant-tooltip .ant-tooltip-inner {
+  border: 1px solid var(--portal-geek-line-strong);
+  background: var(--portal-geek-surface-1);
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+}
+
+.ant-dropdown .ant-dropdown-menu-item,
+.ant-dropdown .ant-dropdown-menu-submenu-title {
+  color: var(--portal-geek-text);
+}
+
+.ant-dropdown .ant-dropdown-menu-item:hover,
+.ant-dropdown .ant-dropdown-menu-submenu-title:hover {
+  background: rgba(137, 170, 165, 0.12);
+}
+
+.ant-dropdown .ant-dropdown-menu-item-selected {
+  background: rgba(235, 144, 112, 0.15);
+  color: #ffffff;
+}
+
+.ant-popover .ant-popover-inner-content,
+.ant-tooltip .ant-tooltip-inner {
+  color: var(--portal-geek-text);
+}
+
+.ant-popover .ant-popover-arrow::before,
+.ant-tooltip .ant-tooltip-arrow::before {
+  background: var(--portal-geek-surface-1);
+}
+
+.ant-alert {
+  border-color: var(--portal-geek-line-strong);
+  background: rgba(49, 52, 56, 0.96);
+}
+
+.ant-alert .ant-alert-title,
+.ant-alert .ant-alert-description {
+  color: var(--portal-geek-text);
+}
+
+/* 连接页采用节点面板样式，强化层级但不压缩已有可操作区域。 */
+.connection-page {
+  padding: 14px;
+  background:
+    linear-gradient(180deg, rgba(127, 166, 164, 0.035), transparent 150px),
+    transparent;
+}
+
+.connection-header {
+  min-height: 40px;
+  margin-bottom: 12px;
+  padding: 0 0 10px;
+  border-bottom: 1px solid var(--portal-geek-line-soft);
+}
+
+.connection-header > div {
+  gap: 10px;
+}
+
+.connection-header h1 {
+  color: var(--portal-geek-text);
+  font-size: 15px;
+  letter-spacing: 0.05em;
+}
+
+.connection-header h1::before {
+  flex: 0 0 auto;
+  display: inline-block;
+  width: 5px;
+  height: 16px;
+  margin: 0 8px 0 0;
+  border-radius: 3px;
+  background: var(--portal-geek-primary);
+  content: '';
+  animation: portal-accent-breathe 3.2s ease-in-out infinite;
+}
+
+.connection-header > div > span {
+  color: var(--portal-geek-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.025em;
+}
+
+.connection-header > div > .connection-header-hint {
+  color: var(--portal-geek-teal);
+}
+
+.connection-list .ant-list-items {
+  gap: 8px;
+}
+
+.connection-row.ant-list-item {
+  min-height: 58px;
+  border-color: var(--portal-geek-line-soft) !important;
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.04), transparent 30%),
+    var(--portal-geek-surface-1);
+  box-shadow: inset 2px 0 0 rgba(127, 166, 164, 0.42);
+}
+
+.connection-row.ant-list-item:hover {
+  border-color: var(--portal-geek-line-strong) !important;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.075), transparent 35%),
+    #35373c;
+}
+
+.connection-row.ant-list-item.is-connecting,
+.connection-row.ant-list-item.is-connecting:hover {
+  border-color: var(--portal-geek-primary) !important;
+  background: linear-gradient(90deg, rgba(235, 144, 112, 0.12), transparent 42%), #302c2e;
+}
+
+.connection-row-icon {
+  color: var(--portal-geek-primary);
+}
+
+.connection-row-name,
+.connection-name,
+.file-item-name {
+  color: var(--portal-geek-text);
+}
+
+.connection-row-endpoint,
+.connection-endpoint {
+  color: var(--portal-geek-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+}
+
+.connection-empty {
+  border: 1px dashed var(--portal-geek-line-soft);
+  border-radius: 8px;
+  background: rgba(36, 37, 41, 0.74);
+}
+
+.connection-empty .app-icon {
+  color: var(--portal-geek-teal);
+}
+
+.connection-loading {
+  border: 1px solid rgba(127, 166, 164, 0.3);
+  background: rgba(30, 31, 34, 0.78);
+  backdrop-filter: blur(2px);
+}
+
+.connection-loading .ant-spin-dot-item,
+.connection-row-loading .ant-spin-dot-item {
+  background-color: var(--portal-geek-primary);
+}
+
+/* 文件区保持“数据面板”层次，路径栏、连接栏和文件列表使用一致边框系统。 */
+.file-browser {
+  padding: 12px;
+  background:
+    linear-gradient(180deg, rgba(127, 166, 164, 0.03), transparent 140px),
+    transparent;
+}
+
+.path-toolbar {
+  gap: 7px;
+  margin-bottom: 9px;
+}
+
+.toolbar-icon-button.ant-btn {
+  border-color: var(--portal-geek-line-soft);
+  border-radius: 6px;
+  background: var(--portal-geek-surface-2);
+  color: var(--portal-geek-text);
+}
+
+.toolbar-icon-button.ant-btn:hover {
+  border-color: var(--portal-geek-teal);
+  background: var(--portal-geek-surface-hover);
+  color: #ffffff;
+}
+
+.remote-path-bar {
+  height: 34px;
+  border-color: var(--portal-geek-line-soft);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.055), transparent 26%),
+    #222326;
+}
+
+.remote-path-bar:focus-within {
+  border-color: var(--portal-geek-teal);
+  box-shadow: inset 2px 0 0 var(--portal-geek-primary), 0 0 0 1px rgba(127, 166, 164, 0.12);
+}
+
+.remote-path-icon {
+  color: var(--portal-geek-primary);
+}
+
+.remote-path-input.ant-input {
+  height: 32px;
+  background: transparent !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12.5px;
+  letter-spacing: 0.01em;
+}
+
+.path-menu-button.ant-btn {
+  height: 32px;
+  border-left-color: var(--portal-geek-line-soft);
+}
+
+.connection-toolbar {
+  min-height: 37px;
+  border-color: var(--portal-geek-line-soft);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.045), transparent 34%),
+    #292b2f;
+}
+
+.connection-status-dot {
+  width: 8px;
+  height: 8px;
+  display: block;
+  flex: 0 0 8px;
+  align-self: center;
+  box-sizing: border-box;
+  background: var(--portal-geek-success);
+  box-shadow: 0 0 0 3px rgba(143, 185, 150, 0.09);
+  animation: portal-status-pulse 3.6s ease-in-out infinite;
+}
+
+.connection-name {
+  letter-spacing: 0.025em;
+}
+
+.connection-actions .ant-btn {
+  border-radius: 5px;
+}
+
+.file-list-shell {
+  border-color: var(--portal-geek-line-soft);
+  border-radius: 7px;
+  background:
+    linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
+    var(--portal-geek-canvas);
+  background-size: 100% 46px;
+  scrollbar-gutter: stable;
+}
+
+.file-list-shell.is-upload-drop-target {
+  border-color: var(--portal-geek-primary);
+  background:
+    linear-gradient(rgba(235, 144, 112, 0.052) 1px, transparent 1px),
+    #302b2d;
+  box-shadow: inset 0 0 0 1px rgba(235, 144, 112, 0.16);
+}
+
+.file-list-item.ant-list-item {
+  min-height: 46px;
+  border-block-end-color: rgba(91, 94, 102, 0.52) !important;
+}
+
+.file-item-row:hover .file-list-item,
+.file-item-row:focus-visible .file-list-item {
+  background: rgba(69, 72, 78, 0.58);
+}
+
+.file-item-row.is-selected .file-list-item,
+.file-item-row.is-selected:hover .file-list-item {
+  background: linear-gradient(90deg, rgba(235, 144, 112, 0.16), rgba(127, 166, 164, 0.045));
+  box-shadow: inset 3px 0 0 var(--portal-geek-primary);
+}
+
+.file-item-meta .ant-list-item-meta-avatar {
+  height: 28px;
+}
+
+.file-type-icon {
+  filter: saturate(0.92) brightness(1.08);
+}
+
+.file-item-name {
+  font-size: 13.5px;
+  line-height: 28px;
+}
+
+.file-item-size {
+  color: var(--portal-geek-text-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.file-item-actions {
+  gap: 6px;
+}
+
+.selection-action-bar {
+  border-color: var(--portal-geek-line-strong);
+  background: rgba(47, 49, 54, 0.97);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  backdrop-filter: blur(8px);
+}
+
+.selection-count {
+  color: var(--portal-geek-text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* 模态框、上传区和关于页沿用同一套面板语言。 */
+.compact-modal .ant-modal-content {
+  border-color: var(--portal-geek-line-strong);
+  border-radius: 9px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 74px),
+    var(--portal-geek-surface-1);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
+}
+
+.compact-modal .ant-modal-title {
+  color: var(--portal-geek-text);
+  letter-spacing: 0.025em;
+}
+
+.compact-modal .ant-modal-close:hover {
+  color: var(--portal-geek-primary);
+  background: rgba(235, 144, 112, 0.1);
+}
+
+.compact-form .ant-form-item-label > label {
+  color: #d9dce1;
+}
+
+.connection-test-result {
+  border-radius: 7px;
+  background: rgba(30, 31, 34, 0.72);
+}
+
+.upload-drop-zone.ant-upload-drag {
+  border-color: var(--portal-geek-line-strong);
+  border-radius: 7px;
+  background:
+    linear-gradient(rgba(166, 173, 183, 0.022) 1px, transparent 1px),
+    #232529;
+  background-size: 100% 26px;
+}
+
+.upload-drop-zone.ant-upload-drag:hover,
+.upload-drop-zone.ant-upload-drag.is-dragging {
+  border-color: var(--portal-geek-primary);
+  background:
+    linear-gradient(rgba(235, 144, 112, 0.036) 1px, transparent 1px),
+    #302b2d;
+}
+
+.upload-drop-icon,
+.upload-drop-hint-icon {
+  color: var(--portal-geek-primary);
+}
+
+.upload-picker-list {
+  background: #202124;
+}
+
+.about-modal .ant-modal-content {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 86px),
+    var(--portal-geek-surface-1);
+}
+
+.about-logo {
+  filter: drop-shadow(0 7px 12px rgba(0, 0, 0, 0.28));
+}
+
+.about-title {
+  letter-spacing: 0.08em;
+}
+
+.about-meta {
+  border-top-color: var(--portal-geek-line-soft);
+  color: var(--portal-geek-teal);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* 终端保持 ANSI 原始颜色，仅为容器增加克制的设备边框与扫描感。 */
+.terminal-window-shell {
+  --terminal-window-gap: 8px;
+  background:
+    linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
+    var(--portal-geek-canvas);
+  background-size: 100% 30px;
+  padding: 8px 12px;
+}
+
+.terminal-window-header {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: var(--terminal-window-gap);
+  padding: 0 5px 8px;
+  border-bottom: 1px solid var(--portal-geek-line-soft);
+}
+
+.terminal-window-header::after {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 24%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--portal-geek-primary), transparent);
+  content: '';
+  pointer-events: none;
+  animation: portal-scanline 7s ease-in-out infinite;
+}
+
+.terminal-window-title {
+  display: inline-flex;
+  align-items: center;
+  color: var(--portal-geek-text);
+  letter-spacing: 0.05em;
+}
+
+.terminal-window-title::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border: 1px solid var(--portal-geek-primary);
+  content: '';
+  transform: rotate(45deg);
+  animation: portal-accent-breathe 3.2s ease-in-out infinite;
+}
+
+.terminal-window-subtitle {
+  color: var(--portal-geek-teal);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.terminal-connection-meta {
+  padding: 0 3px;
+  color: #c0c4ca;
+}
+
+.terminal-connection-meta .app-icon,
+.terminal-status .ant-spin-dot-item {
+  color: var(--portal-geek-primary);
+}
+
+.terminal-window-shell .terminal-connection-meta {
+  min-height: 20px;
+  margin-bottom: 0;
+}
+
+.terminal-window-shell .terminal-view {
+  gap: var(--terminal-window-gap);
+}
+
+.terminal-emulator {
+  border-color: var(--portal-geek-line-soft);
+  border-radius: 7px;
+  background: var(--portal-geek-canvas);
+  box-shadow: inset 0 0 0 1px rgba(127, 166, 164, 0.025);
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.terminal-window-shell .terminal-emulator:focus-within {
+  border-color: var(--portal-geek-teal);
+  box-shadow:
+    inset 0 0 0 1px rgba(127, 166, 164, 0.08),
+    0 0 0 1px rgba(127, 166, 164, 0.14);
+}
+
+.terminal-hint {
+  box-sizing: border-box;
+  min-height: 28px;
+  padding: 0 2px;
+  color: var(--portal-geek-text-muted);
+}
+
+.terminal-close-button.ant-btn {
+  min-height: 26px;
+  color: #d3d6da;
+}
+
+/* 预览区与代码阅读器也使用深色画布，避免切换内容时出现旧棕灰底。 */
+.file-preview,
+.image-preview-shell {
+  border-color: var(--portal-geek-line-soft);
+  background: var(--portal-geek-canvas);
+  color: var(--portal-geek-text);
+}
+
+.preview-loading {
+  color: var(--portal-geek-text);
+}
+
+.preview-progress-meta,
+.preview-note {
+  color: var(--portal-geek-text-muted);
+}
+
+.code-preview .token.comment,
+.code-preview .token.prolog,
+.code-preview .token.doctype,
+.code-preview .token.cdata {
+  color: #858991;
+}
+
+.code-preview .token.punctuation {
+  color: #c3c6cc;
+}
+
+.code-preview .token.property,
+.code-preview .token.tag,
+.code-preview .token.boolean,
+.code-preview .token.number,
+.code-preview .token.constant,
+.code-preview .token.symbol {
+  color: #d99a82;
+}
+
+.code-preview .token.selector,
+.code-preview .token.attr-name,
+.code-preview .token.string,
+.code-preview .token.char,
+.code-preview .token.builtin {
+  color: #9fbd92;
+}
+
+.code-preview .token.operator,
+.code-preview .token.entity,
+.code-preview .token.url,
+.code-preview .language-css .token.string,
+.code-preview .style .token.string {
+  color: #c7cbd2;
+}
+
+.code-preview .token.atrule,
+.code-preview .token.attr-value,
+.code-preview .token.keyword {
+  color: #e1a383;
+}
+
+.code-preview .token.function,
+.code-preview .token.class-name {
+  color: #a9bfd0;
+}
+
+.code-preview .token.regex,
+.code-preview .token.important,
+.code-preview .token.variable {
+  color: #de7d7a;
+}
+
+/* 浏览器与各桌面 WebView 使用一致的细滚动条，保证滚动区域明显且不抢眼。 */
+* {
+  scrollbar-color: #5b5e66 transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #5b5e66;
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: #777a82;
+  background-clip: padding-box;
+}
+
+@media (max-width: 680px) {
+  .connection-page,
+  .file-browser {
+    padding: 10px;
+  }
+
+  .connection-header {
+    margin-bottom: 10px;
+  }
+
+  .connection-header > div > .connection-header-hint,
+  .connection-endpoint {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
