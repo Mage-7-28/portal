@@ -1648,7 +1648,7 @@ html,
 }
 
 .about-modal .ant-modal-content {
-  padding: 20px 20px 16px;
+  padding: 20px 22px 16px;
 }
 
 .about-modal .ant-modal-close {
@@ -1665,22 +1665,32 @@ html,
 .about-content {
   display: flex;
   flex-direction: column;
+  gap: 16px;
+  padding: 2px 0 0;
+}
+
+.about-brand {
+  display: flex;
   align-items: center;
-  padding: 4px 10px 0;
-  text-align: center;
+  gap: 14px;
+}
+
+.about-brand-copy {
+  min-width: 0;
 }
 
 .about-logo {
   display: block;
-  width: 88px;
-  height: 88px;
+  flex: 0 0 auto;
+  width: 74px;
+  height: 74px;
   object-fit: contain;
 }
 
 .about-title {
-  margin: 10px 0 3px;
+  margin: 0 0 4px;
   color: #f0ede6;
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 600;
   line-height: 1.25;
 }
@@ -1688,23 +1698,111 @@ html,
 .about-description {
   margin: 0;
   color: #c5c0b6;
-  font-size: 13px;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.about-summary {
+  margin: 0;
+  color: #c5c0b6;
+  font-size: 12px;
   line-height: 19px;
 }
 
 .about-meta {
   display: flex;
   width: 100%;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 15px;
-  margin-top: 17px;
-  padding-top: 12px;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 0;
   border-top: 1px solid #3c3f41;
+  border-bottom: 1px solid #3c3f41;
   color: #aaa69d;
   font-size: 12px;
   line-height: 17px;
+}
+
+.about-meta-item {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.about-meta-item + .about-meta-item {
+  padding-left: 8px;
+  border-left: 1px solid #3c3f41;
+}
+
+.about-meta-item span {
+  color: #8f949d;
+  font-size: 10px;
+  line-height: 15px;
+}
+
+.about-meta-item strong {
+  overflow: hidden;
+  color: #e8e5de;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 17px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.about-repository.ant-btn {
+  display: flex;
+  width: 100%;
+  height: auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 9px;
+  padding: 9px 10px;
+  border: 1px solid #3c3f41;
+  border-radius: 6px;
+  background: #1f2022;
+  color: #e8e5de;
+  text-align: left;
+}
+
+.about-repository.ant-btn:hover,
+.about-repository.ant-btn:focus-visible {
+  border-color: rgba(235, 144, 112, 0.6);
+  background: #292426;
+  color: #f0ede6;
+}
+
+.about-repository .app-icon {
+  flex: 0 0 auto;
+  color: #eb9070;
+}
+
+.about-repository-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.about-repository-label {
+  color: #c5c0b6;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.about-repository-url {
+  overflow: hidden;
+  color: #8f949d;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  line-height: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .update-modal .ant-modal-content {

@@ -12,7 +12,7 @@ import { normalizeError, StoreKeys } from './utils/common.js'
 import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
-import { checkLatestRelease } from './utils/updateUtils.js'
+import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import TerminalWindow from './components/TerminalWindow.jsx'
@@ -44,6 +44,7 @@ function MainApp() {
   const [ aboutOpen, setAboutOpen ] = useState(false)
   const [ availableUpdate, setAvailableUpdate ] = useState(null)
   const [ checkingUpdate, setCheckingUpdate ] = useState(false)
+  const [ openingRepository, setOpeningRepository ] = useState(false)
   const exitConfirmingRef = useRef(false)
   const exitRequestedRef = useRef(false)
   const updateCheckStartedRef = useRef(false)
@@ -134,6 +135,19 @@ function MainApp() {
     }
     setAvailableUpdate(null)
   }, [])
+
+  const openProjectRepository = useCallback(async () => {
+    if (openingRepository) return
+
+    setOpeningRepository(true)
+    try {
+      await openUrl(PROJECT_REPOSITORY_URL)
+    } catch (error) {
+      void notification.error('打开开源地址失败：' + normalizeError(error))
+    } finally {
+      setOpeningRepository(false)
+    }
+  }, [openingRepository])
 
   useEffect(() => {
     let active = true
@@ -268,7 +282,7 @@ function MainApp() {
         open={aboutOpen}
         title={null}
         centered
-        width="min(360px, calc(100vw - 24px))"
+        width="min(410px, calc(100vw - 24px))"
         onCancel={() => setAboutOpen(false)}
         footer={(
           <div className="modal-actions">
@@ -279,19 +293,48 @@ function MainApp() {
             >
               检查更新
             </Button>
-            <Button type="primary" onClick={() => setAboutOpen(false)}>确定</Button>
+            <Button type="primary" onClick={() => setAboutOpen(false)}>关闭</Button>
           </div>
         )}
         destroyOnHidden
       >
         <section className="about-content" aria-label="关于 Portal">
-          <img className="about-logo" src={portalLogo} alt="Portal 标志" />
-          <h1 className="about-title">Portal</h1>
-          <p className="about-description">跨平台 SSH / SFTP 文件管理工具</p>
-          <div className="about-meta" aria-label="应用信息">
-            <span>版本 {packageInfo.version}</span>
-            <span>{packageInfo.license} License</span>
+          <div className="about-brand">
+            <img className="about-logo" src={portalLogo} alt="Portal 标志" />
+            <div className="about-brand-copy">
+              <h1 className="about-title">Portal</h1>
+              <p className="about-description">SSH / SFTP 文件管理工具</p>
+            </div>
           </div>
+          <p className="about-summary">
+            面向 macOS 的桌面应用，支持连接远程服务器、管理文件和使用 SSH 终端。
+          </p>
+          <div className="about-meta" aria-label="应用信息">
+            <div className="about-meta-item">
+              <span>版本</span>
+              <strong>{packageInfo.version}</strong>
+            </div>
+            <div className="about-meta-item">
+              <span>许可证</span>
+              <strong>{packageInfo.license}</strong>
+            </div>
+            <div className="about-meta-item">
+              <span>主要发布平台</span>
+              <strong>macOS</strong>
+            </div>
+          </div>
+          <Button
+            type="text"
+            className="about-repository"
+            loading={openingRepository}
+            icon={<AppIcon name="externalLink" size="16" />}
+            onClick={() => void openProjectRepository()}
+          >
+            <span className="about-repository-copy">
+              <span className="about-repository-label">开源地址</span>
+              <span className="about-repository-url">gitee.com/Mage-7-28/portal</span>
+            </span>
+          </Button>
         </section>
       </Modal>
       <Toaster />

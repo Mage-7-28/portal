@@ -1,7 +1,9 @@
 const UPDATE_API_URL = 'https://gitee.com/api/v5/repos/Mage-7-28/portal/releases/latest'
 
+export const PROJECT_REPOSITORY_URL = 'https://gitee.com/Mage-7-28/portal'
+
 // Gitee 当前 API 未稳定提供可直接打开的 Release 详情地址，使用固定的发行版列表页。
-export const UPDATE_RELEASES_URL = 'https://gitee.com/Mage-7-28/portal/releases'
+export const UPDATE_RELEASES_URL = `${ PROJECT_REPOSITORY_URL }/releases`
 
 const VERSION_PATTERN = /^(?:v)?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/i
 const REQUEST_TIMEOUT_MS = 8_000

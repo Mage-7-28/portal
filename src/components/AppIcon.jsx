@@ -186,6 +186,13 @@ const ICON_PATHS = {
       <path d="M19 4v4h-4" />
     </>
   ),
+  externalLink: (
+    <>
+      <path d="M14 5h5v5" />
+      <path d="m13 11 6-6" />
+      <path d="M19 13v5a1.5 1.5 0 0 1-1.5 1.5h-12A1.5 1.5 0 0 1 4 18V6.5A1.5 1.5 0 0 1 5.5 5H10" />
+    </>
+  ),
   disconnect: (
     <>
       <path d="M9 3v4M15 3v4M7 7h10v2a5 5 0 0 1-10 0zM12 14v7" />

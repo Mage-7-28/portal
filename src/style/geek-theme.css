@@ -611,8 +611,25 @@ body {
 
 .about-meta {
   border-top-color: var(--portal-geek-line-soft);
+  border-bottom-color: var(--portal-geek-line-soft);
   color: var(--portal-geek-teal);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.about-meta-item + .about-meta-item {
+  border-left-color: var(--portal-geek-line-soft);
+}
+
+.about-repository.ant-btn {
+  border-color: var(--portal-geek-line-strong);
+  background: rgba(31, 32, 34, 0.82);
+}
+
+.about-repository.ant-btn:hover,
+.about-repository.ant-btn:focus-visible {
+  border-color: var(--portal-geek-primary);
+  background: rgba(66, 47, 46, 0.72);
+  color: var(--portal-geek-text);
 }
 
 /* 终端保持 ANSI 原始颜色，仅为容器增加克制的设备边框与扫描感。 */
