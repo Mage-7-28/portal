@@ -5,15 +5,19 @@ import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
+import { openUrl } from '@tauri-apps/plugin-opener'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { Toaster } from 'react-hot-toast'
 import { normalizeError, StoreKeys } from './utils/common.js'
 import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
+import { checkLatestRelease } from './utils/updateUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import TerminalWindow from './components/TerminalWindow.jsx'
+import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
+import AppIcon from './components/AppIcon'
 import { closeTerminalWindows } from './utils/terminalWindow.js'
 import portalLogo from '../src-tauri/icons/128x128.png'
 import packageInfo from '../package.json'
@@ -38,8 +42,11 @@ function MainApp() {
   const downloadPath = typeof storedDownloadPath === 'string' ? storedDownloadPath : ''
   const downloadPathHint = downloadPath || '尚未设置（首次下载时选择）'
   const [ aboutOpen, setAboutOpen ] = useState(false)
+  const [ availableUpdate, setAvailableUpdate ] = useState(null)
+  const [ checkingUpdate, setCheckingUpdate ] = useState(false)
   const exitConfirmingRef = useRef(false)
   const exitRequestedRef = useRef(false)
+  const updateCheckStartedRef = useRef(false)
 
   const requestApplicationExit = useCallback(async () => {
     if (exitConfirmingRef.current || exitRequestedRef.current) return
@@ -63,6 +70,69 @@ function MainApp() {
     } finally {
       exitConfirmingRef.current = false
     }
+  }, [])
+
+  const checkApplicationUpdate = useCallback(async ({ manual = false } = {}) => {
+    setCheckingUpdate(true)
+    try {
+      const update = await checkLatestRelease(packageInfo.version)
+      if (!update) {
+        if (manual) void notification.info('当前已是最新版本')
+        return false
+      }
+
+      const skippedVersion = await store.get(StoreKeys.UPDATE_SKIPPED_VERSION)
+      if (!manual && skippedVersion === update.latestVersion) return false
+
+      setAvailableUpdate({
+        ...update,
+        // 启动时允许用户跳过当前版本；手动检查始终不显示跳过选项。
+        canSkipVersion: !manual
+      })
+      return true
+    } catch (error) {
+      // 启动检查失败不应打断用户进入应用；手动检查则提供可见反馈。
+      console.warn('检查应用更新失败:', error)
+      if (manual) void notification.error('检查更新失败：' + normalizeError(error))
+      return false
+    } finally {
+      setCheckingUpdate(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (updateCheckStartedRef.current) return undefined
+    updateCheckStartedRef.current = true
+    void checkApplicationUpdate()
+  }, [checkApplicationUpdate])
+
+  const dismissAvailableUpdate = useCallback(async ({ skipVersion, version }) => {
+    if (skipVersion) {
+      try {
+        await store.set(StoreKeys.UPDATE_SKIPPED_VERSION, version)
+      } catch (error) {
+        console.warn('保存跳过的更新版本失败:', error)
+      }
+    }
+    setAvailableUpdate(null)
+  }, [])
+
+  const openReleasePage = useCallback(async ({ skipVersion, version, releaseUrl }) => {
+    try {
+      await openUrl(releaseUrl)
+    } catch (error) {
+      void notification.error('打开更新页面失败：' + normalizeError(error))
+      return
+    }
+
+    if (skipVersion) {
+      try {
+        await store.set(StoreKeys.UPDATE_SKIPPED_VERSION, version)
+      } catch (error) {
+        console.warn('保存跳过的更新版本失败:', error)
+      }
+    }
+    setAvailableUpdate(null)
   }, [])
 
   useEffect(() => {
@@ -107,6 +177,7 @@ function MainApp() {
     let disposed = false
     let unlistenCloseRequested
     let unlistenMenuExit
+    let unlistenMenuUpdate
     let unlistenMenuAbout
 
     const registerApplicationEvents = async () => {
@@ -130,6 +201,15 @@ function MainApp() {
         }
         unlistenMenuExit = exitListener
 
+        const updateListener = await listen('menu-update', () => {
+          void checkApplicationUpdate({ manual: true })
+        })
+        if (disposed) {
+          updateListener()
+          return
+        }
+        unlistenMenuUpdate = updateListener
+
         const aboutListener = await listen('menu-about', () => {
           setAboutOpen(true)
         })
@@ -148,9 +228,10 @@ function MainApp() {
       disposed = true
       unlistenCloseRequested?.()
       unlistenMenuExit?.()
+      unlistenMenuUpdate?.()
       unlistenMenuAbout?.()
     }
-  }, [requestApplicationExit])
+  }, [ checkApplicationUpdate, requestApplicationExit ])
 
   return (
     <ConfigProvider theme={ AntdThemeConfig } locale={ zhCN } componentSize="small">
@@ -175,6 +256,13 @@ function MainApp() {
           </div>
         </div>
       </div>
+      <UpdateAvailableModal
+        open={Boolean(availableUpdate)}
+        update={availableUpdate}
+        canSkipVersion={availableUpdate?.canSkipVersion}
+        onCancel={dismissAvailableUpdate}
+        onDownload={openReleasePage}
+      />
       <Modal
         rootClassName="compact-modal about-modal"
         open={aboutOpen}
@@ -182,7 +270,18 @@ function MainApp() {
         centered
         width="min(360px, calc(100vw - 24px))"
         onCancel={() => setAboutOpen(false)}
-        footer={<Button type="primary" onClick={() => setAboutOpen(false)}>确定</Button>}
+        footer={(
+          <div className="modal-actions">
+            <Button
+              icon={<AppIcon name="reload" />}
+              loading={checkingUpdate}
+              onClick={() => void checkApplicationUpdate({ manual: true })}
+            >
+              检查更新
+            </Button>
+            <Button type="primary" onClick={() => setAboutOpen(false)}>确定</Button>
+          </div>
+        )}
         destroyOnHidden
       >
         <section className="about-content" aria-label="关于 Portal">

@@ -1707,6 +1707,100 @@ html,
   line-height: 17px;
 }
 
+.update-modal .ant-modal-content {
+  padding: 18px 20px 16px;
+}
+
+.update-modal .ant-modal-footer {
+  margin-top: 15px;
+  padding-top: 12px;
+  border-top: 1px solid #3c3f41;
+}
+
+.update-available-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 2px 2px 0;
+}
+
+.update-available-heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.update-available-icon {
+  flex: 0 0 auto;
+  color: #eb9070;
+}
+
+.update-available-title {
+  margin: 0;
+  color: #f0ede6;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 24px;
+}
+
+.update-available-summary {
+  margin: 2px 0 0;
+  color: #aaa69d;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.update-available-versions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
+}
+
+.update-available-version {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid #3c3f41;
+  border-radius: 6px;
+  background: #1f2022;
+}
+
+.update-available-version-new {
+  border-color: rgba(235, 144, 112, 0.52);
+}
+
+.update-available-version-label {
+  color: #aaa69d;
+  font-size: 11px;
+  line-height: 16px;
+}
+
+.update-available-version strong {
+  overflow: hidden;
+  color: #e8e5de;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.update-available-note {
+  margin: 0;
+  color: #c5c0b6;
+  font-size: 12px;
+  line-height: 19px;
+}
+
+.update-available-content .ant-checkbox-wrapper {
+  align-self: flex-start;
+  color: #c5c0b6;
+  font-size: 12px;
+}
+
 .compact-form .ant-form-item {
   margin-bottom: 11px;
 }

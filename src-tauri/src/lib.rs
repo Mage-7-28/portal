@@ -199,6 +199,7 @@ pub fn run() {
                 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 
                 // 创建菜单项
+                let update_item = MenuItem::with_id(app, "update", "更新", true, None::<&str>)?;
                 let about_item = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
                 let separator = PredefinedMenuItem::separator(app)?;
                 let quit_shortcut = if cfg!(target_os = "macos") {
@@ -212,6 +213,7 @@ pub fn run() {
 
                 // 创建子菜单
                 let file_submenu = Submenu::new(app, "文件", true)?;
+                file_submenu.append(&update_item)?;
                 file_submenu.append(&about_item)?;
                 file_submenu.append(&separator)?;
                 file_submenu.append(&quit_item)?;
@@ -239,6 +241,9 @@ pub fn run() {
 
                 // 绑定菜单事件
                 app.on_menu_event(|app, event| match event.id().as_ref() {
+                    "update" => {
+                        let _ = app.emit("menu-update", ());
+                    }
                     "about" => {
                         let _ = app.emit("menu-about", ());
                     }
