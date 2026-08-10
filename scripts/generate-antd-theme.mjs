@@ -1,3 +1,7 @@
+/**
+ * 在生产构建前静态提取 Ant Design 组件样式，减少 Tauri CSP 对运行时注入
+ * style 标签的影响。输出文件由构建流程覆盖，不应手动编辑。
+ */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 

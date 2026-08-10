@@ -1,3 +1,7 @@
+/**
+ * 本地图标组件。
+ * 图标路径与尺寸由本模块统一管理，业务组件只传递语义化 name。
+ */
 import React from 'react'
 
 // 本地图标路径集中维护，保证桌面端离线可用，也避免业务组件直接依赖外部图标资源。
@@ -9,6 +13,10 @@ const FILE_FRAME = (
   </>
 )
 
+/**
+ * 图标名称到 SVG 子路径的映射。
+ * 未知名称统一回退到普通文件图标。
+ */
 const ICON_PATHS = {
   plus: (
     <>
@@ -260,6 +268,17 @@ const ICON_PATHS = {
   )
 }
 
+/**
+ * 渲染一个离线可用的语义化 SVG 图标。
+ *
+ * @param {Object} props - 图标属性。
+ * @param {string} props.name - 图标名称；未知名称回退到普通文件图标。
+ * @param {string} [props.className=''] - 追加到 SVG 根节点的 CSS 类名。
+ * @param {string|number} [props.size='1em'] - SVG 的宽高值。
+ * @param {string} [props.title] - 无障碍标题；为空时图标标记为装饰性内容。
+ * @param {Object} [props.props] - 传给 SVG 根节点的其他属性。
+ * @returns {JSX.Element} SVG 图标元素。
+ */
 const AppIcon = ({ name, className = '', size = '1em', title, ...props }) => {
   const content = ICON_PATHS[name] || ICON_PATHS.file
   const labelled = Boolean(title)

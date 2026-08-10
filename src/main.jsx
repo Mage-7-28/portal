@@ -1,3 +1,7 @@
+/**
+ * 前端启动入口。
+ * 先初始化持久化设置和通知能力，再挂载 React，避免首屏读取状态时出现闪烁。
+ */
 import React from 'react'
 import ReactDOM from 'react-dom/client'
 import { flushSync } from 'react-dom'
@@ -16,11 +20,17 @@ import { GlobalFontFamily } from './utils/common.js'
 import { initStore } from './utils/storeUtils.js'
 import { initNotification } from './utils/notificationUtils.js'
 
-// 设置CSS变量
+// 在 React 挂载前设置全局字体令牌，确保首屏 loading 和正式页面使用同一字体链。
 document.documentElement.style.setProperty('--global-font-family', GlobalFontFamily)
 
+// loading 层的离场时长必须与 index.html 中的 CSS transition 保持一致。
 const LOADING_EXIT_DURATION_MS = 180
 
+/**
+ * 在首帧完成后淡出静态 loading 层，避免初始化较慢时出现长时间白屏。
+ *
+ * @returns {void}
+ */
 const revealApplication = () => {
   const loadingElement = document.getElementById('loading')
   const rootElement = document.getElementById('root')
@@ -33,7 +43,7 @@ const revealApplication = () => {
   window.setTimeout(() => loadingElement.remove(), LOADING_EXIT_DURATION_MS)
 }
 
-// 初始化 store 和通知
+// 并行初始化本地 Store 与通知能力；两者都完成或失败后再挂载主应用。
 Promise.all([
   initStore(),
   initNotification()

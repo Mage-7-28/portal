@@ -1,3 +1,8 @@
+/**
+ * Ant Design 主题配置。
+ *
+ * 开发运行时和构建脚本都从这里读取令牌，确保动态组件样式与静态提取结果一致。
+ */
 import { theme } from 'antd'
 import { GlobalFontFamily, THEME_BG_INPUT, THEME_BG_PRIMARY, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR_FALLBACK, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/constants.js'
 

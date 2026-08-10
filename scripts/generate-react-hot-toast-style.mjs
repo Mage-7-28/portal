@@ -1,3 +1,6 @@
+/**
+ * 预渲染 react-hot-toast 的常见状态并提取静态 CSS，供生产环境直接加载。
+ */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import React from 'react'
@@ -9,6 +12,15 @@ const outputPath = path.resolve('src/style/react-hot-toast.css')
 const toastTypes = [ 'blank', 'success', 'error', 'loading' ]
 const positions = [ 'top-center', 'bottom-center' ]
 
+/**
+ * 构造一个仅用于样式提取的 Toast 状态快照。
+ *
+ * @param {string} type - react-hot-toast 的 Toast 类型。
+ * @param {boolean} visible - 是否模拟当前可见状态。
+ * @param {string} position - Toast 在视口中的显示位置。
+ * @param {unknown} icon - 用于静态渲染的图标值。
+ * @returns {Object} 可传给 ToastBar 的静态 Toast 数据。
+ */
 const createToast = (type, visible, position, icon) => ({
   id: 'static-style-' + type + '-' + visible + '-' + position,
   type,

@@ -1,7 +1,13 @@
+/**
+ * 前端共享常量、状态枚举和跨边界错误转换。
+ * 这里的值同时服务 React UI、Tauri IPC 和本地持久化，不应在组件中重复定义。
+ */
 import PubSub from 'pubsub-js'
 
+// 跨平台字体回退链，优先使用应用字体，缺失时回退到 macOS、Windows、Linux 常见字体。
 export const GlobalFontFamily = '"Lora Variable", "Lora", "Source Serif Pro", "Source Serif 4", "Noto Serif SC", "Noto Serif TC", "Noto Serif JP", "Noto Serif KR", "Source Han Serif SC", "Source Han Serif TC", "Source Han Serif", "Songti SC", "STSong", "STSongti-SC-Regular", "PingFang SC", "SimSun", "NSimSun", "宋体", "FangSong", "仿宋", "KaiTi", "楷体", Georgia, "Times New Roman", Cambria, "Liberation Serif", ui-serif, serif'
 
+// Tauri Store 使用的稳定键名；新增键必须同步考虑版本迁移和默认值。
 export const StoreKeys = {
   DOWNLOAD_PATH: 'download_path',
   SSH_CONNECTIONS: 'ssh_connections',
@@ -10,15 +16,25 @@ export const StoreKeys = {
   SHOW_HIDDEN_FILES: 'show_hidden_files'
 }
 
+// Store 数据结构版本，用于后续迁移持久化配置。
 export const StoreVersion = 2
 
+// PubSub 传输状态总线的主题和发送入口。
 export const PubSubBusinessKeyEnum = {
   MASK: 'mask',
   SEND_MASK: (data) => PubSub.publish('mask', data)
 }
 
+// 以 1024 为进位的文件大小单位，前端显示和目录统计共用。
 export const FileSizeUnits = [ 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB' ]
 
+/**
+ * 将字节数格式化为适合列表展示的二进制单位。
+ *
+ * @param {number} bytes - 要格式化的字节数。
+ * @param {number} [decimals=2] - 小数位数；负数会按 0 处理。
+ * @returns {string} 带单位的用户可读大小，例如 `1.5 MB`。
+ */
 export const formatFileSize = (bytes, decimals = 2) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B'
 
@@ -27,6 +43,7 @@ export const formatFileSize = (bytes, decimals = 2) => {
   return `${ parseFloat(value.toFixed(Math.max(0, decimals))) } ${ FileSizeUnits[unitIndex] }`
 }
 
+// 前端连接生命周期状态，名称需与连接管理器和 UI loading 分支保持一致。
 export const SftpConnectionStatus = {
   DISCONNECTED: 'disconnected',
   CONNECTING: 'connecting',
@@ -35,6 +52,7 @@ export const SftpConnectionStatus = {
   ERROR: 'error'
 }
 
+// 文件传输任务状态枚举，供兼容调用方和进度层统一判断。
 export const TransferStatus = {
   QUEUED: 'queued',
   RUNNING: 'running',
@@ -43,6 +61,7 @@ export const TransferStatus = {
   CANCELLED: 'cancelled'
 }
 
+// SSH 连接、传输缓冲、进度节流和并发传输的跨模块保护参数。
 export const CONNECTION_TIMEOUT_MS = 30_000
 export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
@@ -64,16 +83,24 @@ export const THEME_SUCCESS = '#8fb996'
 export const THEME_WARNING = '#d0a965'
 export const THEME_DANGER = '#d86f6f'
 
+// 兼容旧进度组件的渐变配置，实际状态栏使用同一强调色的纯色轨道。
 export const PROGRESS_GRADIENT = {
   '0%': THEME_PRIMARY_COLOR,
   '100%': '#f0aa90'
 }
 
+// 主窗口初始/最小尺寸；平台原生标题栏和内容布局都会以此为下限。
 export const WINDOW_DEFAULT_WIDTH = 920
 export const WINDOW_DEFAULT_HEIGHT = 620
 export const WINDOW_MIN_WIDTH = 920
 export const WINDOW_MIN_HEIGHT = 620
 
+/**
+ * 将字符串、Tauri 错误对象和普通 Error 统一转换为可展示文本。
+ *
+ * @param {unknown} error - 原始异常、IPC 错误负载或任意值。
+ * @returns {string} 可直接显示给用户的错误文本；无法识别时返回“未知错误”。
+ */
 export const normalizeError = (error) => {
   if (!error) return '未知错误'
 
@@ -100,6 +127,12 @@ export const normalizeError = (error) => {
   return '未知错误'
 }
 
+/**
+ * 从 Tauri 序列化错误或普通错误对象中提取错误码。
+ *
+ * @param {unknown} error - 原始异常或 IPC 错误负载。
+ * @returns {string} 错误码；不存在或无法解析时返回空字符串。
+ */
 const getErrorCode = (error) => {
   if (!error) return ''
   if (typeof error === 'string') {
@@ -112,6 +145,12 @@ const getErrorCode = (error) => {
   return typeof error.code === 'string' ? error.code : ''
 }
 
+/**
+ * 判断错误是否属于用户名、密码或认证权限问题。
+ *
+ * @param {unknown} error - 待分类的原始异常或 IPC 错误负载。
+ * @returns {boolean} 错误表明认证凭据无效时返回 true。
+ */
 export const isCredentialError = (error) => {
   const message = normalizeError(error)
   const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()
@@ -124,7 +163,12 @@ export const isCredentialError = (error) => {
     || normalized.includes('permission denied')
 }
 
-// 将底层 SSH 错误转换成用户可以直接处理的提示，避免把 libssh2 的内部信息暴露给用户。
+/**
+ * 将底层 SSH 错误转换成用户可以直接处理的提示。
+ *
+ * @param {unknown} error - 原始 SSH、Tauri IPC 或网络错误。
+ * @returns {string} 不暴露 libssh2 实现细节的用户可读连接错误。
+ */
 export const getReadableConnectionError = (error) => {
   const message = normalizeError(error)
   const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()

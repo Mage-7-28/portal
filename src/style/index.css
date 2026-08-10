@@ -1,3 +1,4 @@
+/* 应用最外层与圆角窗口内容区；保留固定视口高度，避免主 WebView 出现整页滚动。 */
 .app-shell {
   display: flex;
   flex-direction: column;
@@ -7,6 +8,7 @@
   box-sizing: border-box;
 }
 
+/* 主框架负责边框、圆角和上下布局；具体页面内容由子组件填充。 */
 .app-frame {
   display: flex;
   flex: 1;
@@ -26,6 +28,7 @@
   overflow: hidden;
 }
 
+/* 底部下载地址与传输状态栏；宽度不足时由后面的断点逐级隐藏次要文本。 */
 .download-status {
   display: flex;
   align-items: center;
@@ -83,6 +86,7 @@
   margin-left: 10px;
 }
 
+/* 轻量传输状态以内联方式展示，适用于下载、上传、删除和重命名操作。 */
 .transfer-inline-status {
   display: flex;
   flex: 1 1 auto;
@@ -222,6 +226,7 @@
   font-size: 12px;
 }
 
+/* 中等宽度：压缩文件名并隐藏队列描述，保留操作、进度和取消入口。 */
 @media (max-width: 1040px) {
   .download-status-transfer:not(:empty) {
     flex-basis: 58%;
@@ -245,6 +250,7 @@
   }
 }
 
+/* 平板宽度：移除路径和项目序号，让进度条保持稳定的最小尺寸。 */
 @media (max-width: 760px) {
   .download-status {
     padding-inline: 6px;
@@ -285,6 +291,7 @@
   }
 }
 
+/* 窄屏：缩短下载地址与文件名，避免状态栏挤压操作按钮。 */
 @media (max-width: 520px) {
   .download-status-label {
     max-width: 42px;
@@ -307,6 +314,7 @@
   }
 }
 
+/* 极窄屏：隐藏地址和文件名，仅保留操作类型、进度和取消按钮。 */
 @media (max-width: 420px) {
   .download-status-location {
     display: none;
@@ -328,6 +336,7 @@
   }
 }
 
+/* 通用文本辅助类：让最后一行也参与两端对齐，适合窄列说明文字。 */
 .content-text-align-justify {
   display: inline-block;
   width: 100%;
@@ -343,6 +352,7 @@
   height: 100%;
 }
 
+/* 全局基础文字和画布；主题文件会在此基础上覆盖视觉令牌。 */
 body {
   padding: 0;
   margin: 0;
@@ -363,6 +373,7 @@ html,
   overflow: hidden;
 }
 
+/* 文件预览容器：限制高度并允许长文本、长路径在容器内滚动换行。 */
 .file-preview {
   margin: 0;
   max-height: min(65vh, 640px);
@@ -377,6 +388,7 @@ html,
   font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
+/* 大文件预览阶段的稳定占位，避免读取和格式化期间弹窗高度跳动。 */
 .preview-loading {
   display: flex;
   min-height: 170px;
@@ -428,6 +440,7 @@ html,
   line-height: 17px;
 }
 
+/* 图片预览使用独立滚动壳，原图按可用空间等比缩放而不裁切。 */
 .image-preview-shell {
   display: flex;
   min-height: 180px;
@@ -448,6 +461,7 @@ html,
   object-fit: contain;
 }
 
+/* 代码预览采用 Prism token 颜色，保留等宽布局和水平滚动。 */
 .code-preview {
   max-height: min(65vh, 640px);
   overflow: auto;
@@ -509,6 +523,7 @@ html,
   color: #d07878;
 }
 
+/* Ant Design 控件基础覆盖：统一图标与文字对齐，减少组件默认阴影。 */
 .ant-btn {
   display: inline-flex;
   align-items: center;
@@ -534,6 +549,7 @@ html,
   line-height: 1.2;
 }
 
+/* 主按钮、危险按钮和焦点环使用 Portal 强调色，保持键盘可访问性。 */
 .ant-btn-primary:not(:disabled) {
   border-color: #f0aa90 !important;
   border-color: lab(73.5% 30 30) !important;
@@ -599,6 +615,7 @@ html,
   align-items: center;
 }
 
+/* 列表操作区的纯图标按钮使用固定尺寸，避免 loading 或图标替换造成位移。 */
 .compact-icon-button.ant-btn {
   width: 28px;
   min-width: 28px;
@@ -606,6 +623,7 @@ html,
   padding: 0;
 }
 
+/* 连接配置页：标题固定在顶部，列表区域独立滚动。 */
 .connection-page {
   display: flex;
   flex-direction: column;
@@ -672,6 +690,7 @@ html,
   gap: 7px;
 }
 
+/* 单条连接配置采用紧凑卡片式行布局；hover、连接中和 focus 状态分别反馈。 */
 .connection-row.ant-list-item {
   cursor: pointer;
   min-height: 54px;
@@ -797,6 +816,7 @@ html,
   font-size: 26px;
 }
 
+/* 连接期间覆盖列表但不销毁内容，让用户看到当前配置仍保持可识别。 */
 .connection-loading {
   position: absolute;
   inset: 0;
@@ -812,6 +832,7 @@ html,
   font-size: 12.5px;
 }
 
+/* 已连接文件浏览器的主布局；工具栏固定，远程列表占据剩余高度。 */
 .file-browser {
   display: flex;
   position: relative;
@@ -827,6 +848,7 @@ html,
   background: #1f1f1f;
 }
 
+/* 路径工具栏由返回、路径输入和刷新组成，所有子项允许在窄屏收缩。 */
 .path-toolbar {
   display: flex;
   flex: 0 0 auto;
@@ -902,6 +924,7 @@ html,
   color: #e8e5de;
 }
 
+/* 当前连接摘要和远程操作按钮保持同一行，操作区不参与摘要文本收缩。 */
 .connection-toolbar {
   display: flex;
   flex: 0 0 auto;
@@ -972,6 +995,7 @@ html,
   font-size: 12.5px;
 }
 
+/* 远程文件列表滚动壳；原生拖放进入时用边框和内阴影提示有效投放区。 */
 .file-list-shell {
   flex: 1;
   min-height: 0;
@@ -1002,6 +1026,7 @@ html,
   font-size: 12.5px;
 }
 
+/* 文件行同时承担鼠标、键盘和多选交互，焦点样式不能依赖浏览器默认 outline。 */
 .file-item-row {
   cursor: pointer;
   outline: none;
@@ -1033,6 +1058,7 @@ html,
   color: #f0ede6;
 }
 
+/* 批量操作浮动条脱离列表流，固定在列表底部并避免遮挡主要工具栏。 */
 .selection-action-bar {
   position: absolute;
   bottom: 14px;
@@ -1100,6 +1126,7 @@ html,
   line-height: 1;
 }
 
+/* 文件类型图标和目录大小列使用固定/可收缩尺寸，避免长名称挤出操作区。 */
 .file-type-icon {
   display: block;
   flex: 0 0 23px;
@@ -1273,6 +1300,7 @@ html,
   white-space: nowrap;
 }
 
+/* 通用紧凑弹窗和上传选择器：控制内边距、列表高度及拖放反馈。 */
 .compact-modal .ant-modal-content {
   padding: 16px 18px;
   border: 1px solid #3c3f41;
@@ -1290,6 +1318,7 @@ html,
   line-height: 24px;
 }
 
+/* 上传入口同时支持原生选择器和 Tauri 拖放；队列区域独立滚动。 */
 .upload-picker-actions {
   display: flex;
   margin-bottom: 10px;
@@ -1509,6 +1538,7 @@ html,
   background-color: #c08a66;
 }
 
+/* xterm 容器必须有稳定的最小高度；ResizeObserver 会据此计算 PTY 行列数。 */
 .terminal-emulator {
   height: clamp(300px, calc(100dvh - 154px), 660px);
   min-height: 300px;
@@ -1664,6 +1694,7 @@ html,
   }
 }
 
+/* 关于与更新弹窗采用独立的内容层级，避免通用弹窗标题占用过多空间。 */
 .about-modal .ant-modal-content {
   padding: 20px 22px 16px;
 }
@@ -1679,6 +1710,7 @@ html,
   text-align: center;
 }
 
+/* 关于页内容按品牌、元信息和仓库入口分组，在小窗口中自然换行。 */
 .about-content {
   display: flex;
   flex-direction: column;
@@ -1822,6 +1854,7 @@ html,
   white-space: nowrap;
 }
 
+/* 更新提示突出新旧版本对比，同时保留手动前往发布页的明确操作。 */
 .update-modal .ant-modal-content {
   padding: 18px 20px 16px;
 }
@@ -1916,6 +1949,7 @@ html,
   font-size: 12px;
 }
 
+/* 紧凑表单统一标签、错误提示和双列布局；移动端断点会恢复单列。 */
 .compact-form .ant-form-item {
   margin-bottom: 11px;
 }
@@ -2024,6 +2058,7 @@ html,
   border-radius: 6px;
 }
 
+/* 旧版全屏操作遮罩保留为兼容样式，实际传输优先使用底部内联状态栏。 */
 .mask {
   position: fixed;
   top: 0;
@@ -2034,7 +2069,7 @@ html,
   z-index: 9999; /* 设置一个较高的层级，确保遮罩在最上层 */
 }
 
-/* 隐藏滚动条但仍保持滚动功能 */
+/* 隐藏滚动条但仍保持滚动功能；用于预览等需要保留滚动手势的区域。 */
 .hide-scrollbar {
   /*overflow-y: scroll; !* 启用垂直滚动 *!*/
   overflow: auto;
@@ -2046,7 +2081,7 @@ html,
   display: none; /* Chrome、Safari、Opera */
 }
 
-/* 整个滚动条 */
+/* WebKit 滚动条的统一尺寸，Firefox 由 scrollbar-width 规则控制。 */
 *::-webkit-scrollbar {
   width: 4px;
   height: 4px;
@@ -2065,7 +2100,7 @@ html,
   background-color: #979797;
 }
 
-/* 自定义Switch样式 */
+/* Ant Design Switch 和分页控件的尺寸覆盖，保持紧凑工具栏密度。 */
 .ant-switch {
   height: 27px; /* 设置高度 */
 }

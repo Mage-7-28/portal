@@ -1,3 +1,7 @@
+/**
+ * 文件传输与批量操作状态栏。
+ * upload、download、目录传输和删除操作共用同一进度事件与取消回调。
+ */
 import React, { useState, useEffect, useRef } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
 import AppIcon from './AppIcon'
@@ -6,11 +10,20 @@ import { PubSubBusinessKeyEnum, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PR
 
 const { Text } = Typography
 
+/**
+ * 订阅 PubSub 进度事件，并根据操作类型渲染状态栏或全屏传输面板。
+ *
+ * @returns {JSX.Element|null} 当前传输/批量操作的状态 UI；没有活动操作时返回 null。
+ */
 const ProgressMask = () => {
+  // 当前共享操作载荷；null 表示底部状态栏没有活动任务。
   const [ maskData, setMaskData ] = useState(null)
+  // 取消按钮的异步 loading，防止重复发送取消请求。
   const [ cancelling, setCancelling ] = useState(false)
+  // 已明确关闭的 maskId 集合，用于过滤迟到的进度事件。
   const dismissedMaskIds = useRef(new Set())
 
+  // 订阅 PubSub 进度总线，并在卸载时撤销唯一订阅令牌。
   useEffect(() => {
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
       if (data?.dismissMaskId) {
@@ -63,6 +76,11 @@ const ProgressMask = () => {
     'rename'
   ].includes(operation)
 
+  /**
+   * 取消当前上传、下载或远程删除操作，并关闭其进度状态。
+   *
+   * @returns {Promise<void>} 取消请求及状态清理完成后的 Promise。
+   */
   const handleCancel = async () => {
     if (!onCancel || cancelling) return
     setCancelling(true)

@@ -1,10 +1,28 @@
+/**
+ * 输入已保存连接的会话密码。
+ * 密码只通过内存回调传回连接流程，不写入持久化配置。
+ */
 import React, { useEffect } from 'react'
 import { Alert, Button, Form, Input, Modal } from 'antd'
 import AppIcon from './AppIcon'
 
+/**
+ * 输入已保存连接的会话密码。
+ *
+ * @param {Object} props - 密码弹窗属性。
+ * @param {boolean} props.visible - 是否显示弹窗。
+ * @param {Object|null} props.connection - 当前待连接的配置。
+ * @param {() => void} props.onCancel - 取消输入并关闭弹窗的回调。
+ * @param {(values: {password: string}) => void} props.onSubmit - 表单提交回调。
+ * @param {boolean} props.loading - 是否正在建立连接。
+ * @param {string} [props.errorMessage] - 需要展示的认证错误信息。
+ * @returns {JSX.Element} 密码输入弹窗。
+ */
 const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading, errorMessage }) => {
+  // 表单实例用于提交密码并在弹窗关闭时清除上次输入，避免残留敏感信息。
   const [form] = Form.useForm()
 
+  // 每次关闭弹窗都重置密码字段；密码不会写入持久化 Store。
   useEffect(() => {
     if (!visible) form.resetFields()
   }, [ form, visible ])

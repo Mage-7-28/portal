@@ -1,3 +1,9 @@
+//! Portal 的 SSH/SFTP 后端实现。
+//!
+//! 本模块负责维护连接和主机指纹，提供远程目录/文件操作、递归目录大小统计、
+//! 文件传输以及交互式 PTY 终端。耗时的扫描和传输会放到独立线程或 Tauri
+//! blocking runtime 中执行，并通过事件把进度和状态返回给前端。
+
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::{self, File};
 use std::io::{BufReader, BufWriter, Read, Write};
@@ -14,6 +20,7 @@ use ssh2::{Channel, ErrorCode, ExtendedData, HashType, RenameFlags, Session, Sft
 use tauri::{AppHandle, Emitter, State};
 use thiserror::Error;
 
+// SSH 建连默认超时、文件传输缓冲、保活间隔和并发传输上限。
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const TRANSFER_BUFFER_SIZE: usize = 64 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u32 = 30;
@@ -24,6 +31,7 @@ const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
 const DIRECTORY_SIZE_WORKER_BATCH_SIZE: usize = 8;
 // GNU/Linux 的远端 `du` 只返回一行汇总结果；限制输出大小，避免异常远端命令占满内存。
 const MAX_DIRECTORY_SIZE_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
+// 目录命令轮询、预览大小和终端输入/控制/尺寸的安全边界。
 const DIRECTORY_SIZE_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
@@ -48,47 +56,68 @@ const LIBSSH2_FX_CONNECTION_LOST: i32 = 7;
 const LIBSSH2_FX_FAILURE: i32 = 4;
 const LIBSSH2_FX_OP_UNSUPPORTED: i32 = 8;
 
+/// 可序列化的 SSH/SFTP 领域错误，作为 Tauri IPC 的统一错误协议返回前端。
 #[derive(Error, Debug, Serialize)]
 #[serde(tag = "code", content = "message")]
 pub enum SshError {
+    /// 请求的连接不存在，或尚未建立可用会话。
     #[error("连接不存在或未连接")]
     ConnectionNotFound,
+    /// TCP 连接或会话创建失败。
     #[error("无法连接到服务器: {0}")]
     ConnectionFailed(String),
+    /// SSH 协议握手或主机密钥读取失败。
     #[error("SSH 握手失败: {0}")]
     HandshakeFailed(String),
+    /// 账户密码认证失败。
     #[error("认证失败: {0}")]
     AuthFailed(String),
+    /// 调用方请求了当前版本未实现的认证方式。
     #[error("认证方式不支持: {0}")]
     UnsupportedAuth(String),
+    /// SSH 库未给出具体原因的认证失败。
     #[error("认证失败")]
     AuthFailedUnknown,
+    /// 首次连接尚未确认服务器主机指纹。
     #[error("主机密钥需要确认: {0}")]
     HostKeyVerificationRequired(String),
+    /// 已保存的主机指纹与服务器当前指纹不一致。
     #[error("主机密钥不匹配，期望 {expected}，实际 {actual}")]
     HostKeyMismatch { expected: String, actual: String },
+    /// 读取远程文件或命令输出失败。
     #[error("读取输出失败: {0}")]
     ReadFailed(String),
+    /// 创建或使用 SFTP 子会话失败。
     #[error("创建 SFTP 会话失败: {0}")]
     SftpFailed(String),
+    /// 通用远程或本地文件系统操作失败。
     #[error("文件操作失败: {0}")]
     FileOperationFailed(String),
+    /// 读取远程目录或目录统计状态失败。
     #[error("读取目录失败: {0}")]
     ReadDirFailed(String),
+    /// 并发文件传输数量已达到保护上限。
     #[error("传输任务数量已达到上限")]
     TransferLimitReached,
+    /// 文件传输在安全检查点收到取消请求。
     #[error("传输已取消")]
     TransferCancelled,
+    /// 递归目录大小统计收到取消请求。
     #[error("目录大小统计已取消")]
     DirectorySizeCancelled,
+    /// 目录统计工作会话数量达到保护上限。
     #[error("目录大小统计任务数量已达到上限")]
     DirectorySizeLimitReached,
+    /// 请求预览的远程文件超过内存安全上限。
     #[error("预览文件超过大小限制")]
     PreviewTooLarge,
+    /// 请求的远程 PTY 会话已不存在。
     #[error("终端会话不存在")]
     TerminalNotFound,
+    /// 单次终端输入超过防护上限。
     #[error("终端输入超过大小限制")]
     TerminalInputTooLong,
+    /// 创建、读写或控制远程 PTY 失败。
     #[error("终端会话失败: {0}")]
     TerminalFailed(String),
 }
@@ -105,109 +134,176 @@ impl From<ssh2::Error> for SshError {
     }
 }
 
+/// Tauri 管理的全局 SSH 状态。
+///
+/// 连接、会话池和异步任务表均使用共享锁，保证文件操作、目录统计与终端
+/// 可以并行运行，同时在断线时集中清理关联资源。
 #[derive(Clone, Default)]
 pub struct SshState {
+    /// 已保存的连接配置及其连接标记。
     pub connections: Arc<RwLock<HashMap<String, SshConnection>>>,
+    /// 已认证的 SSH 会话池，按连接 ID 复用。
     pub connection_pool: Arc<RwLock<HashMap<String, Arc<Mutex<Session>>>>>,
+    /// 用于向前端发送 Tauri 事件的应用句柄。
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
+    /// 已请求取消的文件传输 ID 集合。
     pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
+    /// 连接 ID 到目录统计取消信号的映射。
     directory_size_cancellations: Arc<Mutex<HashMap<String, DirectorySizeCancellation>>>,
+    /// 每条连接可复用的目录统计工作会话池。
     directory_size_worker_pools: Arc<RwLock<HashMap<String, Arc<Mutex<DirectorySizeWorkerPool>>>>>,
     // 远端可能没有 POSIX shell 或兼容的 GNU `du`；只缓存已确认“不支持”的结果，
     // 避免每个目录都重复握手后再回退到 SFTP 扫描。
     directory_size_fast_path_support: Arc<Mutex<HashMap<String, bool>>>,
+    /// 当前占用目录统计工作名额的线程数。
     active_directory_size_workers: Arc<AtomicUsize>,
+    /// 工作会话达到上限时用于休眠和唤醒等待者的条件变量。
     directory_size_worker_wait: Arc<DirectorySizeWorkerWait>,
+    /// 当前占用传输并发名额的任务数。
     pub active_transfers: Arc<AtomicUsize>,
+    /// 终端 ID 到 PTY 会话的映射，独立于 SFTP 主连接池。
     terminal_sessions: Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
 }
 
+/// 前端可见的 SSH 连接配置和连接状态。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SshConnection {
+    /// 前端生成的稳定连接标识。
     pub id: String,
+    /// 服务器主机名或 IP 地址。
     pub host: String,
+    /// SSH 服务端口。
     pub port: u16,
+    /// 登录用户名。
     pub username: String,
+    /// 当前使用的认证方式标识。
     pub auth_method: String,
+    /// 用户确认过的服务器主机指纹。
     pub host_key_fingerprint: Option<String>,
+    /// 仅保存在当前进程内的认证密码，序列化给前端时会被省略。
     #[serde(skip_serializing)]
     pub password: String,
+    /// 是否存在可复用的已认证会话。
     pub connected: bool,
 }
 
+/// SSH 服务器主机密钥的指纹和算法信息。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HostKeyInfo {
+    /// SHA-256 指纹，使用 OpenSSH 常见的 Base64 表示。
     pub fingerprint: String,
+    /// libssh2 报告的主机密钥算法名称。
     pub algorithm: String,
 }
 
+/// 建立连接命令的结果。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectResult {
+    /// 是否已完成认证并建立可用会话。
     pub connected: bool,
+    /// 是否需要前端确认首次见到的主机指纹。
     pub requires_host_key_confirmation: bool,
+    /// 本次握手取得的主机密钥信息。
     pub host_key: HostKeyInfo,
 }
 
+/// 连接测试命令的结果，不会写入连接池。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ConnectionTestResult {
+    /// 主机指纹确认和认证是否均已通过。
     pub success: bool,
+    /// 是否需要用户确认主机指纹后再次测试。
     pub requires_host_key_confirmation: bool,
+    /// 本次测试读取到的主机密钥信息。
     pub host_key: HostKeyInfo,
 }
 
+/// 远程目录列表中的一个文件系统条目。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteEntry {
+    /// 当前目录显示名称。
     pub name: String,
+    /// 服务器返回的完整路径。
     pub path: String,
+    /// 是否为目录。
     #[serde(rename = "isDirectory")]
     pub is_directory: bool,
+    /// 条目类型，如 file、directory 或 symlink。
     pub kind: String,
+    /// 文件或链接自身的字节数。
     pub size: u64,
+    /// 服务器提供的修改时间（Unix 秒）。
     pub modified_at: Option<u64>,
+    /// 服务器提供的权限位。
     pub permissions: Option<u32>,
 }
 
+/// 远程目录递归大小统计结果。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteDirectorySize {
+    /// 已统计条目的总字节数。
     pub size: u64,
+    /// 是否完整遍历；权限不足的子目录会使其为 false。
     pub complete: bool,
+    /// 因权限、删除或其他可恢复错误未能访问的目录数量。
     pub inaccessible_count: usize,
+    /// 已成功读取并纳入统计的目录条目数量。
     pub scanned_entries: usize,
 }
 
+/// 文件夹上传计划中的单个普通文件及其相对路径。
 struct FolderUploadFile {
+    /// 本机文件的绝对路径。
     local_path: PathBuf,
+    /// 相对于上传根目录的远程目标路径。
     relative_path: PathBuf,
 }
 
+/// 预扫描得到的文件夹上传目录、文件和总字节数。
 struct FolderUploadPlan {
+    /// 需要先创建的相对目录列表。
     directories: Vec<PathBuf>,
+    /// 待上传的普通文件及相对路径。
     files: Vec<FolderUploadFile>,
+    /// 计划中所有文件的总字节数，用于总体进度。
     total_bytes: u64,
+    /// 预扫描时因权限或类型跳过的条目数量。
     skipped_entries: usize,
 }
 
+/// 文件夹下载计划中的远程文件及其本地相对路径。
 struct FolderDownloadFile {
+    /// 远程源文件路径。
     remote_path: String,
+    /// 相对于下载根目录的本地目标路径。
     relative_path: PathBuf,
 }
 
+/// 预扫描得到的文件夹下载目录、文件和总字节数。
 struct FolderDownloadPlan {
+    /// 需要创建的本地目录列表。
     directories: Vec<PathBuf>,
+    /// 待下载的远程普通文件及相对路径。
     files: Vec<FolderDownloadFile>,
+    /// 计划中所有文件的总字节数。
     total_bytes: u64,
+    /// 预扫描时因权限或类型跳过的条目数量。
     skipped_entries: usize,
 }
 
+/// 递归删除计划中的远程目标。
 struct RemoteDeleteTarget {
+    /// 远程项目的规范化相对路径。
     path: PathBuf,
+    /// 面向事件和错误消息的可读路径。
     display_path: String,
+    /// 是否为目录；目录需要在文件删除后逆序清理。
     is_directory: bool,
 }
 
@@ -234,29 +330,41 @@ struct FolderTransferProgress<'a> {
     total_bytes: u64,
 }
 
+/// 完成 TCP/SSH 握手后等待主机指纹确认的会话结果。
 struct OpenSession {
     session: Session,
     host_key: HostKeyInfo,
 }
 
 // 终端会话独立于文件传输会话，避免交互式读取阻塞 SFTP 通道。
+/// 一个交互式远程 PTY 会话及其读写同步状态。
 struct TerminalSession {
+    /// 所属 SSH 连接 ID，用于断线时批量关闭。
     connection_id: String,
+    /// 远程 PTY channel 的共享互斥封装。
     channel: Arc<Mutex<Channel>>,
+    /// 读线程停止标记。
     stop: Arc<AtomicBool>,
+    /// 串行化多个输入写入，避免交错破坏终端字节流。
     write_lock: Mutex<()>,
 }
 
 // 统计任务使用独立 SSH 会话；保留所属连接标识，主连接关闭时可一并取消。
+/// 目录统计任务的取消信号和连接归属。
 struct DirectorySizeCancellation {
+    /// 取消信号所属的连接 ID。
     connection_id: String,
+    /// 工作线程定期检查的原子取消标志。
     signal: Arc<AtomicBool>,
+    /// 唤醒等待任务退出或继续工作的条件变量。
     wake: Arc<Condvar>,
 }
 
 // 工作会话达到上限时，等待者通过条件变量休眠，避免忙等占用 CPU。
 struct DirectorySizeWorkerWait {
+    /// 与条件变量配套的等待锁。
     wait_lock: Mutex<()>,
+    /// 工作名额释放时唤醒等待者。
     wake: Condvar,
 }
 
@@ -282,20 +390,28 @@ impl Drop for DirectorySizeWorkerSlot {
     }
 }
 
+/// 单个连接的目录统计工作会话复用池。
 #[derive(Default)]
 struct DirectorySizeWorkerPool {
+    /// 已建立且可复用的工作会话。
     workers: Vec<Arc<DirectorySizeWorker>>,
+    /// 正在建立但尚未加入 workers 的会话数量。
     opening_workers: usize,
+    /// 当前使用该池的扫描任务引用数。
     active_tasks: usize,
 }
 
+/// 可复用的已认证目录统计 SSH 工作会话。
 struct DirectorySizeWorker {
+    /// 已认证的 SSH 会话。
     session: Arc<Mutex<Session>>,
+    /// 是否暂时借出给某个目录扫描。
     in_use: AtomicBool,
 }
 
 // 建立统计会话时也占用池内名额；异常或取消时由 RAII 自动归还预留数量。
 struct DirectorySizeOpeningLease {
+    /// 需要在 Drop 时归还 opening_workers 预留名额的池。
     pool: Arc<Mutex<DirectorySizeWorkerPool>>,
 }
 
@@ -309,6 +425,7 @@ impl Drop for DirectorySizeOpeningLease {
 
 // 独占一个统计工作会话，释放时将它归还给同一连接的复用池。
 struct DirectorySizeWorkerLease {
+    /// 被当前扫描独占的工作会话。
     worker: Arc<DirectorySizeWorker>,
 }
 
@@ -320,29 +437,45 @@ impl Drop for DirectorySizeWorkerLease {
 
 // 字段按声明顺序释放，确保 SFTP 子会话先关闭，再归还底层 SSH 工作会话。
 struct DirectorySizeSftpSession {
+    /// 当前工作会话创建的 SFTP 子会话。
     sftp: Sftp,
+    /// 保持借用关系，确保 SFTP 字段先于工作会话归还。
     _worker_lease: DirectorySizeWorkerLease,
 }
 
 // 一个扫描任务共享待处理目录和聚合结果；工作者完成一个目录后继续取下一个目录。
+/// 在多个工作线程之间共享的递归目录扫描状态。
 struct DirectorySizeScan {
+    /// 待处理目录和聚合结果的互斥状态。
     state: Mutex<DirectorySizeScanState>,
+    /// 目录入队或任务完成时唤醒工作线程。
     wake: Arc<Condvar>,
+    /// 所有工作线程共享的取消标志。
     cancellation: Arc<AtomicBool>,
 }
 
+/// 目录扫描队列和聚合结果；由 `DirectorySizeScan` 的锁保护。
 struct DirectorySizeScanState {
+    /// 待扫描目录队列，bool 标记是否为根目录。
     pending: VecDeque<(PathBuf, bool)>,
+    /// 队列及正在处理中的目录总数。
     pending_count: usize,
+    /// 当前等待领取任务的工作线程数量。
     waiting_workers: usize,
+    /// 已成功统计的文件字节总数。
     total_size: u64,
+    /// 读取失败但允许继续扫描的目录数量。
     inaccessible_count: usize,
+    /// 已读取并纳入统计的条目数量。
     scanned_entries: usize,
+    /// 遇到不可恢复错误时保存的失败原因。
     error: Option<SshError>,
+    /// 是否已经产生最终结果。
     finished: bool,
 }
 
 impl DirectorySizeScan {
+    /// 创建包含根目录的初始扫描任务。
     fn new(remote_path: &str, cancellation: Arc<AtomicBool>, wake: Arc<Condvar>) -> Self {
         let mut pending = VecDeque::new();
         pending.push_back((PathBuf::from(remote_path), true));
@@ -362,6 +495,7 @@ impl DirectorySizeScan {
         }
     }
 
+    /// 以失败状态结束扫描并唤醒等待的工作线程。
     fn fail(&self, error: SshError) {
         let Ok(mut scan) = self.state.lock() else {
             self.wake.notify_all();
@@ -374,6 +508,7 @@ impl DirectorySizeScan {
         self.wake.notify_all();
     }
 
+    /// 合并一个目录的统计结果，并把新发现的子目录加入共享队列。
     fn complete_directory(
         &self,
         child_directories: Vec<PathBuf>,
@@ -403,6 +538,7 @@ impl DirectorySizeScan {
         self.wake.notify_all();
     }
 
+    /// 读取最终聚合结果，检查任务是否正常完成。
     fn result(&self) -> Result<RemoteDirectorySize, SshError> {
         let mut scan = self
             .state
@@ -425,6 +561,7 @@ impl DirectorySizeScan {
     }
 }
 
+/// 按 ID 读取连接配置，并可选择要求其已有已认证会话。
 fn connection_info(
     state: &SshState,
     id: &str,
@@ -438,6 +575,7 @@ fn connection_info(
         .ok_or(SshError::ConnectionNotFound)
 }
 
+/// 对主机指纹执行不带尾部填充的 Base64 编码。
 fn base64_encode(bytes: &[u8]) -> String {
     const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
@@ -464,6 +602,7 @@ fn base64_encode(bytes: &[u8]) -> String {
     output.trim_end_matches('=').to_string()
 }
 
+/// 从已完成握手的 libssh2 会话提取主机密钥信息。
 fn host_key_info(session: &Session) -> Result<HostKeyInfo, SshError> {
     let fingerprint = session
         .host_key_hash(HashType::Sha256)
@@ -480,6 +619,7 @@ fn host_key_info(session: &Session) -> Result<HostKeyInfo, SshError> {
     })
 }
 
+/// 解析服务器地址并按超时连接 TCP，同时设置读写超时。
 fn connect_tcp(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, SshError> {
     let target = if host.contains(':') && !host.starts_with('[') {
         format!("[{host}]:{port}")
@@ -518,6 +658,7 @@ fn connect_tcp(host: &str, port: u16, timeout: Duration) -> Result<TcpStream, Ss
     ))
 }
 
+/// 完成 TCP 连接、SSH 握手和 keepalive 设置，但暂不认证账户。
 fn open_session_with_timeout(
     connection: &SshConnection,
     timeout: Duration,
@@ -534,10 +675,12 @@ fn open_session_with_timeout(
     Ok(OpenSession { session, host_key })
 }
 
+/// 使用默认超时打开一个待认证 SSH 会话。
 fn open_session(connection: &SshConnection) -> Result<OpenSession, SshError> {
     open_session_with_timeout(connection, Duration::from_millis(DEFAULT_TIMEOUT_MS))
 }
 
+/// 校验连接地址、账户、端口和当前支持的认证方式。
 fn validate_connection(connection: &SshConnection) -> Result<(), SshError> {
     if connection.host.trim().is_empty() {
         return Err(SshError::ConnectionFailed("主机地址不能为空".to_string()));
@@ -558,6 +701,7 @@ fn validate_connection(connection: &SshConnection) -> Result<(), SshError> {
     }
 }
 
+/// 将服务器本次握手得到的指纹与用户已确认值进行比对。
 fn verify_host_key(connection: &SshConnection, host_key: &HostKeyInfo) -> Result<(), SshError> {
     match connection.host_key_fingerprint.as_deref() {
         None | Some("") => Err(SshError::HostKeyVerificationRequired(
@@ -571,6 +715,7 @@ fn verify_host_key(connection: &SshConnection, host_key: &HostKeyInfo) -> Result
     }
 }
 
+/// 使用账户密码完成 SSH 用户认证。
 fn authenticate(session: &Session, connection: &SshConnection) -> Result<(), SshError> {
     if !matches!(connection.auth_method.as_str(), "password" | "") {
         return Err(SshError::UnsupportedAuth(
@@ -587,6 +732,7 @@ fn authenticate(session: &Session, connection: &SshConnection) -> Result<(), Ssh
     }
 }
 
+/// 打开会话、校验主机指纹并完成认证，供 SFTP 和终端共享。
 fn open_authenticated_session(connection: &SshConnection) -> Result<Session, SshError> {
     let opened = open_session(connection)?;
     verify_host_key(connection, &opened.host_key)?;
@@ -594,6 +740,7 @@ fn open_authenticated_session(connection: &SshConnection) -> Result<Session, Ssh
     Ok(opened.session)
 }
 
+/// 将前端终端尺寸限制在远端 PTY 可接受的范围内。
 fn normalize_terminal_dimensions(columns: u32, rows: u32) -> (u32, u32) {
     let columns = if columns == 0 {
         DEFAULT_TERMINAL_COLUMNS
@@ -608,6 +755,7 @@ fn normalize_terminal_dimensions(columns: u32, rows: u32) -> (u32, u32) {
     (columns, rows)
 }
 
+/// 创建并启动 xterm PTY Shell，返回非阻塞的 SSH channel。
 fn open_terminal_channel(
     connection: &SshConnection,
     columns: u32,
@@ -630,6 +778,7 @@ fn open_terminal_channel(
     Ok(channel)
 }
 
+/// 从终端会话表取得指定会话。
 fn terminal_session_for(
     state: &SshState,
     terminal_id: &str,
@@ -643,6 +792,7 @@ fn terminal_session_for(
         .ok_or(SshError::TerminalNotFound)
 }
 
+/// 停止并移除终端会话，关闭其远程 channel。
 fn close_terminal_session(
     terminal_sessions: &Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
     terminal_id: &str,
@@ -656,6 +806,7 @@ fn close_terminal_session(
     }
 }
 
+/// 关闭某条连接下的全部 PTY，通常在断线或断开连接时调用。
 fn close_terminals_for_connection(state: &SshState, connection_id: &str) {
     let terminal_ids: Vec<String> = state
         .terminal_sessions
@@ -670,6 +821,7 @@ fn close_terminals_for_connection(state: &SshState, connection_id: &str) {
     }
 }
 
+/// 为终端事件补充终端 ID 后发送到前端。
 fn emit_terminal_event(
     app_handle: &Arc<Mutex<Option<AppHandle>>>,
     event: &str,
@@ -686,6 +838,7 @@ fn emit_terminal_event(
     emit_event(app_handle, event, payload);
 }
 
+/// 合并可能跨读取边界的 UTF-8 字节，并发送终端输出事件。
 fn emit_terminal_bytes(
     app_handle: &Arc<Mutex<Option<AppHandle>>>,
     terminal_id: &str,
@@ -730,6 +883,7 @@ fn emit_terminal_bytes(
     }
 }
 
+/// 为终端启动后台读线程，转发输出并处理远程 Shell 退出。
 fn spawn_terminal_reader(state: SshState, terminal_id: String, session: Arc<TerminalSession>) {
     let app_handle = Arc::clone(&state.app_handle);
     let terminal_sessions = Arc::clone(&state.terminal_sessions);
@@ -816,6 +970,7 @@ fn spawn_terminal_reader(state: SshState, terminal_id: String, session: Arc<Term
     });
 }
 
+/// 在非阻塞 channel 上可靠写入终端输入，带有取消和超时保护。
 fn write_terminal_input(session: &Arc<TerminalSession>, data: &[u8]) -> Result<(), SshError> {
     let _write_guard = session
         .write_lock
@@ -856,6 +1011,15 @@ fn write_terminal_input(session: &Arc<TerminalSession>, data: &[u8]) -> Result<(
     Ok(())
 }
 
+/// 判断终端输出错误文本是否表示底层 SSH 连接已经失效。
+///
+/// # Arguments
+///
+/// * `message` - 终端读写路径返回的错误文本。
+///
+/// # Returns
+///
+/// 若文本匹配连接关闭、网络或超时关键词则返回 `true`。
 fn is_terminal_connection_loss(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("socket")
@@ -864,6 +1028,7 @@ fn is_terminal_connection_loss(message: &str) -> bool {
         || message.contains("timed out")
 }
 
+/// 向远程 PTY 发送尺寸更新，在 libssh2 EAGAIN 时短暂重试。
 fn resize_terminal(
     session: &Arc<TerminalSession>,
     columns: u32,
@@ -896,6 +1061,7 @@ fn resize_terminal(
     }
 }
 
+/// 向已注册的 Tauri 应用句柄发送事件；未初始化时安全忽略。
 fn emit_event(
     state_handle: &Arc<Mutex<Option<AppHandle>>>,
     event: &str,
@@ -926,6 +1092,15 @@ fn is_connection_loss(error: &ssh2::Error) -> bool {
     }
 }
 
+/// 判断本地 IO 错误是否属于远程 socket 断线，而非普通文件错误。
+///
+/// # Arguments
+///
+/// * `error` - 由 TCP、SSH 或文件通道产生的 IO 错误。
+///
+/// # Returns
+///
+/// 若错误码或文本表明连接已经断开则返回 `true`。
 fn is_io_connection_loss(error: &std::io::Error) -> bool {
     let transport_kind = matches!(
         error.kind(),
@@ -945,6 +1120,7 @@ fn is_io_connection_loss(error: &std::io::Error) -> bool {
         || message.contains("sftp(7)")
 }
 
+/// 集中处理连接断线：清理会话、统计任务、终端并发送前端事件。
 fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     let was_connected = state
         .connections
@@ -973,18 +1149,41 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     }
 }
 
+/// 仅在 SSH 错误属于传输断线时更新连接状态。
+///
+/// # Arguments
+///
+/// * `state` - 全局 SSH 状态。
+/// * `id` - 发生错误的连接 ID。
+/// * `error` - libssh2 返回的原始错误。
 fn mark_ssh_error_if_connection_lost(state: &SshState, id: &str, error: &ssh2::Error) {
     if is_connection_loss(error) {
         mark_connection_disconnected(state, id, error.to_string());
     }
 }
 
+/// 仅在 IO 错误属于传输断线时更新连接状态。
+///
+/// # Arguments
+///
+/// * `state` - 全局 SSH 状态。
+/// * `id` - 发生错误的连接 ID。
+/// * `error` - 本地 socket 或通道的 IO 错误。
 fn mark_io_error_if_connection_lost(state: &SshState, id: &str, error: &std::io::Error) {
     if is_io_connection_loss(error) {
         mark_connection_disconnected(state, id, error.to_string());
     }
 }
 
+/// 判断重命名错误是否允许回退到删除后重建策略。
+///
+/// # Arguments
+///
+/// * `error` - 远程 SFTP 重命名返回的错误。
+///
+/// # Returns
+///
+/// 目标服务器不支持原子重命名或目标已存在时返回 `true`。
 fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
     matches!(
         error.code(),
@@ -992,6 +1191,15 @@ fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
     )
 }
 
+/// 判断 SFTP 错误是否表示目标路径已经不存在。
+///
+/// # Arguments
+///
+/// * `error` - SFTP 操作返回的错误。
+///
+/// # Returns
+///
+/// 错误码为“无此文件/目录”时返回 `true`。
 fn is_sftp_missing_path(error: &ssh2::Error) -> bool {
     matches!(error.code(), ErrorCode::SFTP(LIBSSH2_FX_NO_SUCH_FILE))
 }
@@ -1005,6 +1213,7 @@ fn is_recoverable_directory_size_error(error: &ssh2::Error) -> bool {
     ))
 }
 
+/// 将经过校验的本地相对路径安全拼接到远程 POSIX 路径。
 fn join_remote_path(base_path: &str, relative_path: &Path) -> Result<String, SshError> {
     let mut remote_path = base_path.trim_end_matches('/').to_string();
     if remote_path.is_empty() {
@@ -1032,6 +1241,7 @@ fn join_remote_path(base_path: &str, relative_path: &Path) -> Result<String, Ssh
     Ok(remote_path)
 }
 
+/// 把跨平台相对路径转换为事件和错误消息中使用的显示文本。
 fn display_relative_path(relative_path: &Path) -> String {
     relative_path
         .components()
@@ -1043,6 +1253,7 @@ fn display_relative_path(relative_path: &Path) -> String {
         .join("/")
 }
 
+/// 预扫描本地目录，建立不跟随符号链接的上传计划。
 fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, SshError> {
     let root_metadata = fs::symlink_metadata(local_root)
         .map_err(|error| SshError::FileOperationFailed(format!("无法读取本地文件夹: {error}")))?;
@@ -1121,6 +1332,7 @@ fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, Ssh
     Ok(plan)
 }
 
+/// 校验远程子项名称并按 SFTP 规则拼接子路径。
 fn join_remote_child_path(base_path: &str, name: &str) -> Result<String, SshError> {
     if name.is_empty() || name == "." || name == ".." || name.contains('/') || name.contains('\\') {
         return Err(SshError::FileOperationFailed(
@@ -1150,6 +1362,7 @@ fn join_remote_child_path(base_path: &str, name: &str) -> Result<String, SshErro
     Ok(remote_path)
 }
 
+/// 递归预扫描远程目录，建立不跟随符号链接的本地下载计划。
 fn collect_folder_download_plan(
     state: &SshState,
     connection_id: &str,
@@ -1251,6 +1464,7 @@ fn collect_folder_download_plan(
     Ok(plan)
 }
 
+/// 使用兼容性回退策略原子地重命名远程文件。
 fn rename_remote_file(
     sftp: &Sftp,
     source_path: &Path,
@@ -1306,6 +1520,7 @@ fn rename_remote_file(
     }
 }
 
+/// 获取指定连接的已认证 SSH 会话。
 fn session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshError> {
     let _ = connection_info(state, id, true)?;
     state
@@ -1317,6 +1532,7 @@ fn session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshErr
         .ok_or(SshError::ConnectionNotFound)
 }
 
+/// 从连接会话创建一个 SFTP 子会话，并统一处理断线错误。
 fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     let session = session_for(state, id)?;
     let session = session
@@ -1328,6 +1544,7 @@ fn sftp_for(state: &SshState, id: &str) -> Result<Sftp, SshError> {
     })
 }
 
+/// 使用单引号转义远程 Shell 路径，避免 `du` 快速路径产生命令注入。
 fn shell_quote_remote_path(path: &str) -> Option<String> {
     if path.as_bytes().contains(&0) {
         return None;
@@ -1346,10 +1563,12 @@ fn shell_quote_remote_path(path: &str) -> Option<String> {
     Some(quoted)
 }
 
+/// 判断路径是否适合交给远程 POSIX Shell 的 `du` 命令。
 fn is_absolute_posix_remote_path(path: &str) -> bool {
     path.starts_with('/')
 }
 
+/// 解析严格的 `du -s -b` 输出，异常或附加日志会触发 SFTP 回退。
 fn parse_remote_du_size(output: &[u8]) -> Option<u64> {
     // GNU du 的汇总输出应以大小字段开头。若远端包装脚本额外输出了内容，
     // 放弃快速路径并回退，避免把无关数字误显示为文件夹大小。
@@ -1362,6 +1581,7 @@ fn parse_remote_du_size(output: &[u8]) -> Option<u64> {
     std::str::from_utf8(value).ok()?.parse::<u64>().ok()
 }
 
+/// 判断远端命令输出是否表明没有可用的兼容 `du`。
 fn remote_du_is_unavailable(output: &[u8]) -> bool {
     let message = String::from_utf8_lossy(output).to_ascii_lowercase();
     [
@@ -1378,6 +1598,7 @@ fn remote_du_is_unavailable(output: &[u8]) -> bool {
     .any(|pattern| message.contains(pattern))
 }
 
+/// 读取非阻塞 `du` channel 的输出，并响应目录统计取消信号。
 fn read_directory_size_command_output(
     state: &SshState,
     connection_id: &str,
@@ -1551,6 +1772,7 @@ fn end_directory_size_task(state: &SshState, id: &str, pool: &Arc<Mutex<Director
     pools.remove(id);
 }
 
+/// 在连接关闭时移除目录统计会话池，正在运行的任务会通过取消信号退出。
 fn remove_directory_size_worker_pool(state: &SshState, id: &str) {
     // 移除池中的持有引用即可关闭空闲会话；正在执行的统计会在取消后自然释放。
     state
@@ -1560,6 +1782,7 @@ fn remove_directory_size_worker_pool(state: &SshState, id: &str) {
         .remove(id);
 }
 
+/// 从连接的工作池借出一个会话，必要时按上限建立新会话。
 fn checkout_directory_size_worker(
     state: &SshState,
     id: &str,
@@ -1645,6 +1868,7 @@ fn directory_size_sftp_for(
     })
 }
 
+/// 生成递归删除进度中展示的远程项目名称。
 fn remote_delete_display_path(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -1652,6 +1876,7 @@ fn remote_delete_display_path(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+/// 预扫描远程目录并生成“文件优先、目录逆序”的删除计划。
 fn collect_remote_delete_plan(
     state: &SshState,
     connection_id: &str,
@@ -1726,6 +1951,7 @@ fn collect_remote_delete_plan(
     Ok(files)
 }
 
+/// 发送远程删除扫描/清理阶段的进度事件。
 fn delete_progress(
     state: &SshState,
     connection_id: &str,
@@ -1760,6 +1986,7 @@ fn delete_progress(
     );
 }
 
+/// 执行已生成的远程删除计划，并对并发删除保持幂等。
 fn delete_remote_path(
     state: &SshState,
     connection_id: &str,
@@ -1843,6 +2070,7 @@ fn delete_remote_path(
     Ok(())
 }
 
+/// 为后台删除线程创建 SFTP 子会话并执行递归删除。
 fn run_delete(
     state: &SshState,
     session: &Arc<Mutex<Session>>,
@@ -1868,6 +2096,7 @@ fn run_delete(
     )
 }
 
+/// 确认远程目录存在；根据覆盖策略处理同名项目。
 fn ensure_remote_directory(
     state: &SshState,
     connection_id: &str,
@@ -1911,6 +2140,7 @@ fn ensure_remote_directory(
     }
 }
 
+/// 原子申请文件传输并发名额。
 fn transfer_slot(state: &SshState) -> Result<(), SshError> {
     loop {
         let current = state.active_transfers.load(Ordering::Acquire);
@@ -1927,6 +2157,7 @@ fn transfer_slot(state: &SshState) -> Result<(), SshError> {
     }
 }
 
+/// 原子申请目录统计工作线程名额，达到上限时返回可重试错误。
 fn try_directory_size_worker_slot(state: &SshState) -> Result<DirectorySizeWorkerSlot, SshError> {
     loop {
         let current = state.active_directory_size_workers.load(Ordering::Acquire);
@@ -1982,6 +2213,7 @@ fn directory_size_worker_slot(
     }
 }
 
+/// 通知一条连接正在运行的目录统计任务停止。
 fn cancel_directory_size_tasks_for_connection(state: &SshState, connection_id: &str) {
     state
         .directory_size_cancellations
@@ -1996,10 +2228,12 @@ fn cancel_directory_size_tasks_for_connection(state: &SshState, connection_id: &
     state.directory_size_worker_wait.wake.notify_all();
 }
 
+/// 查询传输任务是否已收到前端取消请求。
 fn is_cancelled(cancelled: &Arc<Mutex<HashSet<String>>>, transfer_id: &str) -> bool {
     cancelled.lock().unwrap().contains(transfer_id)
 }
 
+/// 清理传输取消标记并归还并发名额。
 fn finish_transfer(state: &SshState, transfer_id: &str) {
     state
         .cancelled_transfers
@@ -2009,6 +2243,25 @@ fn finish_transfer(state: &SshState, transfer_id: &str) {
     state.active_transfers.fetch_sub(1, Ordering::AcqRel);
 }
 
+/// 测试 SSH/SFTP 连接、主机指纹和账户认证，不写入连接池。
+///
+/// # Arguments
+///
+/// * `host` - SSH 服务器主机名或 IP 地址。
+/// * `port` - SSH 服务端口。
+/// * `username` - 登录用户名。
+/// * `password` - 本次测试使用的账户密码，仅在当前调用期间使用。
+/// * `auth_method` - 认证方式标识；省略时使用 `password`。
+/// * `timeout` - 连接超时时间（毫秒），会限制在 1 秒至 120 秒之间。
+/// * `host_key_fingerprint` - 已确认的主机指纹；首次测试可省略以获取待确认结果。
+///
+/// # Returns
+///
+/// 返回连接测试结果，包括认证状态、是否需要确认主机指纹及主机密钥信息。
+///
+/// # Errors
+///
+/// 当连接参数无效、TCP/SSH 握手、主机指纹校验、认证或 SFTP 会话创建失败时返回错误。
 #[tauri::command]
 pub fn test_sftp_connection(
     host: String,
@@ -2055,6 +2308,26 @@ pub fn test_sftp_connection(
     })
 }
 
+/// 保存或覆盖一条连接配置，并清理同 ID 的旧会话。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 连接配置的稳定标识。
+/// * `host` - SSH 服务器主机名或 IP 地址。
+/// * `port` - SSH 服务端口。
+/// * `username` - 登录用户名。
+/// * `password` - 连接密码，仅保存在当前进程内存中。
+/// * `auth_method` - 认证方式标识；省略时使用 `password`。
+/// * `host_key_fingerprint` - 用户已经确认的服务器主机指纹。
+///
+/// # Returns
+///
+/// 返回保存后的连接 ID。
+///
+/// # Errors
+///
+/// 当连接参数缺失或无效时返回错误。
 #[tauri::command]
 // 参数名称与前端既有 IPC 契约保持一致；此处有意保留较长签名，避免破坏旧版本调用方。
 #[allow(clippy::too_many_arguments)]
@@ -2095,6 +2368,21 @@ pub fn add_ssh_connection(
     Ok(id)
 }
 
+/// 更新连接配置中的已确认主机指纹。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 要更新的连接配置 ID。
+/// * `fingerprint` - 用户确认过的服务器主机指纹。
+///
+/// # Returns
+///
+/// 更新成功时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当指纹为空或连接配置不存在时返回错误。
 #[tauri::command]
 pub fn set_ssh_host_key(
     state: State<SshState>,
@@ -2112,6 +2400,19 @@ pub fn set_ssh_host_key(
     Ok(true)
 }
 
+/// 返回当前保存的全部 SSH 连接配置（密码字段不会序列化）。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+///
+/// # Returns
+///
+/// 返回全部连接配置数组；密码字段在序列化给前端时会被省略。
+///
+/// # Errors
+///
+/// 当共享连接状态锁已损坏时返回错误。
 #[tauri::command]
 pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>, SshError> {
     Ok(state
@@ -2123,6 +2424,20 @@ pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>
         .collect())
 }
 
+/// 建立并缓存一条已认证 SSH 会话；未知主机指纹时返回待确认结果。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 要连接的配置 ID。
+///
+/// # Returns
+///
+/// 返回连接结果，包括会话是否已建立、是否需要确认主机指纹及主机密钥信息。
+///
+/// # Errors
+///
+/// 当连接配置不存在、网络连接、SSH 握手、主机指纹校验或账户认证失败时返回错误。
 #[tauri::command]
 pub fn connect_ssh(state: State<SshState>, id: String) -> Result<ConnectResult, SshError> {
     let connection = connection_info(&state, &id, false)?;
@@ -2169,6 +2484,20 @@ fn remove_cached_session(state: &SshState, id: &str) {
     }
 }
 
+/// 关闭指定 SSH 会话及其终端、目录统计工作池。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 要断开的连接 ID。
+///
+/// # Returns
+///
+/// 清理完成时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当连接配置不存在时返回错误。
 #[tauri::command]
 pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshError> {
     let _ = connection_info(&state, &id, false)?;
@@ -2180,6 +2509,20 @@ pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshErr
     Ok(true)
 }
 
+/// 发送 SSH keepalive 探测连接；发现传输层错误时同步标记断线。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 要探测的连接 ID。
+///
+/// # Returns
+///
+/// 连接仍可用或暂时返回非阻塞重试状态时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当连接不存在、会话锁损坏或探测确认连接已失效时返回错误。
 #[tauri::command]
 pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
     let session = session_for(&state, &id)?;
@@ -2203,6 +2546,20 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
     }
 }
 
+/// 删除连接配置并释放其所有远程资源。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 要删除的连接配置 ID。
+///
+/// # Returns
+///
+/// 找到并删除配置时返回 `Ok(true)`；配置不存在时返回 `Ok(false)`。
+///
+/// # Errors
+///
+/// 当共享连接状态锁已损坏时返回错误。
 #[tauri::command]
 pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
     close_terminals_for_connection(&state, &id);
@@ -2221,6 +2578,22 @@ fn should_skip_remote_entry(name: &str, show_hidden_files: bool) -> bool {
     name == "." || name == ".." || (!show_hidden_files && name.starts_with('.'))
 }
 
+/// 列出远程目录；隐藏文件是否返回由 `show_hidden_files` 控制。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要读取的远程目录路径。
+/// * `show_hidden_files` - 是否包含名称以点开头的隐藏条目。
+///
+/// # Returns
+///
+/// 返回远程目录的直接子项数组，不递归统计目录大小。
+///
+/// # Errors
+///
+/// 当连接不存在、SFTP 会话不可用或远程目录读取失败时返回错误。
 #[tauri::command]
 pub fn list_sftp_directory(
     state: State<SshState>,
@@ -2531,6 +2904,23 @@ fn calculate_sftp_directory_size(
     scan.result()
 }
 
+/// 异步统计远程目录大小，支持隐藏文件筛选和按操作 ID 取消。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要统计的远程目录路径。
+/// * `show_hidden_files` - 是否将名称以点开头的文件和目录计入统计。
+/// * `operation_id` - 本次统计任务的唯一标识，供取消命令关联。
+///
+/// # Returns
+///
+/// 返回目录总字节数、完整性和扫描条目统计信息。
+///
+/// # Errors
+///
+/// 当操作 ID 为空、连接不可用、目录读取失败、达到并发限制或任务被取消时返回错误。
 #[tauri::command]
 pub async fn get_sftp_directory_size(
     state: State<'_, SshState>,
@@ -2599,6 +2989,20 @@ pub async fn get_sftp_directory_size(
     result
 }
 
+/// 取消指定的远程目录大小统计；任务已完成时保持幂等成功。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `operation_id` - 要取消的目录统计任务 ID。
+///
+/// # Returns
+///
+/// 无论任务是否已经结束，都返回 `Ok(true)`，保证取消操作幂等。
+///
+/// # Errors
+///
+/// 当取消状态锁不可用时返回错误。
 #[tauri::command]
 pub fn cancel_sftp_directory_size(
     state: State<SshState>,
@@ -2618,6 +3022,7 @@ pub fn cancel_sftp_directory_size(
     Ok(true)
 }
 
+/// 在文件预览读取过程中向前端发送进度事件。
 fn preview_progress(
     state: &SshState,
     connection_id: &str,
@@ -2646,6 +3051,7 @@ fn preview_progress(
     );
 }
 
+/// 同步分块读取远程预览文件，并限制最大内容大小。
 fn read_sftp_file_content(
     state: &SshState,
     id: String,
@@ -2693,6 +3099,22 @@ fn read_sftp_file_content(
     Ok(content)
 }
 
+/// 分块读取远程文件内容，供前端预览并发送读取进度事件。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要读取的远程文件路径。
+/// * `preview_id` - 可选的前端预览任务 ID，用于关联进度事件。
+///
+/// # Returns
+///
+/// 返回远程文件的 UTF-8 原始字节；内容大小受预览上限限制。
+///
+/// # Errors
+///
+/// 当连接不可用、文件读取失败、文件超过预览大小限制或后台任务失败时返回错误。
 #[tauri::command]
 pub async fn get_sftp_file_content(
     state: State<'_, SshState>,
@@ -2708,6 +3130,21 @@ pub async fn get_sftp_file_content(
     .map_err(|error| SshError::ReadFailed(format!("预览任务失败: {error}")))?
 }
 
+/// 在远程创建一个目录。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要创建的远程目录路径。
+///
+/// # Returns
+///
+/// 创建成功时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当连接不可用、路径无效或远程目录创建失败时返回错误。
 #[tauri::command]
 pub fn sftp_mkdir(
     state: State<SshState>,
@@ -2723,6 +3160,23 @@ pub fn sftp_mkdir(
     Ok(true)
 }
 
+/// 异步删除远程文件或目录，并通过事件报告递归删除结果。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要删除的远程文件或目录路径。
+/// * `is_directory` - 调用方提供的条目类型提示；实际删除流程仍会校验远端类型。
+/// * `operation_id` - 可选的删除任务 ID；省略时由后端生成。
+///
+/// # Returns
+///
+/// 删除线程成功启动时返回 `Ok(true)`；最终结果通过 `delete-complete` 事件报告。
+///
+/// # Errors
+///
+/// 当连接不存在、会话不可用或后台删除任务无法启动时返回错误。
 #[tauri::command]
 pub fn sftp_delete(
     state: State<SshState>,
@@ -2763,6 +3217,23 @@ pub fn sftp_delete(
     Ok(true)
 }
 
+/// 重命名远程文件或目录，可选择覆盖已有目标。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `source_path` - 原远程文件或目录路径。
+/// * `target_path` - 新远程文件或目录路径。
+/// * `overwrite` - 是否允许覆盖已存在的目标；省略时为 `false`。
+///
+/// # Returns
+///
+/// 重命名成功时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当连接不可用、路径无效或远程重命名失败时返回错误。
 #[tauri::command]
 pub fn sftp_rename(
     state: State<SshState>,
@@ -2785,6 +3256,20 @@ pub fn sftp_rename(
     Ok(true)
 }
 
+/// 获取远程账户的规范化主目录路径。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+///
+/// # Returns
+///
+/// 返回远程账户的规范化绝对主目录路径。
+///
+/// # Errors
+///
+/// 当连接不可用或远程路径解析失败时返回错误。
 #[tauri::command]
 pub fn get_sftp_user_home(state: State<SshState>, id: String) -> Result<String, SshError> {
     let sftp = sftp_for(&state, &id)?;
@@ -2798,6 +3283,23 @@ pub fn get_sftp_user_home(state: State<SshState>, id: String) -> Result<String, 
         .to_string())
 }
 
+/// 打开一个远程 PTY Shell，并开始后台读取终端输出。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `terminal_id` - 前端生成的终端会话 ID。
+/// * `columns` - 请求的终端列数。
+/// * `rows` - 请求的终端行数。
+///
+/// # Returns
+///
+/// PTY 创建并开始读取时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当终端 ID 为空、连接不可用、PTY 创建失败或后台启动任务失败时返回错误。
 #[tauri::command]
 pub async fn open_ssh_terminal(
     state: State<'_, SshState>,
@@ -2831,6 +3333,21 @@ pub async fn open_ssh_terminal(
     Ok(true)
 }
 
+/// 向远程 PTY 写入用户输入，超过单次上限时拒绝请求。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `terminal_id` - 目标终端会话 ID。
+/// * `data` - 要写入远程 PTY 的用户输入文本。
+///
+/// # Returns
+///
+/// 输入写入成功时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当输入超过大小限制、终端不存在或远程写入失败时返回错误。
 #[tauri::command]
 pub async fn write_ssh_terminal(
     state: State<'_, SshState>,
@@ -2847,6 +3364,22 @@ pub async fn write_ssh_terminal(
     Ok(true)
 }
 
+/// 调整远程 PTY 的行列尺寸。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `terminal_id` - 目标终端会话 ID。
+/// * `columns` - 请求的终端列数。
+/// * `rows` - 请求的终端行数。
+///
+/// # Returns
+///
+/// 尺寸调整成功时返回 `Ok(true)`。
+///
+/// # Errors
+///
+/// 当终端不存在或远程 PTY 控制请求失败时返回错误。
 #[tauri::command]
 pub async fn resize_ssh_terminal(
     state: State<'_, SshState>,
@@ -2862,12 +3395,27 @@ pub async fn resize_ssh_terminal(
     Ok(true)
 }
 
+/// 关闭远程 PTY 会话；重复关闭保持成功。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `terminal_id` - 要关闭的终端会话 ID。
+///
+/// # Returns
+///
+/// 始终返回 `Ok(true)`，保证关闭操作幂等。
+///
+/// # Errors
+///
+/// 当终端会话表锁不可用时返回错误。
 #[tauri::command]
 pub fn close_ssh_terminal(state: State<SshState>, terminal_id: String) -> Result<bool, SshError> {
     close_terminal_session(&state.terminal_sessions, &terminal_id);
     Ok(true)
 }
 
+/// 发送单文件上传或下载的进度事件。
 fn transfer_progress(
     state: &SshState,
     event: &str,
@@ -2894,6 +3442,7 @@ fn transfer_progress(
     );
 }
 
+/// 发送文件夹传输的当前文件和整体进度事件。
 fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'_>) {
     let progress = if details.total == 0 {
         100
@@ -2931,6 +3480,7 @@ fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'
     );
 }
 
+/// 以临时远程文件写入单个本地文件，成功后再重命名到目标路径。
 fn upload_file_to_sftp<F>(
     context: &FileTransferContext<'_>,
     local_path: &Path,
@@ -3006,6 +3556,7 @@ where
     result.map(|_| total)
 }
 
+/// 创建 SFTP 会话并执行单文件上传。
 fn run_upload(
     state: &SshState,
     connection: &SshConnection,
@@ -3049,6 +3600,7 @@ fn run_upload(
     .map(|_| "上传成功".to_string())
 }
 
+/// 按预扫描计划创建远程目录并递归上传本地文件夹。
 fn run_upload_directory(
     state: &SshState,
     connection: &SshConnection,
@@ -3154,6 +3706,7 @@ fn run_upload_directory(
     }
 }
 
+/// 下载单个远程文件到本地临时文件，成功后原子替换目标。
 fn download_file_to_local<F>(
     context: &FileTransferContext<'_>,
     remote_path: &str,
@@ -3251,6 +3804,7 @@ where
     result.map(|_| total)
 }
 
+/// 创建 SFTP 会话并执行单文件下载。
 fn run_download(
     state: &SshState,
     connection: &SshConnection,
@@ -3293,6 +3847,7 @@ fn run_download(
     .map(|_| "下载成功".to_string())
 }
 
+/// 按预扫描计划创建本地目录并递归下载远程文件夹。
 fn run_download_directory(
     state: &SshState,
     connection: &SshConnection,
@@ -3415,6 +3970,24 @@ fn run_download_directory(
     }
 }
 
+/// 后台上传单个文件，并通过 `upload-progress`/`upload-complete` 事件报告状态。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `local_path` - 要上传的本地文件路径。
+/// * `remote_path` - 目标远程文件路径。
+/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
+/// * `overwrite` - 是否覆盖已有远程文件；省略时为 `false`。
+///
+/// # Returns
+///
+/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
+///
+/// # Errors
+///
+/// 当连接不可用、传输并发达到上限或后台上传任务无法启动时返回错误。
 #[tauri::command]
 pub fn scp_upload(
     state: State<SshState>,
@@ -3457,6 +4030,24 @@ pub fn scp_upload(
     Ok("上传已开始".to_string())
 }
 
+/// 后台递归上传目录，按文件和总字节数报告进度。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `local_path` - 要上传的本地目录路径。
+/// * `remote_path` - 目标远程目录路径。
+/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
+/// * `overwrite` - 是否覆盖已有远程文件；省略时为 `false`。
+///
+/// # Returns
+///
+/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
+///
+/// # Errors
+///
+/// 当连接不可用、本地目录无法读取、传输并发达到上限或后台任务无法启动时返回错误。
 #[tauri::command]
 pub fn sftp_upload_directory(
     state: State<SshState>,
@@ -3500,6 +4091,24 @@ pub fn sftp_upload_directory(
     Ok("文件夹上传已开始".to_string())
 }
 
+/// 后台下载单个文件，并通过 `download-progress`/`download-complete` 事件报告状态。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要下载的远程文件路径。
+/// * `local_path` - 目标本地文件路径。
+/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
+/// * `overwrite` - 是否覆盖已有本地文件；省略时为 `false`。
+///
+/// # Returns
+///
+/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
+///
+/// # Errors
+///
+/// 当连接不可用、传输并发达到上限或后台下载任务无法启动时返回错误。
 #[tauri::command]
 pub fn scp_download(
     state: State<SshState>,
@@ -3543,6 +4152,24 @@ pub fn scp_download(
     Ok("下载已开始".to_string())
 }
 
+/// 后台递归下载远程目录，必要时创建本地目录结构。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `id` - 已建立会话的连接 ID。
+/// * `remote_path` - 要下载的远程目录路径。
+/// * `local_path` - 目标本地目录路径。
+/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
+/// * `overwrite` - 是否覆盖已有本地文件；省略时为 `false`。
+///
+/// # Returns
+///
+/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
+///
+/// # Errors
+///
+/// 当连接不可用、远程目录无法读取、本地目录无法创建、传输并发达到上限或后台任务无法启动时返回错误。
 #[tauri::command]
 pub fn sftp_download_directory(
     state: State<SshState>,
@@ -3586,6 +4213,20 @@ pub fn sftp_download_directory(
     Ok("文件夹下载已开始".to_string())
 }
 
+/// 标记传输任务取消；实际线程在下一个安全检查点退出。
+///
+/// # Arguments
+///
+/// * `state` - Tauri 管理的共享 SSH 状态。
+/// * `transfer_id` - 要取消的上传或下载任务 ID。
+///
+/// # Returns
+///
+/// 取消标记写入成功时返回 `Ok(true)`；任务是否已经结束由传输完成事件决定。
+///
+/// # Errors
+///
+/// 当取消状态锁不可用时返回错误。
 #[tauri::command]
 pub fn cancel_transfer(state: State<SshState>, transfer_id: String) -> Result<bool, SshError> {
     state

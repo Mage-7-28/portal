@@ -18,6 +18,7 @@ const FILE_EXTENSION_TYPES = {
   font: [ 'ttf', 'otf', 'woff', 'woff2', 'eot' ]
 }
 
+// 业务文件类型到 AppIcon 语义名称的映射；没有专用图标时统一回退到 file。
 const FILE_ICON_NAMES = {
   image: 'fileImage',
   json: 'fileJson',
@@ -37,6 +38,7 @@ const FILE_ICON_NAMES = {
   font: 'fileFont'
 }
 
+// 将分组数组展平成扩展名索引，渲染时只需一次 O(1) 查找。
 const FILE_TYPE_BY_EXTENSION = Object.entries(FILE_EXTENSION_TYPES).reduce((result, [ type, extensions ]) => {
   extensions.forEach(extension => {
     result[extension] = type
@@ -44,6 +46,12 @@ const FILE_TYPE_BY_EXTENSION = Object.entries(FILE_EXTENSION_TYPES).reduce((resu
   return result
 }, {})
 
+/**
+ * 根据扩展名返回业务图标名称和文件类型。
+ *
+ * @param {string} [fileName=''] - 文件名或完整路径；扩展名比较不区分大小写。
+ * @returns {{name: string, type: string}} 图标组件名称和用于样式分类的文件类型。
+ */
 export const resolveFileIcon = (fileName = '') => {
   const extension = String(fileName).toLowerCase().split('.').pop() || ''
   const type = FILE_TYPE_BY_EXTENSION[extension] || 'generic'

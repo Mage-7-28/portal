@@ -1,19 +1,55 @@
-// Tauri 命令说明：https://tauri.app/develop/calling-rust/
+//! Portal Tauri 应用入口和本地文件系统命令。
+//!
+//! 本模块组装插件、原生菜单和 SSH 状态，并提供跨平台的本地目录读取、
+//! 路径检查、平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
+
 mod ssh;
 
 use std::path::Path;
 use tauri::{Emitter, Manager};
 
+/// 返回用于验证 IPC 链路的问候语。
+///
+/// # Arguments
+///
+/// * `name` - 要插入问候语的调用方名称。
+///
+/// # Returns
+///
+/// 返回包含调用方名称的问候字符串。
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+/// 请求 Tauri 退出当前应用。
+///
+/// # Arguments
+///
+/// * `app` - 当前 Tauri 应用句柄。
+///
+/// # Returns
+///
+/// 此命令不返回结果；退出请求会交给 Tauri 事件循环处理。
 #[tauri::command]
 fn exit_application(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+/// 同步原生菜单中“显示隐藏文件”的勾选状态。
+///
+/// # Arguments
+///
+/// * `app` - 当前 Tauri 应用句柄。
+/// * `show_hidden_files` - 是否勾选“显示隐藏文件”菜单项。
+///
+/// # Returns
+///
+/// 菜单项更新成功时返回 `Ok(())`。
+///
+/// # Errors
+///
+/// 当应用菜单、显示子菜单或目标菜单项不存在，或菜单状态更新失败时返回错误。
 #[tauri::command]
 fn set_show_hidden_files_menu_checked(
     app: tauri::AppHandle,
@@ -43,21 +79,37 @@ fn set_show_hidden_files_menu_checked(
     Ok(())
 }
 
+/// 本地目录列表返回给前端的条目。
 #[derive(serde::Serialize)]
 struct FileEntry {
+    /// 文件或目录名称。
     name: String,
+    /// 是否为目录；目录大小由前端按需递归统计。
     #[serde(rename = "isDirectory")]
     is_directory: bool,
+    /// 普通文件的字节数，目录固定返回 0。
     size: u64,
 }
 
+/// 拖放路径检查后返回给前端的本地条目。
 #[derive(serde::Serialize)]
 struct LocalPathEntry {
+    /// 规范化前由调用方提供的本地路径。
     path: String,
+    /// 是否为目录。
     #[serde(rename = "isDirectory")]
     is_directory: bool,
 }
 
+/// 获取当前用户主目录，兼容 Windows、macOS 和 Linux。
+///
+/// # Returns
+///
+/// 返回当前用户主目录的跨平台绝对路径。
+///
+/// # Errors
+///
+/// 当操作系统无法解析当前用户主目录时返回错误。
 #[tauri::command]
 fn get_home_dir() -> Result<String, String> {
     dirs::home_dir()
@@ -65,6 +117,19 @@ fn get_home_dir() -> Result<String, String> {
         .ok_or_else(|| "Failed to get home directory".to_string())
 }
 
+/// 读取本地目录的直接子项，不递归计算目录大小。
+///
+/// # Arguments
+///
+/// * `path` - 要读取的本地目录路径。
+///
+/// # Returns
+///
+/// 返回直接子项数组；普通文件包含字节数，目录的大小固定为 `0`。
+///
+/// # Errors
+///
+/// 当路径不存在、不是目录或目录读取失败时返回错误。
 #[tauri::command]
 fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
     let path = Path::new(path);
@@ -102,6 +167,19 @@ fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
     }
 }
 
+/// 校验拖放到窗口的本地路径，拒绝符号链接和特殊文件。
+///
+/// # Arguments
+///
+/// * `paths` - 拖放事件提供的本地文件或目录路径数组。
+///
+/// # Returns
+///
+/// 返回通过校验的路径条目数组，并标注每个条目是否为目录。
+///
+/// # Errors
+///
+/// 当路径无法读取、是符号链接或属于不支持的特殊文件类型时返回错误。
 #[tauri::command]
 fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
     paths
@@ -124,11 +202,26 @@ fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String
         .collect()
 }
 
+/// 返回当前运行环境的操作系统标识。
+///
+/// # Returns
+///
+/// 返回 Rust 编译目标对应的操作系统名称，例如 `windows`、`macos` 或 `linux`。
 #[tauri::command]
 fn get_platform() -> String {
     std::env::consts::OS.to_string()
 }
 
+/// 列出本地可浏览根路径；Windows 返回逻辑盘符，其余平台返回根目录。
+///
+/// # Returns
+///
+/// 返回可供文件浏览器切换的根路径数组。
+///
+/// # Errors
+///
+/// 当前实现仅在 Windows 原生盘符查询失败且无法构造回退结果时可能返回错误；
+/// 非 Windows 平台始终返回根目录。
 #[tauri::command]
 fn list_drives() -> Result<Vec<String>, String> {
     #[cfg(target_os = "windows")]
@@ -173,6 +266,11 @@ fn list_drives() -> Result<Vec<String>, String> {
     }
 }
 
+/// 创建并运行 Tauri 应用，注册插件、菜单和全部 IPC 命令。
+///
+/// # Returns
+///
+/// 此函数持续运行 Tauri 事件循环，不返回应用运行结果。
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

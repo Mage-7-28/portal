@@ -1,3 +1,7 @@
+/**
+ * 文件浏览器业务容器。
+ * 负责连接配置、凭据生命周期、远程目录请求、预览资源和页面级错误恢复。
+ */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { Modal, Progress } from 'antd'
@@ -13,6 +17,48 @@ import PasswordPromptModal from './PasswordPromptModal.jsx'
 import { notification } from '../utils/notificationUtils.js'
 import { closeTerminalWindows } from '../utils/terminalWindow.js'
 
+/**
+ * @typedef {Object} ConnectionProfile
+ * @property {string} id - 持久化连接配置的稳定标识。
+ * @property {string} name - 列表中展示的连接名称。
+ * @property {string} host - SSH 服务器主机名或 IP 地址。
+ * @property {number} port - SSH 服务端口。
+ * @property {string} username - 登录用户名。
+ * @property {'password'} authMethod - 当前支持的认证方式。
+ * @property {string|null} hostKeyFingerprint - 用户确认过的主机密钥指纹。
+ * @property {string} createdAt - 配置创建时间。
+ * @property {string} updatedAt - 配置最近更新时间。
+ */
+
+/**
+ * @typedef {Object} ConnectionCredentials
+ * @property {string} password - 仅保存在当前进程内存中的会话密码。
+ */
+
+/**
+ * @typedef {Object} RemoteEntry
+ * @property {string} name - 当前目录中展示的文件或目录名称。
+ * @property {string} path - 服务器返回的完整远程路径。
+ * @property {boolean} isDirectory - 是否为目录。
+ * @property {string} [kind] - 远程条目类型，例如 file、directory 或 symlink。
+ * @property {number} [size] - 文件或链接自身的字节数。
+ * @property {number} [modifiedAt] - 服务器返回的修改时间戳。
+ */
+
+/**
+ * @typedef {Object} OperationStatus
+ * @property {(message: string) => void} start - 发布操作开始状态。
+ * @property {(progress: number, message: string, details?: Object) => void} update - 发布操作进度状态。
+ * @property {() => void} dismiss - 关闭本次操作状态。
+ */
+
+/**
+ * 将旧版本或外部存储中的连接配置迁移为当前统一结构。
+ *
+ * @param {unknown} profile - 外部存储中读取到的原始配置。
+ * @param {number} index - 原始配置数组中的索引，用于生成旧配置 ID。
+ * @returns {ConnectionProfile|null} 可用的当前配置；缺少必要字段时返回 null。
+ */
 const normalizeProfile = (profile, index) => {
   if (!profile || typeof profile !== 'object' || !profile.host || !profile.username) return null
   return {
@@ -29,8 +75,20 @@ const normalizeProfile = (profile, index) => {
   }
 }
 
+/**
+ * 按最近更新时间排序连接配置，保证最近使用的项目优先展示。
+ *
+ * @param {ConnectionProfile[]} profiles - 待排序的连接配置。
+ * @returns {ConnectionProfile[]} 新数组，原数组不会被修改。
+ */
 const sortProfiles = (profiles) => [...profiles].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
 
+/**
+ * 规范化跨平台远程路径，同时保留 Windows 盘符根目录。
+ *
+ * @param {string|undefined|null} path - 用户输入或服务器返回的远程路径。
+ * @returns {string} 使用 `/` 分隔符的远程路径。
+ */
 const normalizeRemotePath = (path) => {
   const normalized = String(path || '/').trim().replaceAll('\\', '/')
   const driveOnly = /^([A-Za-z]):$/.exec(normalized)
@@ -38,12 +96,25 @@ const normalizeRemotePath = (path) => {
   return normalized || '/'
 }
 
+/**
+ * 在远程路径上追加一个文件名或目录名。
+ *
+ * @param {string} base - 当前远程目录路径。
+ * @param {string} name - 要追加的项目名称。
+ * @returns {string} 规范化后的远程子路径。
+ */
 const joinRemotePath = (base, name) => {
   const normalizedBase = normalizeRemotePath(base)
   if (normalizedBase === '/') return `/${ name }`
   return `${ normalizedBase.replace(/\/+$/, '') }/${ name }`
 }
 
+/**
+ * 计算当前远程路径的父级，根目录和 Windows 盘符根目录保持不变。
+ *
+ * @param {string} path - 当前远程目录路径。
+ * @returns {string} 可安全进入的父目录路径。
+ */
 const parentRemotePath = (path) => {
   const normalized = normalizeRemotePath(path)
   if (normalized === '/') return '/'
@@ -54,6 +125,12 @@ const parentRemotePath = (path) => {
   return parent || '/'
 }
 
+/**
+ * 从远程用户主目录推导 Windows 盘符；POSIX 路径返回空列表。
+ *
+ * @param {string} path - 服务器返回的用户主目录。
+ * @returns {string[]} Windows 盘符根路径数组，或空数组。
+ */
 const deriveRemoteDrives = (path) => {
   const match = /^([A-Za-z]):(?:[/\\]|$)/.exec(path || '')
   return match ? [`${ match[1] }:/`] : []
@@ -61,6 +138,11 @@ const deriveRemoteDrives = (path) => {
 
 // rAF 回调发生在重绘前，再通过宏任务让浏览器先完成 loading 绘制，然后才调用原生 SSH 接口。
 const CONNECTION_LOADING_DELAY_MS = 80
+/**
+ * 等待一次绘制再触发原生连接调用，让 loading 状态先被用户看到。
+ *
+ * @returns {Promise<void>} 下一次浏览器绘制及最小 loading 展示时间结束后的 Promise。
+ */
 const waitForNextPaint = () => new Promise(resolve => {
   if (typeof window === 'undefined') {
     setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
@@ -90,37 +172,68 @@ const waitForNextPaint = () => new Promise(resolve => {
   window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
 })
 
+/**
+ * 管理 SSH 连接、远程目录、传输、预览和会话密码生命周期。
+ *
+ * @param {Object} props - 文件浏览器容器属性。
+ * @param {boolean} [props.showHiddenFiles=false] - 是否请求并统计以点开头的远程项目。
+ * @returns {JSX.Element} 连接列表、密码弹窗或已连接的文件浏览器视图。
+ */
 function FileBrowserPanel({ showHiddenFiles = false }) {
   // 只把以点开头视为隐藏项目。这是各类 SSH/SFTP 服务端可稳定提供的共同语义。
   const includeHiddenFiles = showHiddenFiles === true
+  // 持久化连接配置及当前进程内的临时凭据缓存。
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
+  // 当前活动连接的展示配置和 SFTP 会话 ID。
   const [ currentConnection, setCurrentConnection ] = useState(null)
   const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
+  // 远程文件浏览位置、列表数据及目录加载状态。
   const [ currentPath, setCurrentPath ] = useState('/')
   const [ files, setFiles ] = useState([])
   const [ loading, setLoading ] = useState(false)
   const [ error, setError ] = useState(null)
+  // 远程用户主目录和可选 Windows 盘符，用于路径栏快捷定位。
   const [ homeDir, setHomeDir ] = useState('')
   const [ drives, setDrives ] = useState([])
+  // 密码输入流程及连接按钮的异步状态。
   const [ passwordPrompt, setPasswordPrompt ] = useState(null)
   const [ passwordPromptError, setPasswordPromptError ] = useState('')
   const [ passwordLoading, setPasswordLoading ] = useState(false)
   const [ connectingId, setConnectingId ] = useState(null)
+  // 文件预览内容、阶段、目标名称和读取进度。
   const [ preview, setPreview ] = useState(null)
   const [ previewLoading, setPreviewLoading ] = useState(false)
   const [ previewStage, setPreviewStage ] = useState('reading')
   const [ previewTargetName, setPreviewTargetName ] = useState('')
   const [ previewProgress, setPreviewProgress ] = useState(null)
+  // 请求序号用于丢弃过期响应；预览 URL 用于在替换或卸载时释放 Blob 资源。
   const requestId = useRef(0)
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
+  // 不触发渲染的连接标记，供断线监听和异步探测判断事件是否仍属于当前会话。
   const activeConnectionIdRef = useRef(null)
   const connectingIdRef = useRef(null)
+  // 为删除/重命名进度生成单调序号，避免相同毫秒时间戳导致 maskId 冲突。
   const operationStatusSequence = useRef(0)
 
+  /**
+   * 创建带 maskId 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
+   *
+   * @param {'delete'|'rename'} operation - 当前远程变更操作类型。
+   * @param {string} fileName - 进度区域展示的文件或目录名称。
+   * @returns {OperationStatus} 发布开始、更新和关闭事件的操作状态对象。
+   */
   const createOperationStatus = (operation, fileName) => {
     const maskId = `file-operation-${ operation }-${ Date.now() }-${ ++operationStatusSequence.current }`
+    /**
+     * 向共享状态栏发布当前操作的统一载荷。
+     *
+     * @param {number} progress - 0 到 100 的操作进度。
+     * @param {string} message - 状态栏主提示文本。
+     * @param {Object} [details={}] - 队列位置、阶段等附加字段。
+     * @returns {void}
+     */
     const publish = (progress, message, details = {}) => {
       PubSubBusinessKeyEnum.SEND_MASK({
         maskId,
@@ -138,12 +251,22 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 释放上一张图片预览生成的 Object URL，避免反复预览造成内存增长。
+   *
+   * @returns {void}
+   */
   const releasePreviewUrl = useCallback(() => {
     if (!previewUrlRef.current) return
     window.URL.revokeObjectURL(previewUrlRef.current)
     previewUrlRef.current = null
   }, [])
 
+  /**
+   * 关闭预览并递增请求序号，使尚未完成的旧请求无法回写页面。
+   *
+   * @returns {void}
+   */
   const closePreview = useCallback(() => {
     previewRequestId.current += 1
     releasePreviewUrl()
@@ -154,6 +277,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     setPreviewStage('reading')
   }, [releasePreviewUrl])
 
+  /**
+   * 清空远程视图并关闭当前连接相关的终端与缓存任务。
+   *
+   * @returns {void}
+   */
   const resetRemoteView = useCallback(() => {
     void closeTerminalWindows().catch(() => undefined)
     activeConnectionIdRef.current = null
@@ -169,16 +297,20 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     setLoading(false)
   }, [closePreview])
 
+  // 首次加载连接配置；配置迁移失败由上层错误边界或通知流程处理。
   useEffect(() => {
     void loadConnections()
   }, [])
 
+  // 组件卸载时释放最后一次图片预览的 Object URL。
   useEffect(() => () => releasePreviewUrl(), [releasePreviewUrl])
 
+  // 将当前会话 ID镜像到 ref，供不应重新订阅的异步回调读取最新值。
   useEffect(() => {
     activeConnectionIdRef.current = currentConnectionId
   }, [currentConnectionId])
 
+  // 订阅 SFTP 管理器的意外断线事件，并仅处理当前活动会话。
   useEffect(() => sftpManager.subscribeConnectionLost(({ id, reason }) => {
     if (activeConnectionIdRef.current !== id) return
     resetRemoteView()
@@ -192,6 +324,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     const connectionId = currentConnectionId
     let disposed = false
     let probing = false
+    /**
+     * 对当前会话执行一次轻量探测；同一时间只允许一个探测在途。
+     *
+     * @returns {Promise<void>} 探测完成或断线清理完成后的 Promise。
+     */
     const probe = async () => {
       if (disposed || probing || activeConnectionIdRef.current !== connectionId) return
       probing = true
@@ -214,6 +351,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }, [ currentConnectionId, resetRemoteView ])
 
+  /**
+   * 从持久化 Store 读取连接配置并迁移旧数据结构。
+   *
+   * @returns {Promise<void>} 连接状态更新和必要的数据迁移完成后的 Promise。
+   */
   const loadConnections = async () => {
     const saved = await store.get(StoreKeys.SSH_CONNECTIONS)
     const profiles = Array.isArray(saved)
@@ -225,12 +367,27 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 按最近使用时间排序后保存连接配置。
+   *
+   * @param {ConnectionProfile[]} profiles - 要持久化的连接配置。
+   * @returns {Promise<void>} Store 和 React 状态更新完成后的 Promise。
+   * @throws {Error} 当本地 Store 写入失败时抛出。
+   */
   const saveConnections = async (profiles) => {
     const sorted = sortProfiles(profiles)
     await store.set(StoreKeys.SSH_CONNECTIONS, sorted)
     setConnections(sorted)
   }
 
+  /**
+   * 保存新建连接配置，并将密码仅缓存于本次进程内存。
+   *
+   * @param {ConnectionProfile} profile - 已通过表单校验的新连接配置。
+   * @param {ConnectionCredentials} credentialsForProfile - 不会持久化的会话密码。
+   * @returns {Promise<void>} 配置保存和内存凭据更新完成后的 Promise。
+   * @throws {Error} 当配置持久化失败时抛出。
+   */
   const handleAddConnection = async (profile, credentialsForProfile) => {
     const next = [ profile, ...connections.filter(item => item.id !== profile.id) ]
     await saveConnections(next)
@@ -241,6 +398,12 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     })
   }
 
+  /**
+   * 经用户确认后删除连接配置、内存密码及相关远程会话。
+   *
+   * @param {string} connectionId - 要删除的连接配置 ID。
+   * @returns {Promise<void>} 删除或取消确认流程完成后的 Promise。
+   */
   const handleDeleteConnection = async (connectionId) => {
     if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
     if (currentConnectionId === connectionId) await handleDisconnect({ skipConfirm: true })
@@ -254,6 +417,14 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     void notification.success('连接已删除')
   }
 
+  /**
+   * 合并并保存单个连接配置的字段变更。
+   *
+   * @param {string} connectionId - 要更新的连接配置 ID。
+   * @param {Partial<ConnectionProfile>} changes - 需要覆盖的配置字段。
+   * @returns {Promise<ConnectionProfile|undefined>} 更新后的配置；未找到时返回 undefined。
+   * @throws {Error} 当本地 Store 写入失败时抛出。
+   */
   const updateProfile = async (connectionId, changes) => {
     const next = connections.map(profile => profile.id === connectionId
       ? { ...profile, ...changes, updatedAt: new Date().toISOString() }
@@ -262,6 +433,15 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     return next.find(profile => profile.id === connectionId)
   }
 
+  /**
+   * 执行连接、主机指纹确认、首个目录加载和凭据内存缓存。
+   *
+   * 错误会转换为用户可读通知；认证失败时会重新打开密码输入框。
+   *
+   * @param {ConnectionProfile} connection - 要连接的持久化配置。
+   * @param {ConnectionCredentials|string} credentialsForProfile - 本次会话的密码对象或兼容旧调用的密码字符串。
+   * @returns {Promise<void>} 连接成功、失败清理或重试提示完成后的 Promise。
+   */
   const connectWithPassword = async (connection, credentialsForProfile) => {
     if (connectingIdRef.current) return
     connectingIdRef.current = connection.id
@@ -348,6 +528,12 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 处理用户点击连接；没有缓存密码时先显示密码输入框。
+   *
+   * @param {ConnectionProfile} connection - 用户选择的连接配置。
+   * @returns {Promise<void>} 密码弹窗显示或连接流程完成后的 Promise。
+   */
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
     const credentialsValue = credentials.get(connection.id) || { password: '' }
@@ -360,12 +546,23 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     await connectWithPassword(connection, credentialsValue)
   }
 
+  /**
+   * 关闭密码输入框并清理当前认证错误状态。
+   *
+   * @returns {void}
+   */
   const handlePasswordPromptCancel = () => {
     setPasswordPrompt(null)
     setPasswordPromptError('')
     setPasswordLoading(false)
   }
 
+  /**
+   * 提交密码输入框，并异步开始建立连接。
+   *
+   * @param {{password: string}} values - 密码表单提交值。
+   * @returns {void}
+   */
   const handlePasswordPromptSubmit = ({ password }) => {
     if (!passwordPrompt || connectingId || connectingIdRef.current) return
     const connection = passwordPrompt
@@ -375,6 +572,13 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     )
   }
 
+  /**
+   * 主动断开当前连接，并清理终端、会话和远程视图状态。
+   * 关闭路径会抑制重复的连接丢失提示。
+   *
+   * @param {{skipConfirm?: boolean}} [options={}] - 是否跳过断开确认弹窗。
+   * @returns {Promise<void>} 终端、SSH 会话和远程视图清理完成后的 Promise。
+   */
   const handleDisconnect = async ({ skipConfirm = false } = {}) => {
     if (currentConnectionId && !skipConfirm) {
       const accepted = await confirm(
@@ -396,6 +600,13 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     resetRemoteView()
   }
 
+  /**
+   * 加载远程目录，并通过请求序号丢弃已经过期的响应。
+   *
+   * @param {string} path - 要加载的远程目录路径。
+   * @param {string|null} [connectionId=currentConnectionId] - 使用的 SSH 连接 ID。
+   * @returns {Promise<void>} 目录列表加载或错误状态更新完成后的 Promise。
+   */
   const loadRemoteDirectory = useCallback(async (path, connectionId = currentConnectionId) => {
     if (!connectionId) {
       setError('尚未连接服务器')
@@ -435,7 +646,9 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }, [ currentConnectionId, includeHiddenFiles, resetRemoteView ])
 
+  // 记录已经应用到远程列表的隐藏文件偏好，避免首次渲染重复刷新目录。
   const appliedHiddenFilesPreferenceRef = useRef(includeHiddenFiles)
+  // 偏好切换后重新加载当前目录，使列表和目录大小统计使用同一过滤规则。
   useEffect(() => {
     const preferenceChanged = appliedHiddenFilesPreferenceRef.current !== includeHiddenFiles
     appliedHiddenFilesPreferenceRef.current = includeHiddenFiles
@@ -445,6 +658,12 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     void loadRemoteDirectory(currentPath, currentConnectionId)
   }, [ currentConnectionId, currentPath, includeHiddenFiles, loadRemoteDirectory ])
 
+  /**
+   * 处理远程路径输入框的回车提交。
+   *
+   * @param {React.KeyboardEvent<HTMLInputElement>} event - 路径输入框键盘事件。
+   * @returns {void}
+   */
   const handlePathSubmit = (event) => {
     if (event.key === 'Enter') {
       event.preventDefault()
@@ -452,6 +671,12 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 处理目录进入或文件预览请求；超过大小限制的文件直接提示下载。
+   *
+   * @param {RemoteEntry} entry - 用户点击的远程文件或目录条目。
+   * @returns {Promise<void>} 目录加载、文件读取或预览状态更新完成后的 Promise。
+   */
   const handleItemClick = async (entry) => {
     if (entry.isDirectory) {
       await loadRemoteDirectory(joinRemotePath(currentPath, entry.name))
@@ -534,19 +759,43 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 返回当前远程目录的父目录。
+   *
+   * @returns {void}
+   */
   const handleGoBack = () => {
     if (currentPath === '/' || !currentConnectionId) return
     void loadRemoteDirectory(parentRemotePath(currentPath))
   }
 
+  /**
+   * 重新读取当前远程目录。
+   *
+   * @returns {void}
+   */
   const handleRefresh = () => void loadRemoteDirectory(currentPath)
 
+  /**
+   * 在当前远程目录创建子目录并刷新列表。
+   *
+   * @param {string} name - 已通过界面校验的新目录名称。
+   * @returns {Promise<void>} 目录创建和当前列表刷新完成后的 Promise。
+   * @throws {Error} 当远程目录创建或列表刷新失败时抛出。
+   */
   const handleCreateDirectory = async (name) => {
     const targetPath = joinRemotePath(currentPath, name)
     await sftpManager.createRemoteDirectory(currentConnectionId, targetPath)
     await loadRemoteDirectory(currentPath)
   }
 
+  /**
+   * 批量下载选中的远程项目，逐项处理覆盖确认并发布进度。
+   *
+   * @param {RemoteEntry[]} entries - 要下载的远程文件或目录条目。
+   * @param {() => void} [onConfirmed] - 用户确认下载后调用的回调。
+   * @returns {Promise<boolean>} 全部项目成功下载时返回 true，否则返回 false。
+   */
   const handleDownloadItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
 
@@ -578,6 +827,15 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     let skippedCount = 0
     let transferId = null
     let cancelled = false
+    /**
+     * 把单项下载回调转换为批量队列状态栏可消费的进度载荷。
+     *
+     * @param {number} progress - 当前文件进度百分比。
+     * @param {RemoteEntry} entry - 当前队列中的远程项目。
+     * @param {number} queueIndex - 当前项目在批量队列中的索引。
+     * @param {Object} [payload={}] - 目录下载返回的文件级进度信息。
+     * @returns {void}
+     */
     const publishProgress = (progress, entry, queueIndex, payload = {}) => {
       const isDirectoryDownload = Boolean(entry.isDirectory)
       const fileIndex = Number(payload.fileIndex)
@@ -597,6 +855,14 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
       })
     }
+    /**
+     * 下载队列中的单个项目，并在结束时清空可取消的传输 ID。
+     *
+     * @param {RemoteEntry} entry - 要下载的远程项目。
+     * @param {number} queueIndex - 项目在队列中的索引。
+     * @param {boolean} overwrite - 是否覆盖已存在的本地目标。
+     * @returns {Promise<void>} 单项下载完成后的 Promise。
+     */
     const downloadOne = async (entry, queueIndex, overwrite) => {
       transferId = null
       const remotePath = joinRemotePath(currentPath, entry.name)
@@ -686,6 +952,15 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     return false
   }
 
+  /**
+   * 删除一个远程项目，并将递归删除进度映射到共享操作状态栏。
+   *
+   * @param {RemoteEntry} entry - 要删除的远程文件或目录条目。
+   * @param {OperationStatus} status - 发布删除进度的操作状态对象。
+   * @param {{queueIndex?: number, queueTotal?: number, showBatchPosition?: boolean}} [options={}] - 批量删除进度配置。
+   * @returns {Promise<void>} 远程删除任务完成后的 Promise。
+   * @throws {Error} 当远程删除失败或连接不可用时抛出。
+   */
   const deleteRemoteEntry = async (entry, status, options = {}) => {
     const {
       queueIndex = 0,
@@ -728,6 +1003,12 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     )
   }
 
+  /**
+   * 询问确认后删除单个远程项目，并刷新当前目录。
+   *
+   * @param {RemoteEntry} entry - 要删除的远程文件或目录条目。
+   * @returns {Promise<void>} 删除、刷新和通知处理完成后的 Promise。
+   */
   const handleDeleteItem = async (entry) => {
     const description = entry.isDirectory
       ? `确定删除文件夹“${ entry.name }”及其所有内容吗？此操作无法撤销。`
@@ -755,6 +1036,13 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 询问确认后批量删除远程项目，并汇总成功与失败结果。
+   *
+   * @param {RemoteEntry[]} entries - 要删除的远程文件或目录条目。
+   * @param {() => void} [onConfirmed] - 用户确认删除后调用的回调。
+   * @returns {Promise<boolean>} 全部项目删除成功时返回 true，否则返回 false。
+   */
   const handleDeleteItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
     const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
@@ -813,6 +1101,14 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 重命名远程项目并刷新当前目录；目录大小缓存由管理器统一失效。
+   *
+   * @param {RemoteEntry} entry - 待重命名的远程文件或目录条目。
+   * @param {string} name - 用户输入的新名称。
+   * @returns {Promise<void>} 重命名和目录刷新完成后的 Promise。
+   * @throws {Error} 当名称无效或远程重命名失败时抛出。
+   */
   const handleRenameItem = async (entry, name) => {
     const trimmedName = name.trim()
     if (!trimmedName || trimmedName === entry.name) return
@@ -835,6 +1131,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
   }
 
+  /**
+   * 按预览描述符渲染图片、文本、代码或加载状态。
+   *
+   * @returns {JSX.Element|null} 当前预览内容；没有预览时返回 null。
+   */
   const renderPreviewContent = () => {
     if (previewLoading) {
       const current = previewProgress?.current || 0

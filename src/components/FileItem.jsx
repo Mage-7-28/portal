@@ -1,3 +1,7 @@
+/**
+ * 远程文件列表项。
+ * 负责单项预览、下载、重命名、删除和可见范围内的目录大小统计。
+ */
 import React, { useEffect, useRef, useState } from 'react'
 import { Button, Input, List, Modal, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
@@ -8,8 +12,22 @@ import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 
+/**
+ * 拼接远程 POSIX 风格路径，避免重复分隔符影响 SFTP 调用。
+ *
+ * @param {string} base - 当前远程目录路径。
+ * @param {string} name - 要追加的文件或目录名称。
+ * @returns {string} 规范化后的远程子路径。
+ */
 const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
+/**
+ * 将 Rust 返回的目录大小统一为可展示的聚合结果。
+ *
+ * @param {number|Object} result - Rust 返回的旧版数字结果或统计对象。
+ * @returns {{size: number, complete: boolean, inaccessibleCount: number, scannedEntries: number}} 规范化统计结果。
+ * @throws {Error} 当结果不是非负有限大小时抛出。
+ */
 const normalizeDirectorySizeResult = (result) => {
   const size = Number(typeof result === 'object' ? result?.size : result)
   if (!Number.isFinite(size) || size < 0) throw new Error('目录大小无效')
@@ -21,6 +39,14 @@ const normalizeDirectorySizeResult = (result) => {
   }
 }
 
+/**
+ * 为权限不足或目录已变化的非完整统计生成可解释提示。
+ *
+ * @param {Object} details - 部分统计信息。
+ * @param {number} details.inaccessibleCount - 无法访问的子目录数。
+ * @param {number} details.scannedEntries - 已扫描的目录条目数。
+ * @returns {string} 适合 Tooltip 展示的部分统计说明。
+ */
 const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
   const inaccessibleHint = inaccessibleCount > 0
     ? `${ inaccessibleCount } 个子目录无法读取`
@@ -29,16 +55,34 @@ const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
   return `已统计可访问项目；${ inaccessibleHint }，实际大小可能更大${ scannedHint }`
 }
 
+/**
+ * 渲染远程文件列表中的单项，并按需统计目录大小。
+ *
+ * @param {Object} props - 文件项属性。
+ * @param {{name: string, path?: string, isDirectory: boolean, size?: number, modifiedAt?: number}} props.entry - 远程条目数据。
+ * @param {string} props.currentPath - 当前远程目录路径。
+ * @param {string} props.connectionId - 当前 SSH 连接 ID。
+ * @param {boolean} [props.showHiddenFiles=false] - 是否按显示隐藏文件设置统计目录大小。
+ * @param {boolean} props.selected - 当前条目是否被选中。
+ * @param {(entry: Object, event: Object) => void} props.onSelect - 条目选中回调。
+ * @param {() => void} props.onActivate - 双击进入目录或打开文件的回调。
+ * @param {() => Promise<void>} props.onDelete - 删除条目回调。
+ * @param {(name: string) => Promise<void>} props.onRename - 重命名条目回调。
+ * @returns {JSX.Element} 远程文件/目录列表行。
+ */
 const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, selected, onSelect, onActivate, onDelete, onRename }) => {
+  // 单项传输、删除和重命名的 loading 状态，分别阻止同一操作重复提交。
   const [ downloading, setDownloading ] = useState(false)
   const [ deleting, setDeleting ] = useState(false)
   const [ renameOpen, setRenameOpen ] = useState(false)
   const [ renameValue, setRenameValue ] = useState(entry.name)
   const [ renaming, setRenaming ] = useState(false)
+  // 目录大小的异步结果、加载/错误状态及可见性开关。
   const [ directorySize, setDirectorySize ] = useState(null)
   const [ directorySizeLoading, setDirectorySizeLoading ] = useState(false)
   const [ directorySizeError, setDirectorySizeError ] = useState(false)
   const [ directorySizeVisible, setDirectorySizeVisible ] = useState(false)
+  // 行节点供 IntersectionObserver 使用；缓存键用于避免同一版本重复统计。
   const rowRef = useRef(null)
   const completedDirectorySizeKeyRef = useRef('')
   const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
@@ -47,6 +91,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
   const includeHiddenFiles = showHiddenFiles === true
   const directorySizeKey = `${ connectionId }\u0000${ remotePath }\u0000${ directorySizeCacheVersion ?? '' }\u0000${ includeHiddenFiles ? 'with-hidden' : 'without-hidden' }`
 
+  // 仅在目录行进入可视区域附近时触发统计，减少大目录列表的并发扫描。
   useEffect(() => {
     if (!entry.isDirectory) {
       setDirectorySizeVisible(false)
@@ -71,6 +116,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     return () => observer.disconnect()
   }, [ entry.isDirectory, remotePath ])
 
+  // 当前条目、连接或隐藏文件偏好变化时，废弃旧统计结果并恢复等待状态。
   useEffect(() => {
     completedDirectorySizeKeyRef.current = ''
     setDirectorySize(null)
@@ -78,6 +124,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     setDirectorySizeError(false)
   }, [ directorySizeKey, entry.isDirectory ])
 
+  // 目录可见时发起递归大小请求；卸载或滚出有效生命周期时取消信号请求。
   useEffect(() => {
     let disposed = false
     const abortController = typeof window !== 'undefined' && typeof window.AbortController === 'function'
@@ -116,6 +163,12 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     }
   }, [ connectionId, directorySizeCacheVersion, directorySizeKey, directorySizeVisible, entry.isDirectory, includeHiddenFiles, remotePath ])
 
+  /**
+   * 统一处理单文件和文件夹下载，并在覆盖前再次确认。
+   *
+   * @param {Object} event - 点击事件，用于阻止列表行激活。
+   * @returns {Promise<void>} 下载、覆盖确认和进度状态清理完成后的 Promise。
+   */
   const handleDownload = async (event) => {
     event.stopPropagation()
     if (downloading) return
@@ -141,6 +194,13 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     )
     if (!accepted) return
     let transferId = null
+    /**
+     * 将单项下载回调转换为状态栏进度，并关联可取消的传输 ID。
+     *
+     * @param {number} progress - 当前下载进度百分比。
+     * @param {Object} [payload={}] - 目录下载返回的文件级和总进度信息。
+     * @returns {void}
+     */
     const publishProgress = (progress, payload = {}) => {
       const fileIndex = Number(payload.fileIndex)
       const fileTotal = Number(payload.fileTotal)
@@ -156,6 +216,12 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
         onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
       })
     }
+    /**
+     * 执行一次文件或目录下载；覆盖重试会复用同一进度发布逻辑。
+     *
+     * @param {boolean} overwrite - 是否允许覆盖本地同名目标。
+     * @returns {Promise<void>} 下载任务完成后的 Promise。
+     */
     const performDownload = async (overwrite) => {
       transferId = null
       const download = entry.isDirectory
@@ -212,6 +278,12 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     }
   }
 
+  /**
+   * 校验远程名称后提交重命名请求，禁止路径分隔符和特殊目录名。
+   *
+   * @param {Object} [event] - 来自表单提交或键盘事件的可选事件对象。
+   * @returns {Promise<void>} 重命名及状态清理完成后的 Promise。
+   */
   const submitRename = async (event) => {
     event?.preventDefault()
     event?.stopPropagation()
@@ -228,6 +300,12 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     }
   }
 
+  /**
+   * 删除当前远程项目；实际递归和进度由父级及 SFTP 管理器负责。
+   *
+   * @param {Object} event - 删除按钮点击事件。
+   * @returns {Promise<void>} 删除回调和本地 loading 状态清理完成后的 Promise。
+   */
   const handleDelete = async (event) => {
     event.stopPropagation()
     if (deleting) return

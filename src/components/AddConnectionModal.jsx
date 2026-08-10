@@ -1,3 +1,7 @@
+/**
+ * 新建 SSH 连接配置弹窗。
+ * 测试连接阶段可先确认主机指纹，保存阶段只把密码交给当前进程内的连接管理器。
+ */
 import React, { useEffect, useState } from 'react'
 import { Button, Form, Input, Modal, Typography } from 'antd'
 import AppIcon from './AppIcon'
@@ -8,15 +12,32 @@ import { notification } from '../utils/notificationUtils.js'
 
 const { Text } = Typography
 
+/**
+ * 创建连接配置的稳定标识；浏览器环境没有 randomUUID 时使用时间戳兜底。
+ *
+ * @returns {string} 可用于连接配置和 Tauri 会话的唯一 ID。
+ */
 const newId = () => {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID()
   return `connection-${ Date.now() }`
 }
 
+/**
+ * 新建 SSH 连接配置弹窗。
+ *
+ * @param {Object} props - 组件属性。
+ * @param {boolean} props.visible - 是否显示弹窗。
+ * @param {() => void} props.onCancel - 关闭弹窗的回调。
+ * @param {(profile: Object, credentials: {password: string}) => Promise<void>} props.onAddSuccess - 保存连接配置的回调。
+ * @returns {JSX.Element} 连接表单、主机指纹确认结果和操作按钮。
+ */
 const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
+  // Ant Design 表单实例，用于校验、读取和在弹窗关闭时重置字段。
   const [form] = Form.useForm()
+  // 连接测试请求状态及最近一次测试/指纹信任结果。
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
+  // 根据测试结果决定结果面板的语义颜色（成功、待确认或失败）。
   const testResultColor = testResult?.success
     ? THEME_SUCCESS
     : testResult?.requiresHostKeyConfirmation
@@ -31,6 +52,11 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
     }
   }, [ form, visible ])
 
+  /**
+   * 先验证网络和主机指纹，只有确认指纹后才允许提交连接配置。
+   *
+   * @returns {Promise<void>} 测试流程完成后的 Promise；失败信息写入本地状态。
+   */
   const handleTestConnection = async () => {
     try {
       const values = await form.validateFields()
@@ -82,6 +108,12 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
     }
   }
 
+  /**
+   * 将表单值转换为连接配置；未知主机指纹会先弹出确认流程。
+   *
+   * @param {{name: string, host: string, port: number|string, username: string, password?: string}} values - Ant Design 表单值。
+   * @returns {Promise<void>} 保存回调和成功/失败通知完成后的 Promise。
+   */
   const handleSubmit = async (values) => {
     const profile = {
       id: newId(),

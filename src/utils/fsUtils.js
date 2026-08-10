@@ -1,9 +1,15 @@
+/**
+ * 本机文件系统 IPC 适配层，统一处理桌面端路径和平台差异。
+ *
+ * 所有原生调用都通过 Tauri 命令完成，浏览器环境保留可测试的降级路径。
+ */
 import { invoke } from '@tauri-apps/api/core'
 import { FileSizeUnits } from './common.js'
 
 /**
- * 获取当前系统的当前登录用户的绝对路径
- * @returns {Promise<string>} 用户主目录绝对路径
+ * 获取当前登录用户的主目录绝对路径。
+ *
+ * @returns {Promise<string>} 用户主目录；IPC 失败时返回 `/` 作为跨平台降级值。
  */
 export const getUserHomeDir = async () => {
   try {
@@ -17,9 +23,10 @@ export const getUserHomeDir = async () => {
 }
 
 /**
- * 获取指定路径下的所有文件和文件目录信息
- * @param {string} targetPath - 目标路径（可以是绝对路径或包含 ~/ 的路径）
- * @returns {Promise<Array>} 文件和目录信息数组
+ * 获取指定路径下的直接子项，并在前端排除隐藏文件。
+ *
+ * @param {string} targetPath - 目标路径，可以是绝对路径或包含 `~/` 的路径。
+ * @returns {Promise<Array<{name: string, isDirectory: boolean, size: number}>>} 按目录优先、名称排序的本地条目；读取失败时返回空数组。
  */
 export const getDirectoryContents = async (targetPath) => {
   try {
@@ -53,8 +60,9 @@ export const getDirectoryContents = async (targetPath) => {
 }
 
 /**
- * 获取系统平台
- * @returns {Promise<string>} 系统平台（win32、darwin、linux）
+ * 获取系统平台。
+ *
+ * @returns {Promise<string>} Rust 平台标识；IPC 失败时返回 `unknown`。
  */
 export const getPlatform = async () => {
   try {
@@ -67,8 +75,9 @@ export const getPlatform = async () => {
 }
 
 /**
- * 获取系统驱动器列表（Windows）或根目录（macOS/Linux）
- * @returns {Promise<Array>} 驱动器或根目录列表
+ * 获取系统驱动器列表（Windows）或根目录（macOS/Linux）。
+ *
+ * @returns {Promise<string[]>} 可用于本地文件浏览器的根路径列表；调用失败时返回 `/`。
  */
 export const getDrives = async () => {
   try {

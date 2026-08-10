@@ -1,3 +1,7 @@
+/**
+ * 远程文件浏览器视图。
+ * 父组件负责连接和目录数据，本组件负责路径工具栏、选择、上传、批量操作和预览交互。
+ */
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Upload } from 'antd'
 import AppIcon from './AppIcon'
@@ -12,16 +16,35 @@ import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 
+/**
+ * 从本地路径中提取用于上传列表展示的最后一级名称。
+ *
+ * @param {string} path - 本地文件或目录路径。
+ * @returns {string} 最后一级名称；无法识别时返回空字符串。
+ */
 const localPathName = (path) => String(path || '')
   .replace(/[\\/]+$/, '')
   .split(/[\\/]/)
   .pop() || ''
 
+/**
+ * 统一原生文件选择器返回的单路径、路径数组和空值。
+ *
+ * @param {string|string[]|null|undefined} result - Tauri 目录选择器的原始结果。
+ * @returns {string[]} 去重且非空的本地路径数组。
+ */
 const normalizeSelectedPaths = (result) => {
   const paths = result ? (Array.isArray(result) ? result : [result]) : []
   return [...new Set(paths.filter(path => typeof path === 'string' && path))]
 }
 
+/**
+ * 合并待上传项目并按本地路径去重，避免重复选择造成重复传输。
+ *
+ * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} previous - 当前上传队列。
+ * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} items - 新选择的上传项目。
+ * @returns {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} 合并后的上传队列。
+ */
 const mergeUploadItems = (previous, items) => {
   const existingPaths = new Set(previous.map(item => item.localPath))
   return [
@@ -30,8 +53,21 @@ const mergeUploadItems = (previous, items) => {
   ]
 }
 
+/**
+ * 获取列表项稳定键；远程路径优先于名称。
+ *
+ * @param {{path?: string, name?: string}|null|undefined} entry - 远程文件条目。
+ * @returns {string} 可用于选中状态的稳定键；条目无有效信息时返回空字符串。
+ */
 const getEntryKey = (entry) => entry?.path || entry?.name || ''
 
+/**
+ * 将原生拖放坐标换算为 CSS 像素后判断是否落在目标列表区域。
+ *
+ * @param {{x: number, y: number}|null|undefined} position - Tauri 原生拖放坐标。
+ * @param {Element|null} element - 文件列表的目标 DOM 元素。
+ * @returns {boolean} 坐标位于目标元素矩形范围内时返回 true。
+ */
 const isPositionInsideElement = (position, element) => {
   if (!position || !element || typeof window === 'undefined') return false
   const rect = element.getBoundingClientRect()
@@ -41,8 +77,42 @@ const isPositionInsideElement = (position, element) => {
   return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
+/**
+ * 拼接远程路径；SFTP 端始终使用 `/`，不跟随本机平台分隔符。
+ *
+ * @param {string} basePath - 当前远程目录路径。
+ * @param {string} name - 要追加的文件或目录名称。
+ * @returns {string} 规范化后的远程子路径。
+ */
 const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
+/**
+ * 渲染已连接服务器的远程文件浏览器和批量操作入口。
+ *
+ * @param {Object} props - 文件浏览器属性。
+ * @param {string} props.currentPath - 当前显示的远程目录路径。
+ * @param {Array<Object>} props.files - 当前目录的远程条目。
+ * @param {boolean} props.loading - 当前目录是否正在加载。
+ * @param {string|null} props.error - 目录读取错误信息。
+ * @param {Object|null} props.currentConnection - 当前连接的非敏感配置。
+ * @param {string|null} props.currentConnectionId - 当前 SSH 连接 ID。
+ * @param {boolean} props.showHiddenFiles - 是否显示隐藏项目。
+ * @param {string} props.homeDir - 远程用户主目录。
+ * @param {string[]} props.drives - 可切换的远程盘符列表。
+ * @param {() => void} props.handleGoBack - 返回上级目录回调。
+ * @param {(path: string) => void} props.handlePathChange - 路径输入变更回调。
+ * @param {(event: Object) => void} props.handlePathSubmit - 路径表单提交回调。
+ * @param {() => Promise<void>} props.handleRefresh - 刷新当前目录回调。
+ * @param {(entry: Object) => void} props.handleItemClick - 进入目录或打开文件回调。
+ * @param {(name: string) => Promise<void>} props.handleCreateDirectory - 创建目录回调。
+ * @param {(entry: Object) => Promise<void>} props.handleDeleteItem - 删除单个项目回调。
+ * @param {(entries: Object[], onComplete: () => void) => Promise<void>} props.handleDeleteItems - 批量删除回调。
+ * @param {(entries: Object[], onComplete: () => void) => Promise<void>} props.handleDownloadItems - 批量下载回调。
+ * @param {(entry: Object, name: string) => Promise<void>} props.handleRenameItem - 重命名回调。
+ * @param {(path: string) => void} props.handleDriveSelect - 选择远程盘符回调。
+ * @param {() => Promise<void>} props.handleDisconnect - 断开当前连接回调。
+ * @returns {JSX.Element} 路径工具栏、远程条目、上传对话框和批量操作控件。
+ */
 const FileBrowser = ({
   currentPath,
   files,
@@ -66,26 +136,33 @@ const FileBrowser = ({
   handleDriveSelect,
   handleDisconnect
 }) => {
+  // 新建目录弹窗及其表单提交状态。
   const [ directoryModalOpen, setDirectoryModalOpen ] = React.useState(false)
   const [ directoryName, setDirectoryName ] = React.useState('')
   const [ directorySubmitting, setDirectorySubmitting ] = React.useState(false)
+  // 上传弹窗、待上传项目队列和原生选择器状态。
   const [ uploadModalOpen, setUploadModalOpen ] = React.useState(false)
   const [ uploadItems, setUploadItems ] = React.useState([])
   const [ uploadPicking, setUploadPicking ] = React.useState(null)
   const [ uploadSubmitting, setUploadSubmitting ] = React.useState(false)
+  // Tauri 拖放悬停区域和路径检查状态。
   const [ uploadDragActive, setUploadDragActive ] = React.useState(false)
   const [ directoryDropActive, setDirectoryDropActive ] = React.useState(false)
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
+  // 当前目录中的多选结果和批量操作 loading 状态。
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
+  // 独立终端窗口打开状态，以及用于并发调用计数的引用。
   const [ terminalOpening, setTerminalOpening ] = React.useState(false)
   const terminalOpeningCountRef = React.useRef(0)
+  // 原生拖放目标、上传队列回调和多选锚点均需跨渲染保持稳定引用。
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
   const selectionPathRef = React.useRef(currentPath)
 
+  // 当前目录或文件列表变化后，移除已经不存在的选中项并校正 Shift 选择锚点。
   React.useEffect(() => {
     if (selectionPathRef.current !== currentPath) {
       selectionPathRef.current = currentPath
@@ -103,6 +180,13 @@ const FileBrowser = ({
     }
   }, [ currentPath, files ])
 
+  /**
+   * 处理单选、Command/Ctrl 多选和 Shift 范围选择，并维护键盘操作锚点。
+   *
+   * @param {Object} entry - 被选择的远程条目。
+   * @param {{shiftKey: boolean, ctrlKey: boolean, metaKey: boolean}} event - 选择触发事件。
+   * @returns {void}
+   */
   const handleItemSelect = (entry, event) => {
     if (batchDeleting || batchDownloading) return
     const key = getEntryKey(entry)
@@ -130,6 +214,11 @@ const FileBrowser = ({
     selectionAnchorRef.current = key
   }
 
+  /**
+   * 批量删除当前选中项目，具体进度通过共享状态栏展示。
+   *
+   * @returns {Promise<void>} 删除回调和选中状态清理完成后的 Promise。
+   */
   const handleBatchDelete = async () => {
     if (batchDeleting || batchDownloading || selectedKeys.length < 2 || !handleDeleteItems) return
     const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
@@ -145,8 +234,14 @@ const FileBrowser = ({
     }
   }
 
+  // 将稳定键还原为当前目录条目，批量操作只处理仍存在的可见项目。
   const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
 
+  /**
+   * 打开当前连接的独立终端窗口，避免主窗口布局被 xterm 影响。
+   *
+   * @returns {Promise<void>} 窗口创建流程完成后的 Promise；错误通过通知展示。
+   */
   const handleOpenTerminal = async () => {
     if (!currentConnectionId || !currentConnection) return
     terminalOpeningCountRef.current += 1
@@ -161,6 +256,11 @@ const FileBrowser = ({
     }
   }
 
+  /**
+   * 统一确认并启动选中项目的批量下载。
+   *
+   * @returns {Promise<void>} 下载回调和选中状态清理完成后的 Promise。
+   */
   const handleBatchDownload = async () => {
     if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
     setBatchDownloading(true)
@@ -174,6 +274,11 @@ const FileBrowser = ({
     }
   }
 
+  /**
+   * 校验目录名称并创建远程目录。
+   *
+   * @returns {Promise<void>} 创建目录及弹窗状态更新完成后的 Promise。
+   */
   const submitDirectory = async () => {
     const name = directoryName.trim()
     if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return
@@ -188,12 +293,23 @@ const FileBrowser = ({
       setDirectorySubmitting(false)
     }
   }
+  /**
+   * 打开上传队列弹窗，并清空上次尚未提交的选择。
+   *
+   * @returns {void}
+   */
   const handleUpload = () => {
     if (uploadSubmitting) return
     setUploadItems([])
     setUploadModalOpen(true)
   }
 
+  /**
+   * 从原生选择器追加文件或文件夹，并在列表中按路径去重。
+   *
+   * @param {'file'|'directory'} kind - 要选择的本地项目类型。
+   * @returns {Promise<void>} 选择器关闭并更新上传队列后的 Promise。
+   */
   const addUploadItems = async (kind) => {
     if (uploadPicking || uploadSubmitting) return
     setUploadPicking(kind)
@@ -222,6 +338,12 @@ const FileBrowser = ({
     }
   }
 
+  /**
+   * 处理系统拖放路径，过滤符号链接和不支持的项目类型后加入上传队列。
+   *
+   * @param {string[]} paths - Tauri 原生拖放事件提供的本地路径。
+   * @returns {Promise<void>} 路径检查和上传队列更新完成后的 Promise。
+   */
   const handleDroppedPaths = React.useCallback(async (paths) => {
     if (uploadSubmitting || uploadDropProcessing || !paths?.length) return
     setUploadDropProcessing(true)
@@ -246,9 +368,15 @@ const FileBrowser = ({
     }
   }, [ uploadDropProcessing, uploadModalOpen, uploadSubmitting ])
 
+  // 注册 Tauri 原生拖放事件；清理阶段撤销监听并恢复悬停状态。
   React.useEffect(() => {
     let disposed = false
     let unlisten
+    /**
+     * 注册当前 WebView 的原生拖放监听，并把文件路径交给上传队列处理。
+     *
+     * @returns {Promise<void>} 监听注册流程完成后的 Promise。
+     */
     const registerDragDrop = async () => {
       try {
         const dispose = await getCurrentWebview().onDragDropEvent(event => {
@@ -292,6 +420,12 @@ const FileBrowser = ({
     }
   }, [ handleDroppedPaths, uploadModalOpen ])
 
+  /**
+   * 顺序上传队列中的文件或文件夹，保留覆盖确认和取消回调语义。
+   *
+   * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} uploadQueue - 要提交的本地项目队列。
+   * @returns {Promise<void>} 队列处理、目录刷新和状态清理完成后的 Promise。
+   */
   const startUploadQueue = async (uploadQueue) => {
     if (uploadSubmitting || uploadQueue.length === 0) return
     const duplicateNames = uploadQueue
@@ -337,6 +471,13 @@ const FileBrowser = ({
           if (!overwrite) continue
         }
         const remotePath = joinRemotePath(currentPath, fileName)
+        /**
+         * 发布队列及文件夹内部进度，并绑定当前传输的取消动作。
+         *
+         * @param {number} progress - 当前项目进度百分比。
+         * @param {Object} [payload={}] - 目录上传返回的文件级进度信息。
+         * @returns {void}
+         */
         const publishProgress = (progress, payload = {}) => {
           const fileTotal = Number(payload.fileTotal) || 0
           const fileIndex = Number(payload.fileIndex) || 0

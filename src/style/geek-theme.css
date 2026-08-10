@@ -3,6 +3,7 @@
  * 仅覆盖视觉令牌与布局呈现，不改变任何连接、传输或文件操作逻辑。
  */
 
+/* 主题令牌集中在根节点，业务组件只引用变量即可保持跨页面配色一致。 */
 :root {
   --portal-geek-primary: #eb9070;
   --portal-geek-canvas: #1e1f22;
@@ -20,6 +21,7 @@
   color-scheme: dark;
 }
 
+/* 支持 LAB 的 WebView 使用更接近设计稿的强调色，不支持时沿用十六进制回退值。 */
 @supports (color: lab(68.9646% 33.16 32.3692)) {
   :root {
     --portal-geek-primary: lab(68.9646% 33.16 32.3692);
@@ -40,6 +42,7 @@
   }
 }
 
+/* 强调色呼吸动画只作用于静态标题标记，不改变布局尺寸。 */
 @keyframes portal-accent-breathe {
   0%,
   100% {
@@ -61,6 +64,7 @@ body {
   color: var(--portal-geek-text);
 }
 
+/* 文本选择颜色与强调色保持一致，保证深色画布上的对比度。 */
 ::selection {
   background: rgba(235, 144, 112, 0.36);
   color: #ffffff;
@@ -710,6 +714,7 @@ body {
   background-color: var(--portal-geek-teal);
 }
 
+/* 强制颜色模式下交给系统接管滚动条颜色，避免固定深色值降低可见性。 */
 @media (forced-colors: active) {
   .terminal-emulator .xterm-viewport {
     scrollbar-color: auto;
@@ -821,6 +826,7 @@ body {
   background-clip: padding-box;
 }
 
+/* 移动/窄窗口只收缩留白并隐藏次要端点信息，不改变核心操作顺序。 */
 @media (max-width: 680px) {
   .connection-page,
   .file-browser {
@@ -837,6 +843,7 @@ body {
   }
 }
 
+/* 尊重系统减少动效偏好，保留状态变化但取消过渡和循环动画。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

@@ -1,8 +1,23 @@
+/**
+ * SSH 连接配置列表。
+ * 连接、删除和新增配置由父组件提供，列表只负责展示与交互事件分发。
+ */
 import React, { useState } from 'react'
 import { Button, List, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
 import AddConnectionModal from './AddConnectionModal'
 
+/**
+ * 渲染 SSH 连接配置列表，并分发连接、删除和新增事件。
+ *
+ * @param {Object} props - 连接列表属性。
+ * @param {Array<Object>} props.connections - 已保存的连接配置数组。
+ * @param {(connection: Object) => void} props.handleConnect - 用户选择连接时的回调。
+ * @param {(connectionId: string) => Promise<void>} props.handleDeleteConnection - 删除连接配置的回调。
+ * @param {(profile: Object, credentials: {password: string}) => Promise<void>} props.onAddSuccess - 新连接保存回调。
+ * @param {string|null} props.connectingId - 当前正在连接的配置 ID。
+ * @returns {JSX.Element} 连接列表、空状态和新建连接弹窗。
+ */
 const ConnectionList = ({
   connections,
   handleConnect,
@@ -10,8 +25,9 @@ const ConnectionList = ({
   onAddSuccess,
   connectingId
 }) => {
-  // 弹窗状态
+  // 新建连接弹窗的显示状态；连接中的配置会暂时禁止打开弹窗。
   const [ addModalVisible, setAddModalVisible ] = useState(false)
+  // 用于在遮罩层显示当前连接名称，避免只显示不可读的 ID。
   const connectingConnection = connections.find(item => item.id === connectingId)
 
   return (
