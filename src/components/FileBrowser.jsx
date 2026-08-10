@@ -50,6 +50,7 @@ const FileBrowser = ({
   error,
   currentConnection,
   currentConnectionId,
+  showHiddenFiles,
   homeDir,
   drives,
   handleGoBack,
@@ -550,6 +551,7 @@ const FileBrowser = ({
                 entry={entry}
                 currentPath={currentPath}
                 connectionId={currentConnectionId}
+                showHiddenFiles={showHiddenFiles}
                 selected={selectedKeys.includes(getEntryKey(entry))}
                 onSelect={event => handleItemSelect(entry, event)}
                 onActivate={() => handleItemClick(entry)}

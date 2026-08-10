@@ -29,7 +29,7 @@ const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
   return `已统计可访问项目；${ inaccessibleHint }，实际大小可能更大${ scannedHint }`
 }
 
-const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActivate, onDelete, onRename }) => {
+const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, selected, onSelect, onActivate, onDelete, onRename }) => {
   const [ downloading, setDownloading ] = useState(false)
   const [ deleting, setDeleting ] = useState(false)
   const [ renameOpen, setRenameOpen ] = useState(false)
@@ -44,7 +44,8 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
   const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
   const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
   const directorySizeCacheVersion = entry.modifiedAt
-  const directorySizeKey = `${ connectionId }\u0000${ remotePath }\u0000${ directorySizeCacheVersion ?? '' }`
+  const includeHiddenFiles = showHiddenFiles === true
+  const directorySizeKey = `${ connectionId }\u0000${ remotePath }\u0000${ directorySizeCacheVersion ?? '' }\u0000${ includeHiddenFiles ? 'with-hidden' : 'without-hidden' }`
 
   useEffect(() => {
     if (!entry.isDirectory) {
@@ -94,7 +95,8 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
     setDirectorySizeError(false)
     sftpManager.getRemoteDirectorySize(connectionId, remotePath, {
       signal: abortController?.signal,
-      cacheVersion: directorySizeCacheVersion
+      cacheVersion: directorySizeCacheVersion,
+      showHiddenFiles: includeHiddenFiles
     })
       .then(result => {
         if (disposed) return
@@ -112,7 +114,7 @@ const FileItem = ({ entry, currentPath, connectionId, selected, onSelect, onActi
       disposed = true
       abortController?.abort()
     }
-  }, [ connectionId, directorySizeCacheVersion, directorySizeKey, directorySizeVisible, entry.isDirectory, remotePath ])
+  }, [ connectionId, directorySizeCacheVersion, directorySizeKey, directorySizeVisible, entry.isDirectory, includeHiddenFiles, remotePath ])
 
   const handleDownload = async (event) => {
     event.stopPropagation()

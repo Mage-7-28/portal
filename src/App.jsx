@@ -39,8 +39,11 @@ const getTerminalWindowParams = () => {
 
 function MainApp() {
   const storedDownloadPath = useStoreValue(StoreKeys.DOWNLOAD_PATH)
+  const storedShowHiddenFiles = useStoreValue(StoreKeys.SHOW_HIDDEN_FILES)
   const downloadPath = typeof storedDownloadPath === 'string' ? storedDownloadPath : ''
   const downloadPathHint = downloadPath || '尚未设置（首次下载时选择）'
+  // 仅保留用户明确开启的偏好；旧版没有该设置时默认不显示以点开头的远程项目。
+  const showHiddenFiles = storedShowHiddenFiles === true
   const [ aboutOpen, setAboutOpen ] = useState(false)
   const [ availableUpdate, setAvailableUpdate ] = useState(null)
   const [ checkingUpdate, setCheckingUpdate ] = useState(false)
@@ -188,6 +191,42 @@ function MainApp() {
   }, [])
 
   useEffect(() => {
+    // 原生菜单在前端 Store 初始化前已创建，需要将持久化偏好同步回勾选状态。
+    void invoke('set_show_hidden_files_menu_checked', { showHiddenFiles }).catch(error => {
+      console.warn('同步显示隐藏文件菜单状态失败:', error)
+    })
+  }, [showHiddenFiles])
+
+  useEffect(() => {
+    let active = true
+    let unlisten
+
+    const listenForShowHiddenFilesMenu = async () => {
+      try {
+        const dispose = await listen('menu-show-hidden-files', event => {
+          if (typeof event.payload !== 'boolean') return
+          void store.set(StoreKeys.SHOW_HIDDEN_FILES, event.payload).catch(error => {
+            void notification.error('保存显示隐藏文件设置失败：' + normalizeError(error))
+          })
+        })
+        if (active) {
+          unlisten = dispose
+        } else {
+          dispose()
+        }
+      } catch (error) {
+        console.error('注册显示隐藏文件菜单失败:', error)
+      }
+    }
+
+    void listenForShowHiddenFilesMenu()
+    return () => {
+      active = false
+      unlisten?.()
+    }
+  }, [])
+
+  useEffect(() => {
     let disposed = false
     let unlistenCloseRequested
     let unlistenMenuExit
@@ -252,7 +291,7 @@ function MainApp() {
       <div className="app-shell">
         <div className="app-frame">
           <div className="app-content">
-            <FileBrowserPanel />
+            <FileBrowserPanel showHiddenFiles={showHiddenFiles} />
           </div>
           <div
             className="download-status"

@@ -14,6 +14,35 @@ fn exit_application(app: tauri::AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn set_show_hidden_files_menu_checked(
+    app: tauri::AppHandle,
+    show_hidden_files: bool,
+) -> Result<(), String> {
+    #[cfg(desktop)]
+    {
+        let menu = app.menu().ok_or_else(|| "应用菜单尚未初始化".to_string())?;
+        let view_menu = menu
+            .get("view")
+            .and_then(|item| item.as_submenu().cloned())
+            .ok_or_else(|| "未找到显示菜单".to_string())?;
+        let hidden_files_item = view_menu
+            .get("show-hidden-files")
+            .and_then(|item| item.as_check_menuitem().cloned())
+            .ok_or_else(|| "未找到显示隐藏文件菜单项".to_string())?;
+        hidden_files_item
+            .set_checked(show_hidden_files)
+            .map_err(|error| error.to_string())?;
+    }
+
+    #[cfg(not(desktop))]
+    {
+        let _ = (app, show_hidden_files);
+    }
+
+    Ok(())
+}
+
 #[derive(serde::Serialize)]
 struct FileEntry {
     name: String,
@@ -157,6 +186,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             exit_application,
+            set_show_hidden_files_menu_checked,
             get_home_dir,
             read_directory,
             inspect_local_paths,
@@ -196,7 +226,7 @@ pub fn run() {
 
             #[cfg(desktop)]
             {
-                use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+                use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 
                 // 创建菜单项
                 let update_item = MenuItem::with_id(app, "update", "更新", true, None::<&str>)?;
@@ -210,6 +240,14 @@ pub fn run() {
                 let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some(quit_shortcut))?;
                 let download_path_item =
                     MenuItem::with_id(app, "download-path", "选择下载路径", true, None::<&str>)?;
+                let show_hidden_files_item = CheckMenuItem::with_id(
+                    app,
+                    "show-hidden-files",
+                    "显示隐藏文件",
+                    true,
+                    false,
+                    None::<&str>,
+                )?;
 
                 // 创建子菜单
                 let file_submenu = Submenu::new(app, "文件", true)?;
@@ -226,6 +264,9 @@ pub fn run() {
                 edit_submenu.append(&PredefinedMenuItem::copy(app, None)?)?;
                 edit_submenu.append(&PredefinedMenuItem::paste(app, None)?)?;
 
+                let view_submenu = Submenu::with_id(app, "view", "显示", true)?;
+                view_submenu.append(&show_hidden_files_item)?;
+
                 // macOS 菜单栏的顶层项目使用 Submenu，确保下载路径入口可见。
                 let download_path_submenu = Submenu::new(app, "下载路径", true)?;
                 download_path_submenu.append(&download_path_item)?;
@@ -234,13 +275,14 @@ pub fn run() {
                 let menu = Menu::new(app)?;
                 menu.append(&file_submenu)?;
                 menu.append(&edit_submenu)?;
+                menu.append(&view_submenu)?;
                 menu.append(&download_path_submenu)?;
 
                 // 设置应用菜单
                 app.set_menu(menu)?;
 
                 // 绑定菜单事件
-                app.on_menu_event(|app, event| match event.id().as_ref() {
+                app.on_menu_event(move |app, event| match event.id().as_ref() {
                     "update" => {
                         let _ = app.emit("menu-update", ());
                     }
@@ -252,6 +294,11 @@ pub fn run() {
                     }
                     "download-path" => {
                         let _ = app.emit("menu-download-path", ());
+                    }
+                    "show-hidden-files" => {
+                        if let Ok(show_hidden_files) = show_hidden_files_item.is_checked() {
+                            let _ = app.emit("menu-show-hidden-files", show_hidden_files);
+                        }
                     }
 
                     _ => {}

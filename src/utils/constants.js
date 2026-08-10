@@ -6,7 +6,8 @@ export const StoreKeys = {
   DOWNLOAD_PATH: 'download_path',
   SSH_CONNECTIONS: 'ssh_connections',
   STORE_VERSION: 'store_version',
-  UPDATE_SKIPPED_VERSION: 'update_skipped_version'
+  UPDATE_SKIPPED_VERSION: 'update_skipped_version',
+  SHOW_HIDDEN_FILES: 'show_hidden_files'
 }
 
 export const StoreVersion = 2

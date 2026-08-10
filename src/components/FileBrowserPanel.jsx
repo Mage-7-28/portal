@@ -90,7 +90,9 @@ const waitForNextPaint = () => new Promise(resolve => {
   window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
 })
 
-function FileBrowserPanel() {
+function FileBrowserPanel({ showHiddenFiles = false }) {
+  // 只把以点开头视为隐藏项目。这是各类 SSH/SFTP 服务端可稳定提供的共同语义。
+  const includeHiddenFiles = showHiddenFiles === true
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
   const [ currentConnection, setCurrentConnection ] = useState(null)
@@ -394,7 +396,7 @@ function FileBrowserPanel() {
     resetRemoteView()
   }
 
-  const loadRemoteDirectory = async (path, connectionId = currentConnectionId) => {
+  const loadRemoteDirectory = useCallback(async (path, connectionId = currentConnectionId) => {
     if (!connectionId) {
       setError('尚未连接服务器')
       return
@@ -406,7 +408,9 @@ function FileBrowserPanel() {
     // 目录统计属于低优先级任务，切换和刷新目录时必须先让出同一条 SFTP 会话。
     sftpManager.cancelDirectorySizeRequests(connectionId, '正在切换目录')
     try {
-      const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath)
+      const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath, {
+        showHiddenFiles: includeHiddenFiles
+      })
       if (currentRequest !== requestId.current) return
       setFiles(result)
       setCurrentPath(normalizedPath)
@@ -429,7 +433,17 @@ function FileBrowserPanel() {
     } finally {
       if (currentRequest === requestId.current) setLoading(false)
     }
-  }
+  }, [ currentConnectionId, includeHiddenFiles, resetRemoteView ])
+
+  const appliedHiddenFilesPreferenceRef = useRef(includeHiddenFiles)
+  useEffect(() => {
+    const preferenceChanged = appliedHiddenFilesPreferenceRef.current !== includeHiddenFiles
+    appliedHiddenFilesPreferenceRef.current = includeHiddenFiles
+    if (!preferenceChanged || !currentConnectionId) return
+
+    // 设置变更后重新读取当前目录；该调用也会取消旧视图的目录大小任务。
+    void loadRemoteDirectory(currentPath, currentConnectionId)
+  }, [ currentConnectionId, currentPath, includeHiddenFiles, loadRemoteDirectory ])
 
   const handlePathSubmit = (event) => {
     if (event.key === 'Enter') {
@@ -883,6 +897,7 @@ function FileBrowserPanel() {
           error={error}
           currentConnection={currentConnection}
           currentConnectionId={currentConnectionId}
+          showHiddenFiles={includeHiddenFiles}
           homeDir={homeDir}
           drives={drives}
           handleGoBack={handleGoBack}

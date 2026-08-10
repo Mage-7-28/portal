@@ -2215,11 +2215,18 @@ pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool,
     Ok(state.connections.write().unwrap().remove(&id).is_some())
 }
 
+// SFTP 没有跨服务器统一的“隐藏属性”字段，使用以点开头的名称是 Windows、macOS、Linux
+// 服务器之间唯一可稳定复用的判断方式；当前目录项 . 和 .. 始终不应展示或计入统计。
+fn should_skip_remote_entry(name: &str, show_hidden_files: bool) -> bool {
+    name == "." || name == ".." || (!show_hidden_files && name.starts_with('.'))
+}
+
 #[tauri::command]
 pub fn list_sftp_directory(
     state: State<SshState>,
     id: String,
     remote_path: String,
+    show_hidden_files: bool,
 ) -> Result<Vec<RemoteEntry>, SshError> {
     let sftp = sftp_for(&state, &id)?;
     let entries = sftp.readdir(Path::new(&remote_path)).map_err(|error| {
@@ -2233,7 +2240,7 @@ pub fn list_sftp_directory(
             .file_name()
             .map(|value| value.to_string_lossy().to_string())
             .unwrap_or_default();
-        if name == "." || name == ".." {
+        if should_skip_remote_entry(&name, show_hidden_files) {
             continue;
         }
         let kind = if stat.is_dir() {
@@ -2344,6 +2351,7 @@ fn process_directory_size_job(
     sftp: &Sftp,
     directory: PathBuf,
     is_root_directory: bool,
+    show_hidden_files: bool,
 ) -> bool {
     if scan.cancellation.load(Ordering::Acquire) {
         scan.fail(SshError::DirectorySizeCancelled);
@@ -2364,7 +2372,7 @@ fn process_directory_size_job(
                     .file_name()
                     .map(|value| value.to_string_lossy().to_string())
                     .unwrap_or_default();
-                if name == "." || name == ".." {
+                if should_skip_remote_entry(&name, show_hidden_files) {
                     continue;
                 }
                 scanned_entries = scanned_entries.saturating_add(1);
@@ -2402,6 +2410,7 @@ fn directory_size_worker_loop(
     id: String,
     pool: Arc<Mutex<DirectorySizeWorkerPool>>,
     scan: Arc<DirectorySizeScan>,
+    show_hidden_files: bool,
 ) {
     loop {
         let (worker_slot, directory, is_root_directory) =
@@ -2433,6 +2442,7 @@ fn directory_size_worker_loop(
                 &directory_size_session.sftp,
                 directory,
                 is_root_directory,
+                show_hidden_files,
             ) {
                 return;
             }
@@ -2470,15 +2480,19 @@ fn calculate_sftp_directory_size(
     cancellation: Arc<AtomicBool>,
     wake: Arc<Condvar>,
     pool: Arc<Mutex<DirectorySizeWorkerPool>>,
+    show_hidden_files: bool,
 ) -> Result<RemoteDirectorySize, SshError> {
     if cancellation.load(Ordering::Acquire) {
         return Err(SshError::DirectorySizeCancelled);
     }
 
-    if let Some(result) =
-        try_remote_directory_size(&state, &connection, &remote_path, cancellation.as_ref())?
-    {
-        return Ok(result);
+    // 标准 du 无法表达“跳过所有以点开头的后代项目”，因此仅在显示全部内容时使用。
+    if show_hidden_files {
+        if let Some(result) =
+            try_remote_directory_size(&state, &connection, &remote_path, cancellation.as_ref())?
+        {
+            return Ok(result);
+        }
     }
 
     let scan = Arc::new(DirectorySizeScan::new(&remote_path, cancellation, wake));
@@ -2496,6 +2510,7 @@ fn calculate_sftp_directory_size(
                     id_for_worker,
                     pool_for_worker,
                     scan_for_worker,
+                    show_hidden_files,
                 )
             }))
             .is_err()
@@ -2521,6 +2536,7 @@ pub async fn get_sftp_directory_size(
     state: State<'_, SshState>,
     id: String,
     remote_path: String,
+    show_hidden_files: bool,
     operation_id: String,
 ) -> Result<RemoteDirectorySize, SshError> {
     if operation_id.trim().is_empty() {
@@ -2567,6 +2583,7 @@ pub async fn get_sftp_directory_size(
             cancellation_for_task,
             wake_for_task,
             worker_pool_for_task,
+            show_hidden_files,
         )
     })
     .await

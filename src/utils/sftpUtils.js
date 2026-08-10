@@ -402,9 +402,14 @@ class SftpManager {
     }
   }
 
-  async listRemoteDirectory(connectionId, remotePath) {
+  async listRemoteDirectory(connectionId, remotePath, options = {}) {
     const info = this.requireConnected(connectionId)
-    const files = await this.invokeRemote(connectionId, 'list_sftp_directory', { id: connectionId, remotePath })
+    const showHiddenFiles = options.showHiddenFiles === true
+    const files = await this.invokeRemote(connectionId, 'list_sftp_directory', {
+      id: connectionId,
+      remotePath,
+      showHiddenFiles
+    })
     info.lastActivity = Date.now()
     return files.sort((a, b) => {
       if (a.isDirectory && !b.isDirectory) return -1
@@ -417,9 +422,9 @@ class SftpManager {
     return this.directorySizeCacheEpochs.get(connectionId) || 0
   }
 
-  getDirectorySizeCacheKey(connectionId, remotePath, cacheVersion, cacheEpoch) {
+  getDirectorySizeCacheKey(connectionId, remotePath, cacheVersion, showHiddenFiles, cacheEpoch) {
     const normalizedPath = String(remotePath || '/').replaceAll('\\', '/').replace(/\/+$/, '') || '/'
-    return `${ connectionId }\u0000${ normalizedPath }\u0000${ cacheVersion == null ? '' : String(cacheVersion) }\u0000${ cacheEpoch }`
+    return `${ connectionId }\u0000${ normalizedPath }\u0000${ cacheVersion == null ? '' : String(cacheVersion) }\u0000${ showHiddenFiles ? 'with-hidden' : 'without-hidden' }\u0000${ cacheEpoch }`
   }
 
   normalizeDirectorySizeResult(result) {
@@ -469,11 +474,12 @@ class SftpManager {
     })
   }
 
-  createDirectorySizeTask(connectionId, remotePath, cacheKey, cacheEpoch) {
+  createDirectorySizeTask(connectionId, remotePath, showHiddenFiles, cacheKey, cacheEpoch) {
     return {
       cacheKey,
       connectionId,
       remotePath,
+      showHiddenFiles,
       cacheEpoch,
       operationId: randomId('directory-size'),
       subscribers: new Set(),
@@ -570,6 +576,7 @@ class SftpManager {
             {
               id: task.connectionId,
               remotePath: task.remotePath,
+              showHiddenFiles: task.showHiddenFiles,
               operationId: task.operationId
             },
             // 已取消的统计无需再发起一次保活探测，避免它排在用户的目录切换请求之前。
@@ -593,16 +600,29 @@ class SftpManager {
 
   async getRemoteDirectorySize(connectionId, remotePath, options) {
     this.requireConnected(connectionId)
-    const { signal, cacheVersion } = normalizeDirectorySizeOptions(options)
+    const { signal, cacheVersion, showHiddenFiles: requestedShowHiddenFiles } = normalizeDirectorySizeOptions(options)
+    const showHiddenFiles = requestedShowHiddenFiles === true
     if (signal?.aborted) throw new Error(DIRECTORY_SIZE_CANCELLED_MESSAGE)
     const cacheEpoch = this.getDirectorySizeCacheEpoch(connectionId)
-    const cacheKey = this.getDirectorySizeCacheKey(connectionId, remotePath, cacheVersion, cacheEpoch)
+    const cacheKey = this.getDirectorySizeCacheKey(
+      connectionId,
+      remotePath,
+      cacheVersion,
+      showHiddenFiles,
+      cacheEpoch
+    )
     const cached = this.getCachedDirectorySize(cacheKey)
     if (cached) return cached
 
     let task = this.directorySizeRequests.get(cacheKey)
     if (!task) {
-      task = this.createDirectorySizeTask(connectionId, remotePath, cacheKey, cacheEpoch)
+      task = this.createDirectorySizeTask(
+        connectionId,
+        remotePath,
+        showHiddenFiles,
+        cacheKey,
+        cacheEpoch
+      )
       this.directorySizeRequests.set(cacheKey, task)
       this.directorySizeQueue.push(task)
     }
