@@ -246,7 +246,8 @@ pub fn run() {
                     "显示隐藏文件",
                     true,
                     false,
-                    None::<&str>,
+                    // CmdOrCtrl 在 macOS 对应 Command，在 Windows 和 Linux 对应 Ctrl。
+                    Some("CmdOrCtrl+Shift+."),
                 )?;
 
                 // 创建子菜单
