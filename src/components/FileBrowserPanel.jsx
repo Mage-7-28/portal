@@ -13,9 +13,11 @@ import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
+import AddConnectionModal from './AddConnectionModal.jsx'
 import PasswordPromptModal from './PasswordPromptModal.jsx'
 import { notification } from '../utils/notificationUtils.js'
 import { closeTerminalWindows } from '../utils/terminalWindow.js'
+import { decryptPassword, encryptPassword } from '../utils/credentialUtils.js'
 
 /**
  * @typedef {Object} ConnectionProfile
@@ -28,6 +30,7 @@ import { closeTerminalWindows } from '../utils/terminalWindow.js'
  * @property {string|null} hostKeyFingerprint - 用户确认过的主机密钥指纹。
  * @property {string} createdAt - 配置创建时间。
  * @property {string} updatedAt - 配置最近更新时间。
+ * @property {string|null} encryptedPassword - Rust 加密后的持久化密码。
  */
 
 /**
@@ -70,6 +73,7 @@ const normalizeProfile = (profile, index) => {
     // 旧版本可能保存过私钥或 SSH Agent 配置，统一迁移为账户密码认证。
     authMethod: 'password',
     hostKeyFingerprint: profile.hostKeyFingerprint || null,
+    encryptedPassword: typeof profile.encryptedPassword === 'string' ? profile.encryptedPassword : null,
     createdAt: profile.createdAt || new Date().toISOString(),
     updatedAt: profile.updatedAt || profile.createdAt || new Date().toISOString()
   }
@@ -185,6 +189,8 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   // 持久化连接配置及当前进程内的临时凭据缓存。
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
+  const [ editingConnection, setEditingConnection ] = useState(null)
+  const [ editModalVisible, setEditModalVisible ] = useState(false)
   // 当前活动连接的展示配置和 SFTP 会话 ID。
   const [ currentConnection, setCurrentConnection ] = useState(null)
   const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
@@ -365,6 +371,17 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     if (JSON.stringify(saved || []) !== JSON.stringify(profiles)) {
       await store.set(StoreKeys.SSH_CONNECTIONS, profiles)
     }
+    const restoredCredentials = new Map()
+    await Promise.all(profiles.map(async profile => {
+      if (!profile.encryptedPassword) return
+      try {
+        const password = await decryptPassword(profile.encryptedPassword)
+        if (password) restoredCredentials.set(profile.id, { password })
+      } catch (error) {
+        console.warn(`读取连接 ${ profile.name } 的保存密码失败`, error)
+      }
+    }))
+    setCredentials(restoredCredentials)
   }
 
   /**
@@ -389,13 +406,40 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
    * @throws {Error} 当配置持久化失败时抛出。
    */
   const handleAddConnection = async (profile, credentialsForProfile) => {
-    const next = [ profile, ...connections.filter(item => item.id !== profile.id) ]
+    const previous = connections.find(item => item.id === profile.id)
+    const password = credentialsForProfile?.password || ''
+    const encryptedPassword = password
+      ? await encryptPassword(password)
+      : previous?.encryptedPassword || null
+    const persistedProfile = { ...profile, encryptedPassword }
+    const next = [ persistedProfile, ...connections.filter(item => item.id !== profile.id) ]
     await saveConnections(next)
     setCredentials(previous => {
       const updated = new Map(previous)
-      updated.set(profile.id, { password: credentialsForProfile?.password || '' })
+      if (password) updated.set(profile.id, { password })
       return updated
     })
+  }
+
+  /**
+   * 打开连接编辑弹窗；编辑期间不改变当前已建立的远程会话。
+   *
+   * @param {ConnectionProfile} connection - 待编辑的连接配置。
+   * @returns {void}
+   */
+  const handleEditConnection = connection => {
+    setEditingConnection(connection)
+    setEditModalVisible(true)
+  }
+
+  /**
+   * 关闭编辑弹窗并清空临时编辑状态。
+   *
+   * @returns {void}
+   */
+  const closeEditModal = () => {
+    setEditModalVisible(false)
+    setEditingConnection(null)
   }
 
   /**
@@ -496,6 +540,17 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         updated.set(connection.id, credentialsValue)
         return updated
       })
+      // 首次连接输入的密码在认证成功后立即加密回写配置，确保重启后仍可自动连接。
+      if (credentialsValue.password && connection.encryptedPassword !== 'pending') {
+        const encryptedPassword = await encryptPassword(credentialsValue.password)
+        const persisted = {
+          ...connection,
+          encryptedPassword,
+          updatedAt: new Date().toISOString()
+        }
+        const next = connections.map(item => item.id === connection.id ? persisted : item)
+        await saveConnections(next)
+      }
       void notification.success('连接成功')
     } catch (error) {
       if (connectionId) {
@@ -536,7 +591,17 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
    */
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
-    const credentialsValue = credentials.get(connection.id) || { password: '' }
+    let credentialsValue = credentials.get(connection.id)
+    if (!credentialsValue?.password && connection.encryptedPassword) {
+      try {
+        const password = await decryptPassword(connection.encryptedPassword)
+        credentialsValue = { password }
+        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+      } catch (error) {
+        console.warn(`解密连接 ${ connection.name } 的保存密码失败`, error)
+      }
+    }
+    credentialsValue ||= { password: '' }
     if (!credentialsValue.password) {
       setPasswordLoading(false)
       setPasswordPromptError('')
@@ -1243,8 +1308,18 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         connections={connections}
         handleConnect={handleConnect}
         handleDeleteConnection={handleDeleteConnection}
+        handleEditConnection={handleEditConnection}
         onAddSuccess={handleAddConnection}
         connectingId={connectingId}
+      />
+      <AddConnectionModal
+        visible={editModalVisible}
+        editingConnection={editingConnection}
+        onCancel={closeEditModal}
+        onAddSuccess={async (profile, credentialsForProfile) => {
+          await handleAddConnection(profile, credentialsForProfile)
+          closeEditModal()
+        }}
       />
       <PasswordPromptModal
         visible={Boolean(passwordPrompt)}

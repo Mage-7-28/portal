@@ -14,6 +14,7 @@ import AddConnectionModal from './AddConnectionModal'
  * @param {Array<Object>} props.connections - 已保存的连接配置数组。
  * @param {(connection: Object) => void} props.handleConnect - 用户选择连接时的回调。
  * @param {(connectionId: string) => Promise<void>} props.handleDeleteConnection - 删除连接配置的回调。
+ * @param {(connection: Object) => void} props.handleEditConnection - 编辑连接配置的回调。
  * @param {(profile: Object, credentials: {password: string}) => Promise<void>} props.onAddSuccess - 新连接保存回调。
  * @param {string|null} props.connectingId - 当前正在连接的配置 ID。
  * @returns {JSX.Element} 连接列表、空状态和新建连接弹窗。
@@ -22,6 +23,7 @@ const ConnectionList = ({
   connections,
   handleConnect,
   handleDeleteConnection,
+  handleEditConnection,
   onAddSuccess,
   connectingId
 }) => {
@@ -96,6 +98,17 @@ const ConnectionList = ({
                         icon={<AppIcon name="trash" />}
                         aria-label={`删除 ${ item.name }`}
                         onClick={() => handleDeleteConnection(item.id)}
+                        disabled={connectingId !== null}
+                      />
+                    </Tooltip>,
+                    <Tooltip title="编辑连接" key={`${ item.id }-edit-tooltip`}>
+                      <Button
+                        key={`${ item.id }-edit`}
+                        className="compact-icon-button"
+                        size="small"
+                        icon={<AppIcon name="edit" />}
+                        aria-label={`编辑 ${ item.name }`}
+                        onClick={() => handleEditConnection(item)}
                         disabled={connectingId !== null}
                       />
                     </Tooltip>

@@ -1,5 +1,5 @@
 /**
- * 新建 SSH 连接配置弹窗。
+ * 新建或编辑 SSH 连接配置弹窗。
  * 测试连接阶段可先确认主机指纹，保存阶段只把密码交给当前进程内的连接管理器。
  */
 import React, { useEffect, useState } from 'react'
@@ -29,9 +29,10 @@ const newId = () => {
  * @param {boolean} props.visible - 是否显示弹窗。
  * @param {() => void} props.onCancel - 关闭弹窗的回调。
  * @param {(profile: Object, credentials: {password: string}) => Promise<void>} props.onAddSuccess - 保存连接配置的回调。
+ * @param {Object|null} [props.editingConnection=null] - 正在编辑的连接配置；为空时创建新配置。
  * @returns {JSX.Element} 连接表单、主机指纹确认结果和操作按钮。
  */
-const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
+const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection = null }) => {
   // Ant Design 表单实例，用于校验、读取和在弹窗关闭时重置字段。
   const [form] = Form.useForm()
   // 连接测试请求状态及最近一次测试/指纹信任结果。
@@ -45,12 +46,20 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
       : THEME_DANGER
 
   useEffect(() => {
-    if (!visible) {
+    if (visible) {
+      form.setFieldsValue(editingConnection ? {
+        name: editingConnection.name,
+        host: editingConnection.host,
+        port: editingConnection.port,
+        username: editingConnection.username,
+        password: ''
+      } : { port: 22 })
+    } else {
       form.resetFields()
       setTestResult(null)
       setTesting(false)
     }
-  }, [ form, visible ])
+  }, [ editingConnection, form, visible ])
 
   /**
    * 先验证网络和主机指纹，只有确认指纹后才允许提交连接配置。
@@ -116,20 +125,20 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
    */
   const handleSubmit = async (values) => {
     const profile = {
-      id: newId(),
+      id: editingConnection?.id || newId(),
       name: values.name.trim(),
       host: values.host.trim(),
       port: Number(values.port),
       username: values.username.trim(),
       authMethod: 'password',
       hostKeyFingerprint: testResult?.trusted ? testResult?.hostKey?.fingerprint || null : null,
-      createdAt: new Date().toISOString(),
+      createdAt: editingConnection?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }
 
     try {
       await onAddSuccess(profile, { password: values.password || '' })
-      void notification.success('连接配置已保存，凭据仅保存在当前会话')
+      void notification.success(editingConnection ? '连接配置已更新' : '连接配置已保存')
       onCancel()
     } catch (error) {
       void notification.error(`保存连接失败：${ normalizeError(error) }`)
@@ -139,7 +148,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
   return (
     <Modal
       rootClassName="compact-modal"
-      title="新建 SSH 连接"
+      title={editingConnection ? '编辑 SSH 连接' : '新建 SSH 连接'}
       open={visible}
       onCancel={onCancel}
       centered
@@ -196,7 +205,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
             rules={[{ required: true, message: '请输入密码' }]}
           >
             <Input.Password
-              placeholder="仅保存在当前会话"
+              placeholder="将以加密形式保存"
               autoComplete="current-password"
               iconRender={visible => <AppIcon name={visible ? 'eye' : 'eyeOff'} />}
             />
@@ -236,7 +245,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess }) => {
         )}
 
         <Text type="secondary" className="credential-note" style={{ color: THEME_TEXT_SECONDARY }}>
-          <AppIcon name="lock" /> 密码不会写入本地配置文件，只在本次运行期间保留。
+          <AppIcon name="lock" /> 密码会以加密形式保存，使用时仅在内存中解密。
         </Text>
 
         <div className="modal-actions">

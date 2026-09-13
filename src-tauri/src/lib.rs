@@ -6,6 +6,9 @@
 mod ssh;
 
 use std::path::Path;
+use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
+use rand::RngCore;
 use tauri::{Emitter, Manager};
 
 /// 返回用于验证 IPC 链路的问候语。
@@ -266,6 +269,45 @@ fn list_drives() -> Result<Vec<String>, String> {
     }
 }
 
+/// 使用应用本地密钥加密密码；密钥仅保存在应用数据目录，不通过前端 IPC 暴露。
+#[tauri::command]
+fn encrypt_password(app: tauri::AppHandle, password: String) -> Result<String, String> {
+    let key_path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("credential.key");
+    let key = load_or_create_key(&key_path)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let ciphertext = cipher.encrypt(Nonce::from_slice(&nonce_bytes), password.as_bytes()).map_err(|_| "密码加密失败".to_string())?;
+    Ok(format!("{}:{}", BASE64.encode(nonce_bytes), BASE64.encode(ciphertext)))
+}
+
+/// 使用应用本地密钥解密持久化密码。
+#[tauri::command]
+fn decrypt_password(app: tauri::AppHandle, encrypted: String) -> Result<String, String> {
+    let mut parts = encrypted.splitn(2, ':');
+    let nonce = BASE64.decode(parts.next().ok_or_else(|| "密码密文格式无效".to_string())?).map_err(|_| "密码密文格式无效".to_string())?;
+    let ciphertext = BASE64.decode(parts.next().ok_or_else(|| "密码密文格式无效".to_string())?).map_err(|_| "密码密文格式无效".to_string())?;
+    if nonce.len() != 12 { return Err("密码密文格式无效".to_string()) }
+    let key_path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("credential.key");
+    let key = load_or_create_key(&key_path)?;
+    let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
+    let plaintext = cipher.decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref()).map_err(|_| "密码解密失败".to_string())?;
+    String::from_utf8(plaintext).map_err(|_| "密码编码无效".to_string())
+}
+
+/// 读取或创建应用级 256 位凭据密钥，并确保父目录存在。
+fn load_or_create_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    if let Ok(key) = std::fs::read(path) {
+        if key.len() == 32 { return Ok(key) }
+        return Err("凭据密钥长度无效".to_string())
+    }
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
+    let mut key = vec![0u8; 32];
+    rand::thread_rng().fill_bytes(&mut key);
+    std::fs::write(path, &key).map_err(|error| error.to_string())?;
+    Ok(key)
+}
+
 /// 创建并运行 Tauri 应用，注册插件、菜单和全部 IPC 命令。
 ///
 /// # Returns
@@ -290,6 +332,8 @@ pub fn run() {
             inspect_local_paths,
             get_platform,
             list_drives,
+            encrypt_password,
+            decrypt_password,
             ssh::test_sftp_connection,
             ssh::add_ssh_connection,
             ssh::set_ssh_host_key,

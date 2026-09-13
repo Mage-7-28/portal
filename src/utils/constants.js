@@ -17,7 +17,7 @@ export const StoreKeys = {
 }
 
 // Store 数据结构版本，用于后续迁移持久化配置。
-export const StoreVersion = 2
+export const StoreVersion = 3
 
 // PubSub 传输状态总线的主题和发送入口。
 export const PubSubBusinessKeyEnum = {
