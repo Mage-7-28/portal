@@ -70,15 +70,21 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
     try {
       const values = await form.validateFields()
       setTesting(true)
+      const host = values.host.trim()
+      const port = Number(values.port)
+      const endpointChanged = editingConnection
+        && (editingConnection.host !== host || Number(editingConnection.port) !== port)
       const config = {
-        host: values.host.trim(),
-        port: Number(values.port),
+        host,
+        port,
         username: values.username.trim(),
         password: values.password,
-        authMethod: 'password'
+        authMethod: 'password',
+        // 编辑已有配置时直接校验已保存指纹；新配置仍走首次确认流程。
+        hostKeyFingerprint: endpointChanged ? null : editingConnection?.hostKeyFingerprint || null
       }
       let result = await sftpManager.testConnection(config)
-      setTestResult(result)
+      setTestResult({ ...result, trusted: Boolean(result.success && config.hostKeyFingerprint) })
 
       if (result.requiresHostKeyConfirmation && result.hostKey?.fingerprint) {
         const accepted = await dialog.confirm(
@@ -101,7 +107,14 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
           ...config,
           hostKeyFingerprint: trustedHostKey.fingerprint
         })
-        setTestResult({ ...result, hostKey: result.hostKey || trustedHostKey, trusted: true })
+        setTestResult({
+          ...result,
+          hostKey: result.hostKey || trustedHostKey,
+          trusted: Boolean(result.success)
+        })
+      } else if (result.success) {
+        // 已有指纹验证成功，或测试环境直接返回成功时，保存当前指纹。
+        setTestResult({ ...result, trusted: true })
       }
 
       if (result.success) {
@@ -124,14 +137,23 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
    * @returns {Promise<void>} 保存回调和成功/失败通知完成后的 Promise。
    */
   const handleSubmit = async (values) => {
+    const host = values.host.trim()
+    const port = Number(values.port)
+    const endpointChanged = editingConnection
+      && (editingConnection.host !== host || Number(editingConnection.port) !== port)
+    const trustedFingerprint = testResult?.trusted
+      ? testResult.hostKey?.fingerprint || null
+      : endpointChanged
+        ? null
+        : editingConnection?.hostKeyFingerprint || null
     const profile = {
       id: editingConnection?.id || newId(),
       name: values.name.trim(),
-      host: values.host.trim(),
-      port: Number(values.port),
+      host,
+      port,
       username: values.username.trim(),
       authMethod: 'password',
-      hostKeyFingerprint: testResult?.trusted ? testResult?.hostKey?.fingerprint || null : null,
+      hostKeyFingerprint: trustedFingerprint,
       createdAt: editingConnection?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString()
     }

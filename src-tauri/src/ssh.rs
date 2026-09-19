@@ -474,6 +474,43 @@ struct DirectorySizeScanState {
     finished: bool,
 }
 
+/// 目录大小统计任务的不可变执行上下文。
+///
+/// 将任务参数集中保存，避免统计入口出现过长参数列表，同时保证工作线程
+/// 使用同一份连接、取消信号和工作会话池。
+struct DirectorySizeCalculationContext {
+    /// 共享 SSH 状态。
+    state: SshState,
+    /// 任务所属连接 ID。
+    id: String,
+    /// 创建统计工作会话所需的连接配置快照。
+    connection: SshConnection,
+    /// 待统计的远程根路径。
+    remote_path: String,
+    /// 当前统计任务的取消信号。
+    cancellation: Arc<AtomicBool>,
+    /// 用于唤醒等待中的目录工作线程。
+    wake: Arc<Condvar>,
+    /// 当前连接的目录统计工作会话池。
+    pool: Arc<Mutex<DirectorySizeWorkerPool>>,
+    /// 是否包含隐藏文件和目录。
+    show_hidden_files: bool,
+}
+
+/// 将当前值转换为 0 到 100 的整数百分比；总数为零时返回 100。
+fn percentage(current: u64, total: u64) -> u64 {
+    percentage_with_empty_value(current, total, 100)
+}
+
+/// 将当前值转换为 0 到 100 的整数百分比，并允许调用方定义零总数结果。
+fn percentage_with_empty_value(current: u64, total: u64, empty_value: u64) -> u64 {
+    current
+        .saturating_mul(100)
+        .checked_div(total)
+        .unwrap_or(empty_value)
+        .min(100)
+}
+
 impl DirectorySizeScan {
     /// 创建包含根目录的初始扫描任务。
     fn new(remote_path: &str, cancellation: Arc<AtomicBool>, wake: Arc<Condvar>) -> Self {
@@ -1966,10 +2003,8 @@ fn delete_progress(
     };
     let progress = if phase == "cleaning" {
         100
-    } else if item_total == 0 {
-        0
     } else {
-        (((item_index.saturating_add(1)).saturating_mul(100)) / item_total).min(100)
+        percentage_with_empty_value(item_index.saturating_add(1) as u64, item_total as u64, 0)
     };
     emit_event(
         &state.app_handle,
@@ -2846,15 +2881,18 @@ fn directory_size_worker_loop(
 
 /// 递归统计远程目录大小。子目录通过共享队列动态分发给空闲工作会话。
 fn calculate_sftp_directory_size(
-    state: SshState,
-    id: String,
-    connection: SshConnection,
-    remote_path: String,
-    cancellation: Arc<AtomicBool>,
-    wake: Arc<Condvar>,
-    pool: Arc<Mutex<DirectorySizeWorkerPool>>,
-    show_hidden_files: bool,
+    context: DirectorySizeCalculationContext,
 ) -> Result<RemoteDirectorySize, SshError> {
+    let DirectorySizeCalculationContext {
+        state,
+        id,
+        connection,
+        remote_path,
+        cancellation,
+        wake,
+        pool,
+        show_hidden_files,
+    } = context;
     if cancellation.load(Ordering::Acquire) {
         return Err(SshError::DirectorySizeCancelled);
     }
@@ -2965,16 +3003,16 @@ pub async fn get_sftp_directory_size(
     let wake_for_task = Arc::clone(&wake);
     let worker_pool_for_task = Arc::clone(&worker_pool);
     let result = tauri::async_runtime::spawn_blocking(move || {
-        calculate_sftp_directory_size(
-            state_for_task,
-            id_for_task,
+        calculate_sftp_directory_size(DirectorySizeCalculationContext {
+            state: state_for_task,
+            id: id_for_task,
             connection,
-            remote_path_for_task,
-            cancellation_for_task,
-            wake_for_task,
-            worker_pool_for_task,
+            remote_path: remote_path_for_task,
+            cancellation: cancellation_for_task,
+            wake: wake_for_task,
+            pool: worker_pool_for_task,
             show_hidden_files,
-        )
+        })
     })
     .await
     .map_err(|error| SshError::ReadDirFailed(format!("目录大小统计任务失败: {error}")))
@@ -3033,11 +3071,7 @@ fn preview_progress(
     let Some(preview_id) = preview_id else {
         return;
     };
-    let progress = if total == 0 {
-        100
-    } else {
-        ((current.saturating_mul(100)) / total).min(100)
-    };
+    let progress = percentage(current, total);
     emit_event(
         &state.app_handle,
         "preview-progress",
@@ -3424,11 +3458,7 @@ fn transfer_progress(
     current: u64,
     total: u64,
 ) {
-    let progress = if total == 0 {
-        100
-    } else {
-        ((current.saturating_mul(100)) / total).min(100)
-    };
+    let progress = percentage(current, total);
     emit_event(
         &state.app_handle,
         event,
@@ -3444,22 +3474,17 @@ fn transfer_progress(
 
 /// 发送文件夹传输的当前文件和整体进度事件。
 fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'_>) {
-    let progress = if details.total == 0 {
-        100
-    } else {
-        ((details.current.saturating_mul(100)) / details.total).min(100)
-    };
+    let progress = percentage(details.current, details.total);
     let overall_progress = if details.total_bytes == 0 {
-        if details.file_total == 0 {
-            100
-        } else {
-            ((details.file_index.saturating_add(1).saturating_mul(100)) / details.file_total)
-                .min(100) as u64
-        }
+        percentage(
+            details.file_index.saturating_add(1) as u64,
+            details.file_total as u64,
+        )
     } else {
-        (((details.completed_bytes.saturating_add(details.current)).saturating_mul(100))
-            / details.total_bytes)
-            .min(100)
+        percentage(
+            details.completed_bytes.saturating_add(details.current),
+            details.total_bytes,
+        )
     };
     emit_event(
         &state.app_handle,

@@ -3,7 +3,7 @@ import { proxy, useSnapshot } from 'valtio'
 
 /**
  * 对 Tauri Store 的轻量串行封装。
- * 这里不会处理敏感信息；凭据只保存在进程内存中，绝不写入 Tauri Store。
+ * 连接配置中的密码只以 Rust 加密密文随配置写入 Store，明文密码不进入持久化层。
  *
  * @class
  */
@@ -86,6 +86,26 @@ export class ReactiveStore {
     return this.enqueueWrite(async () => {
       await store.set(key, value)
       await store.save()
+    })
+  }
+
+  /**
+   * 在串行写入队列中读取并更新一个键，避免并发调用基于旧快照互相覆盖。
+   *
+   * @param {string} key - 要更新的设置键。
+   * @param {(current: unknown) => unknown} updater - 基于队列内最新值生成新值的函数。
+   * @returns {Promise<unknown>} 已写入的新值。
+   * @throws {Error} 当 Store 初始化、读取或保存失败时抛出。
+   */
+  async update(key, updater) {
+    const store = await this.init()
+    return this.enqueueWrite(async () => {
+      const current = await store.get(key)
+      const next = updater(current)
+      await store.set(key, next)
+      await store.save()
+      this.state[key] = next
+      return next
     })
   }
 

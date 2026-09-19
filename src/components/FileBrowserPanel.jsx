@@ -220,6 +220,10 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   // 不触发渲染的连接标记，供断线监听和异步探测判断事件是否仍属于当前会话。
   const activeConnectionIdRef = useRef(null)
   const connectingIdRef = useRef(null)
+  // 连接配置的最新快照和初始化 Promise，避免异步保存使用旧闭包覆盖新数据。
+  const connectionsRef = useRef([])
+  const connectionsReadyRef = useRef(Promise.resolve())
+  const connectionsLoadStartedRef = useRef(false)
   // 为删除/重命名进度生成单调序号，避免相同毫秒时间戳导致 maskId 冲突。
   const operationStatusSequence = useRef(0)
 
@@ -305,7 +309,10 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
 
   // 首次加载连接配置；配置迁移失败由上层错误边界或通知流程处理。
   useEffect(() => {
-    void loadConnections()
+    if (connectionsLoadStartedRef.current) return
+    connectionsLoadStartedRef.current = true
+    connectionsReadyRef.current = loadConnections()
+    void connectionsReadyRef.current
   }, [])
 
   // 组件卸载时释放最后一次图片预览的 Object URL。
@@ -367,53 +374,62 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     const profiles = Array.isArray(saved)
       ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
       : []
+    connectionsRef.current = profiles
     setConnections(profiles)
     if (JSON.stringify(saved || []) !== JSON.stringify(profiles)) {
       await store.set(StoreKeys.SSH_CONNECTIONS, profiles)
     }
-    const restoredCredentials = new Map()
-    await Promise.all(profiles.map(async profile => {
-      if (!profile.encryptedPassword) return
-      try {
-        const password = await decryptPassword(profile.encryptedPassword)
-        if (password) restoredCredentials.set(profile.id, { password })
-      } catch (error) {
-        console.warn(`读取连接 ${ profile.name } 的保存密码失败`, error)
-      }
-    }))
-    setCredentials(restoredCredentials)
+    // 密码只在用户实际连接时按需解密，启动阶段不批量持有明文凭据。
+    return profiles
   }
 
   /**
-   * 按最近使用时间排序后保存连接配置。
+   * 在 Store 最新快照上事务式更新连接配置。
    *
-   * @param {ConnectionProfile[]} profiles - 要持久化的连接配置。
-   * @returns {Promise<void>} Store 和 React 状态更新完成后的 Promise。
-   * @throws {Error} 当本地 Store 写入失败时抛出。
+   * @param {(profiles: ConnectionProfile[]) => ConnectionProfile[]} updater - 基于最新配置生成新数组的函数。
+   * @returns {Promise<ConnectionProfile[]>} 写入后的规范化连接配置数组。
+   * @throws {Error} 当 Store 无法读取或保存时抛出。
    */
-  const saveConnections = async (profiles) => {
-    const sorted = sortProfiles(profiles)
-    await store.set(StoreKeys.SSH_CONNECTIONS, sorted)
-    setConnections(sorted)
+  const updateConnectionsTransaction = async (updater) => {
+    await connectionsReadyRef.current
+    const saved = await store.update(StoreKeys.SSH_CONNECTIONS, current => {
+      const latest = Array.isArray(current)
+        ? sortProfiles(current.map(normalizeProfile).filter(Boolean))
+        : [...connectionsRef.current]
+      const next = updater(latest)
+      if (!Array.isArray(next)) throw new Error('连接配置更新结果无效')
+      return sortProfiles(next)
+    })
+    const profiles = Array.isArray(saved)
+      ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
+      : []
+    connectionsRef.current = profiles
+    setConnections(profiles)
+    return profiles
   }
 
   /**
-   * 保存新建连接配置，并将密码仅缓存于本次进程内存。
+   * 保存新建或编辑后的连接配置，并把密码以密文形式持久化。
    *
    * @param {ConnectionProfile} profile - 已通过表单校验的新连接配置。
-   * @param {ConnectionCredentials} credentialsForProfile - 不会持久化的会话密码。
+   * @param {ConnectionCredentials} credentialsForProfile - 本次保存使用的明文密码，仅用于调用加密命令。
    * @returns {Promise<void>} 配置保存和内存凭据更新完成后的 Promise。
    * @throws {Error} 当配置持久化失败时抛出。
    */
   const handleAddConnection = async (profile, credentialsForProfile) => {
-    const previous = connections.find(item => item.id === profile.id)
-    const password = credentialsForProfile?.password || ''
-    const encryptedPassword = password
-      ? await encryptPassword(password)
-      : previous?.encryptedPassword || null
-    const persistedProfile = { ...profile, encryptedPassword }
-    const next = [ persistedProfile, ...connections.filter(item => item.id !== profile.id) ]
-    await saveConnections(next)
+    const password = credentialsForProfile?.password
+    if (typeof password !== 'string' || password.length === 0) {
+      throw new Error('密码不能为空')
+    }
+    const encryptedPassword = await encryptPassword(password)
+    await updateConnectionsTransaction(latest => {
+      const previous = latest.find(item => item.id === profile.id)
+      const persistedProfile = {
+        ...profile,
+        encryptedPassword: encryptedPassword || previous?.encryptedPassword || null
+      }
+      return [ persistedProfile, ...latest.filter(item => item.id !== profile.id) ]
+    })
     setCredentials(previous => {
       const updated = new Map(previous)
       if (password) updated.set(profile.id, { password })
@@ -452,7 +468,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
     if (currentConnectionId === connectionId) await handleDisconnect({ skipConfirm: true })
     await sftpManager.removeConnection(connectionId).catch(() => undefined)
-    await saveConnections(connections.filter(connection => connection.id !== connectionId))
+    await updateConnectionsTransaction(latest => latest.filter(connection => connection.id !== connectionId))
     setCredentials(previous => {
       const updated = new Map(previous)
       updated.delete(connectionId)
@@ -470,11 +486,31 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
    * @throws {Error} 当本地 Store 写入失败时抛出。
    */
   const updateProfile = async (connectionId, changes) => {
-    const next = connections.map(profile => profile.id === connectionId
+    const next = await updateConnectionsTransaction(latest => latest.map(profile => profile.id === connectionId
       ? { ...profile, ...changes, updatedAt: new Date().toISOString() }
-      : profile)
-    await saveConnections(next)
+      : profile))
     return next.find(profile => profile.id === connectionId)
+  }
+
+  /**
+   * 在认证成功后立即加密并回写连接密码；持久化失败由调用方单独提示。
+   *
+   * @param {string} connectionId - 要更新的连接配置 ID。
+   * @param {string} password - 已通过 SSH 认证的明文密码，仅在本次调用期间使用。
+   * @returns {Promise<ConnectionProfile|undefined>} 更新后的配置。
+   * @throws {Error} 当加密或 Store 写入失败时抛出。
+   */
+  const persistConnectionPassword = async (connectionId, password) => {
+    if (typeof password !== 'string' || password.length === 0) {
+      throw new Error('密码不能为空')
+    }
+    const encryptedPassword = await encryptPassword(password)
+    const profiles = await updateConnectionsTransaction(latest => latest.map(profile => profile.id === connectionId
+      ? { ...profile, encryptedPassword, updatedAt: new Date().toISOString() }
+      : profile))
+    const profile = profiles.find(item => item.id === connectionId)
+    if (!profile) throw new Error('连接配置不存在')
+    return profile
   }
 
   /**
@@ -502,7 +538,8 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     let connectionId = null
     let retryMessage = ''
     try {
-      connectionId = await sftpManager.createConnection({ ...connection, ...credentialsValue })
+      const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
+      connectionId = await sftpManager.createConnection({ ...latestConnection, ...credentialsValue })
       let result = await sftpManager.connect(connectionId)
 
       if (result.requiresHostKeyConfirmation) {
@@ -517,10 +554,20 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       }
 
       if (!result.connected) throw new Error('服务器连接失败')
+      // 认证已经成功；密码落盘失败不能撤销远程会话，只提示用户下次需要重新输入。
+      try {
+        await persistConnectionPassword(connection.id, credentialsValue.password)
+        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+      } catch (credentialError) {
+        void notification.error(`密码持久化失败：${ normalizeError(credentialError) }`)
+      }
+
       const home = await sftpManager.getRemoteUserHome(connectionId)
       const profile = {
-        ...(connections.find(item => item.id === connection.id) || connection),
-        hostKeyFingerprint: result.hostKey?.fingerprint || connection.hostKeyFingerprint
+        ...(connectionsRef.current.find(item => item.id === connection.id) || connection),
+        hostKeyFingerprint: result.hostKey?.fingerprint
+          || connectionsRef.current.find(item => item.id === connection.id)?.hostKeyFingerprint
+          || connection.hostKeyFingerprint
       }
       activeConnectionIdRef.current = connectionId
       setCurrentConnection(profile)
@@ -535,22 +582,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       ) {
         throw new Error('连接已断开')
       }
-      setCredentials(previous => {
-        const updated = new Map(previous)
-        updated.set(connection.id, credentialsValue)
-        return updated
-      })
-      // 首次连接输入的密码在认证成功后立即加密回写配置，确保重启后仍可自动连接。
-      if (credentialsValue.password && connection.encryptedPassword !== 'pending') {
-        const encryptedPassword = await encryptPassword(credentialsValue.password)
-        const persisted = {
-          ...connection,
-          encryptedPassword,
-          updatedAt: new Date().toISOString()
-        }
-        const next = connections.map(item => item.id === connection.id ? persisted : item)
-        await saveConnections(next)
-      }
+      setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
       void notification.success('连接成功')
     } catch (error) {
       if (connectionId) {
@@ -591,24 +623,26 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
    */
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
-    let credentialsValue = credentials.get(connection.id)
-    if (!credentialsValue?.password && connection.encryptedPassword) {
+    await connectionsReadyRef.current
+    const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
+    let credentialsValue = credentials.get(latestConnection.id)
+    if (!credentialsValue?.password && latestConnection.encryptedPassword) {
       try {
-        const password = await decryptPassword(connection.encryptedPassword)
+        const password = await decryptPassword(latestConnection.encryptedPassword)
         credentialsValue = { password }
-        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+        setCredentials(previous => new Map(previous).set(latestConnection.id, credentialsValue))
       } catch (error) {
-        console.warn(`解密连接 ${ connection.name } 的保存密码失败`, error)
+        console.warn(`解密连接 ${ latestConnection.name } 的保存密码失败`, error)
       }
     }
     credentialsValue ||= { password: '' }
     if (!credentialsValue.password) {
       setPasswordLoading(false)
       setPasswordPromptError('')
-      setPasswordPrompt(connection)
+      setPasswordPrompt(latestConnection)
       return
     }
-    await connectWithPassword(connection, credentialsValue)
+    await connectWithPassword(latestConnection, credentialsValue)
   }
 
   /**

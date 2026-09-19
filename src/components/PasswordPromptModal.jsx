@@ -1,6 +1,6 @@
 /**
  * 输入已保存连接的会话密码。
- * 密码只通过内存回调传回连接流程，不写入持久化配置。
+ * 密码通过连接流程加密后持久化；弹窗本身只处理当前输入。
  */
 import React, { useEffect } from 'react'
 import { Alert, Button, Form, Input, Modal } from 'antd'
@@ -48,7 +48,7 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading,
         />
       )}
       <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>
-        <Form.Item label="用户名" help="密码只会保存在本次运行的内存中">
+        <Form.Item label="用户名" help="密码会以加密形式保存">
           <Input value={connection?.username || ''} readOnly prefix={<AppIcon name="user" />} />
         </Form.Item>
         <Form.Item

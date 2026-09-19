@@ -5,11 +5,25 @@
 
 mod ssh;
 
-use std::path::Path;
-use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
+use aes_gcm::{
+    aead::{Aead, KeyInit},
+    Aes256Gcm, Nonce,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rand::RngCore;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use tauri::{Emitter, Manager};
+
+const CREDENTIAL_KEY_BYTES: usize = 32;
+const CREDENTIAL_NONCE_BYTES: usize = 12;
+const CREDENTIAL_VERSION: &str = "v1";
+
+// 密钥首次创建可能同时被多个启动解密请求触发；进程级锁配合 create_new
+// 保证不会互相覆盖，也不会在异常退出时静默替换历史密钥。
+static CREDENTIAL_KEY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 /// 返回用于验证 IPC 链路的问候语。
 ///
@@ -272,40 +286,140 @@ fn list_drives() -> Result<Vec<String>, String> {
 /// 使用应用本地密钥加密密码；密钥仅保存在应用数据目录，不通过前端 IPC 暴露。
 #[tauri::command]
 fn encrypt_password(app: tauri::AppHandle, password: String) -> Result<String, String> {
-    let key_path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("credential.key");
+    let key_path = credential_key_path(&app)?;
     let key = load_or_create_key(&key_path)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
-    let mut nonce_bytes = [0u8; 12];
+    let mut nonce_bytes = [0u8; CREDENTIAL_NONCE_BYTES];
     rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let ciphertext = cipher.encrypt(Nonce::from_slice(&nonce_bytes), password.as_bytes()).map_err(|_| "密码加密失败".to_string())?;
-    Ok(format!("{}:{}", BASE64.encode(nonce_bytes), BASE64.encode(ciphertext)))
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), password.as_bytes())
+        .map_err(|_| "密码加密失败".to_string())?;
+    Ok(format!(
+        "{CREDENTIAL_VERSION}:{}:{}",
+        BASE64.encode(nonce_bytes),
+        BASE64.encode(ciphertext)
+    ))
 }
 
 /// 使用应用本地密钥解密持久化密码。
 #[tauri::command]
 fn decrypt_password(app: tauri::AppHandle, encrypted: String) -> Result<String, String> {
-    let mut parts = encrypted.splitn(2, ':');
-    let nonce = BASE64.decode(parts.next().ok_or_else(|| "密码密文格式无效".to_string())?).map_err(|_| "密码密文格式无效".to_string())?;
-    let ciphertext = BASE64.decode(parts.next().ok_or_else(|| "密码密文格式无效".to_string())?).map_err(|_| "密码密文格式无效".to_string())?;
-    if nonce.len() != 12 { return Err("密码密文格式无效".to_string()) }
-    let key_path = app.path().app_config_dir().map_err(|error| error.to_string())?.join("credential.key");
-    let key = load_or_create_key(&key_path)?;
+    let parts: Vec<_> = encrypted.split(':').collect();
+    let (nonce_text, ciphertext_text) = match parts.as_slice() {
+        // 兼容早期版本写入的 `nonce:ciphertext` 格式。
+        [nonce, ciphertext] => (*nonce, *ciphertext),
+        [version, nonce, ciphertext] if *version == CREDENTIAL_VERSION => (*nonce, *ciphertext),
+        _ => return Err("密码密文格式无效".to_string()),
+    };
+    let nonce = BASE64
+        .decode(nonce_text)
+        .map_err(|_| "密码密文格式无效".to_string())?;
+    let ciphertext = BASE64
+        .decode(ciphertext_text)
+        .map_err(|_| "密码密文格式无效".to_string())?;
+    if nonce.len() != CREDENTIAL_NONCE_BYTES || ciphertext.len() < 16 {
+        return Err("密码密文格式无效".to_string());
+    }
+    let key_path = credential_key_path(&app)?;
+    // 解密绝不能因为密钥丢失而创建新密钥，否则所有历史密文会永久失效。
+    let key = load_existing_key(&key_path)?;
     let cipher = Aes256Gcm::new_from_slice(&key).map_err(|error| error.to_string())?;
-    let plaintext = cipher.decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref()).map_err(|_| "密码解密失败".to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "密码解密失败".to_string())?;
     String::from_utf8(plaintext).map_err(|_| "密码编码无效".to_string())
 }
 
-/// 读取或创建应用级 256 位凭据密钥，并确保父目录存在。
-fn load_or_create_key(path: &std::path::Path) -> Result<Vec<u8>, String> {
-    if let Ok(key) = std::fs::read(path) {
-        if key.len() == 32 { return Ok(key) }
-        return Err("凭据密钥长度无效".to_string())
-    }
-    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent).map_err(|error| error.to_string())?; }
-    let mut key = vec![0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
-    std::fs::write(path, &key).map_err(|error| error.to_string())?;
+/// 返回应用级凭据密钥路径。
+fn credential_key_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_config_dir()
+        .map(|path| path.join("credential.key"))
+        .map_err(|error| format!("获取凭据密钥路径失败: {error}"))
+}
+
+/// 读取已存在的凭据密钥，并在 Unix 平台收紧文件权限。
+fn load_existing_key(path: &Path) -> Result<Vec<u8>, String> {
+    let key = fs::read(path).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            "凭据密钥不存在，请重新保存连接密码".to_string()
+        } else {
+            format!("读取凭据密钥失败: {error}")
+        }
+    })?;
+    validate_credential_key(&key)?;
+    secure_key_permissions(path)?;
     Ok(key)
+}
+
+/// 读取或并发安全地创建应用级 256 位凭据密钥，并确保父目录存在。
+fn load_or_create_key(path: &Path) -> Result<Vec<u8>, String> {
+    let lock = CREDENTIAL_KEY_LOCK.get_or_init(|| Mutex::new(()));
+    let _guard = lock.lock().map_err(|_| "凭据密钥锁已损坏".to_string())?;
+
+    match fs::read(path) {
+        Ok(key) => {
+            validate_credential_key(&key)?;
+            secure_key_permissions(path)?;
+            return Ok(key);
+        }
+        Err(error) if error.kind() != std::io::ErrorKind::NotFound => {
+            return Err(format!("读取凭据密钥失败: {error}"));
+        }
+        Err(_) => {}
+    }
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| format!("创建凭据目录失败: {error}"))?;
+    }
+    let mut key = vec![0u8; CREDENTIAL_KEY_BYTES];
+    rand::thread_rng().fill_bytes(&mut key);
+
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    match options.open(path) {
+        Ok(mut file) => {
+            if let Err(error) = file.write_all(&key).and_then(|_| file.sync_all()) {
+                let _ = fs::remove_file(path);
+                return Err(format!("写入凭据密钥失败: {error}"));
+            }
+            secure_key_permissions(path)?;
+            Ok(key)
+        }
+        // 其他进程可能刚刚创建成功；读取其完整密钥，绝不覆盖。
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => load_existing_key(path),
+        Err(error) => Err(format!("创建凭据密钥失败: {error}")),
+    }
+}
+
+/// 校验凭据密钥长度。
+fn validate_credential_key(key: &[u8]) -> Result<(), String> {
+    if key.len() == CREDENTIAL_KEY_BYTES {
+        Ok(())
+    } else {
+        Err("凭据密钥长度无效".to_string())
+    }
+}
+
+/// 将凭据密钥文件权限限制为仅当前用户可读写。
+#[cfg(unix)]
+fn secure_key_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut permissions = fs::metadata(path)
+        .map_err(|error| format!("读取凭据密钥权限失败: {error}"))?
+        .permissions();
+    permissions.set_mode(0o600);
+    fs::set_permissions(path, permissions).map_err(|error| format!("设置凭据密钥权限失败: {error}"))
+}
+
+#[cfg(not(unix))]
+fn secure_key_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
 }
 
 /// 创建并运行 Tauri 应用，注册插件、菜单和全部 IPC 命令。
