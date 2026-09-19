@@ -152,6 +152,8 @@ class SftpManager {
   constructor() {
     // connectionId -> ConnectionInfo，保存连接配置、状态、错误和最近活动时间。
     this.connections = new Map()
+    // connectionId -> Promise，合并标签卸载与快速重连期间的重复断开命令。
+    this.pendingDisconnects = new Map()
     // UI 层断线订阅者集合；每个订阅者由 subscribeConnectionLost 返回的函数移除。
     this.connectionLostListeners = new Set()
     // 远程命令默认超时和历史重试参数，供连接流程兼容旧调用方。
@@ -336,6 +338,11 @@ class SftpManager {
       hostKeyFingerprint: config.hostKeyFingerprint || null
     }
 
+    // 关闭文件标签后立即重开时，必须等待旧会话的卸载清理完成，
+    // 否则迟到的 disconnect_ssh 可能关闭刚建立的新会话。
+    const pendingDisconnect = this.pendingDisconnects.get(id)
+    if (pendingDisconnect) await pendingDisconnect.catch(() => undefined)
+
     const previous = this.connections.get(id)
     if (previous?.status === SftpConnectionStatus.CONNECTED) {
       await this.disconnect(id).catch(() => undefined)
@@ -419,18 +426,32 @@ class SftpManager {
    * @throws {Error} 当 Rust 端主动断开会话失败时抛出；本地清理仍会执行。
    */
   async disconnect(connectionId) {
+    const pendingDisconnect = this.pendingDisconnects.get(connectionId)
+    if (pendingDisconnect) return pendingDisconnect
+
     const info = this.connections.get(connectionId)
     if (!info) return true
+
+    const operation = (async () => {
+      try {
+        await invoke('disconnect_ssh', { id: connectionId })
+      } finally {
+        info.status = SftpConnectionStatus.DISCONNECTED
+        info.lastError = null
+        this.cancelDirectorySizeRequests(connectionId, '连接已断开')
+        this.invalidateDirectorySizeCache(connectionId)
+        this.pumpDirectorySizeQueue()
+      }
+      return true
+    })()
+    this.pendingDisconnects.set(connectionId, operation)
     try {
-      await invoke('disconnect_ssh', { id: connectionId })
+      return await operation
     } finally {
-      info.status = SftpConnectionStatus.DISCONNECTED
-      info.lastError = null
-      this.cancelDirectorySizeRequests(connectionId, '连接已断开')
-      this.invalidateDirectorySizeCache(connectionId)
-      this.pumpDirectorySizeQueue()
+      if (this.pendingDisconnects.get(connectionId) === operation) {
+        this.pendingDisconnects.delete(connectionId)
+      }
     }
-    return true
   }
 
   /**

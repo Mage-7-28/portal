@@ -4,8 +4,8 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { Modal, Progress } from 'antd'
-import { store } from '../utils/storeUtils.js'
+import { Button, Modal, Progress, Spin } from 'antd'
+import { store, useStoreValue } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
 import { getReadableConnectionError, isCredentialError, SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
@@ -15,8 +15,8 @@ import FileBrowser from './FileBrowser.jsx'
 import ConnectionList from './ConnectionList.jsx'
 import AddConnectionModal from './AddConnectionModal.jsx'
 import PasswordPromptModal from './PasswordPromptModal.jsx'
+import AppIcon from './AppIcon.jsx'
 import { notification } from '../utils/notificationUtils.js'
-import { closeTerminalWindows } from '../utils/terminalWindow.js'
 import { decryptPassword, encryptPassword } from '../utils/credentialUtils.js'
 
 /**
@@ -181,11 +181,33 @@ const waitForNextPaint = () => new Promise(resolve => {
  *
  * @param {Object} props - 文件浏览器容器属性。
  * @param {boolean} [props.showHiddenFiles=false] - 是否请求并统计以点开头的远程项目。
+ * @param {'standalone'|'launcher'|'session'} [props.workspaceMode='standalone'] - 独立页面、连接首页或文件会话模式。
+ * @param {ConnectionProfile|null} [props.initialConnection=null] - 文件会话首次连接使用的持久化配置。
+ * @param {number} [props.connectRequestId=0] - 首页再次请求打开同一连接时递增的重连序号。
+ * @param {(connection: ConnectionProfile) => void} [props.onOpenConnection] - 首页请求打开文件标签的回调。
+ * @param {(connection: ConnectionProfile) => void|Promise<void>} [props.onOpenTerminal] - 文件页请求打开终端标签的回调。
+ * @param {(connection: ConnectionProfile) => void} [props.onSessionConnected] - 文件会话连接成功后的回调。
+ * @param {(connectionId: string) => void} [props.onSessionClose] - 文件会话主动关闭后的回调。
+ * @param {(connectionId: string) => void} [props.onConnectionDeleted] - 首页删除连接配置后的回调。
+ * @param {(connection: ConnectionProfile) => void} [props.onConnectionSaved] - 首页保存连接配置后的回调。
  * @returns {JSX.Element} 连接列表、密码弹窗或已连接的文件浏览器视图。
  */
-function FileBrowserPanel({ showHiddenFiles = false }) {
+function FileBrowserPanel({
+  showHiddenFiles = false,
+  workspaceMode = 'standalone',
+  initialConnection = null,
+  connectRequestId = 0,
+  onOpenConnection,
+  onOpenTerminal,
+  onSessionConnected,
+  onSessionClose,
+  onConnectionDeleted,
+  onConnectionSaved
+}) {
   // 只把以点开头视为隐藏项目。这是各类 SSH/SFTP 服务端可稳定提供的共同语义。
   const includeHiddenFiles = showHiddenFiles === true
+  // 订阅连接配置的共享 Store，使连接首页和多个文件标签始终使用同一份最新密文。
+  const storedConnections = useStoreValue(StoreKeys.SSH_CONNECTIONS)
   // 持久化连接配置及当前进程内的临时凭据缓存。
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
@@ -207,6 +229,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   const [ passwordPromptError, setPasswordPromptError ] = useState('')
   const [ passwordLoading, setPasswordLoading ] = useState(false)
   const [ connectingId, setConnectingId ] = useState(null)
+  const [ connectionFailure, setConnectionFailure ] = useState('')
   // 文件预览内容、阶段、目标名称和读取进度。
   const [ preview, setPreview ] = useState(null)
   const [ previewLoading, setPreviewLoading ] = useState(false)
@@ -224,8 +247,14 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   const connectionsRef = useRef([])
   const connectionsReadyRef = useRef(Promise.resolve())
   const connectionsLoadStartedRef = useRef(false)
+  // 会话组件卸载和重连期间使用引用判断异步结果是否仍可写回当前标签。
+  const componentMountedRef = useRef(false)
+  const ownedConnectionIdRef = useRef(null)
+  const initialConnectionRef = useRef(initialConnection)
+  const handleConnectRef = useRef(null)
   // 为删除/重命名进度生成单调序号，避免相同毫秒时间戳导致 maskId 冲突。
   const operationStatusSequence = useRef(0)
+  initialConnectionRef.current = initialConnection
 
   /**
    * 创建带 maskId 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
@@ -288,12 +317,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   }, [releasePreviewUrl])
 
   /**
-   * 清空远程视图并关闭当前连接相关的终端与缓存任务。
+   * 清空当前标签的远程视图和请求状态。
    *
    * @returns {void}
    */
   const resetRemoteView = useCallback(() => {
-    void closeTerminalWindows().catch(() => undefined)
     activeConnectionIdRef.current = null
     requestId.current += 1
     setCurrentConnection(null)
@@ -307,13 +335,38 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     setLoading(false)
   }, [closePreview])
 
+  // 文件标签卸载时只释放自己持有的 SSH 会话；其他服务器标签继续保持连接。
+  useEffect(() => {
+    componentMountedRef.current = true
+    return () => {
+      componentMountedRef.current = false
+      requestId.current += 1
+      previewRequestId.current += 1
+      const connectionId = ownedConnectionIdRef.current
+      ownedConnectionIdRef.current = null
+      activeConnectionIdRef.current = null
+      if (connectionId) void sftpManager.disconnect(connectionId).catch(() => undefined)
+    }
+  }, [])
+
   // 首次加载连接配置；配置迁移失败由上层错误边界或通知流程处理。
   useEffect(() => {
     if (connectionsLoadStartedRef.current) return
     connectionsLoadStartedRef.current = true
     connectionsReadyRef.current = loadConnections()
-    void connectionsReadyRef.current
+    void connectionsReadyRef.current.catch(loadError => {
+      if (!componentMountedRef.current) return
+      setConnectionFailure(`读取连接配置失败：${ normalizeError(loadError) }`)
+    })
   }, [])
+
+  // 任一标签更新指纹或加密密码后，同步刷新其他标签的本地快照。
+  useEffect(() => {
+    if (!Array.isArray(storedConnections)) return
+    const profiles = sortProfiles(storedConnections.map(normalizeProfile).filter(Boolean))
+    connectionsRef.current = profiles
+    if (componentMountedRef.current) setConnections(profiles)
+  }, [storedConnections])
 
   // 组件卸载时释放最后一次图片预览的 Object URL。
   useEffect(() => () => releasePreviewUrl(), [releasePreviewUrl])
@@ -327,7 +380,9 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
   useEffect(() => sftpManager.subscribeConnectionLost(({ id, reason }) => {
     if (activeConnectionIdRef.current !== id) return
     resetRemoteView()
-    void notification.error(`连接已断开：${ reason || '服务器无响应，请重新连接' }`)
+    const message = reason || '服务器无响应，请重新连接'
+    setConnectionFailure(message)
+    void notification.error(`连接已断开：${ message }`)
   }), [resetRemoteView])
 
   // SSH 保活可以避免空闲 NAT 过期；主动探测也能在用户停留目录页面时
@@ -351,7 +406,9 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         // 探测失败本身就说明当前会话不可用，不能只依赖连接管理器是否已经更新状态。
         if (!disposed && activeConnectionIdRef.current === connectionId) {
           resetRemoteView()
-          void notification.error(`连接已断开：${ normalizeError(probeError) }`)
+          const message = normalizeError(probeError)
+          setConnectionFailure(message)
+          void notification.error(`连接已断开：${ message }`)
         }
       } finally {
         probing = false
@@ -375,7 +432,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
       : []
     connectionsRef.current = profiles
-    setConnections(profiles)
+    if (componentMountedRef.current) setConnections(profiles)
     if (JSON.stringify(saved || []) !== JSON.stringify(profiles)) {
       await store.set(StoreKeys.SSH_CONNECTIONS, profiles)
     }
@@ -404,7 +461,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
       : []
     connectionsRef.current = profiles
-    setConnections(profiles)
+    if (componentMountedRef.current) setConnections(profiles)
     return profiles
   }
 
@@ -422,7 +479,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       throw new Error('密码不能为空')
     }
     const encryptedPassword = await encryptPassword(password)
-    await updateConnectionsTransaction(latest => {
+    const profiles = await updateConnectionsTransaction(latest => {
       const previous = latest.find(item => item.id === profile.id)
       const persistedProfile = {
         ...profile,
@@ -435,6 +492,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       if (password) updated.set(profile.id, { password })
       return updated
     })
+    onConnectionSaved?.(profiles.find(item => item.id === profile.id) || profile)
   }
 
   /**
@@ -474,6 +532,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
       updated.delete(connectionId)
       return updated
     })
+    onConnectionDeleted?.(connectionId)
     void notification.success('连接已删除')
   }
 
@@ -531,38 +590,64 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     setConnectingId(connection.id)
     setPasswordLoading(true)
     setLoading(true)
+    setConnectionFailure('')
     await waitForNextPaint()
+    if (!componentMountedRef.current) return
     const credentialsValue = typeof credentialsForProfile === 'string'
       ? { password: credentialsForProfile }
       : { password: credentialsForProfile?.password || '' }
     let connectionId = null
+    let authenticated = false
     let retryMessage = ''
     try {
       const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
       connectionId = await sftpManager.createConnection({ ...latestConnection, ...credentialsValue })
+      ownedConnectionIdRef.current = connectionId
+      if (!componentMountedRef.current) {
+        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        return
+      }
       let result = await sftpManager.connect(connectionId)
+      if (!componentMountedRef.current) {
+        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        return
+      }
 
       if (result.requiresHostKeyConfirmation) {
         const accepted = await confirm(
-          `首次连接 ${ connection.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
+          `首次连接 ${ latestConnection.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
           { title: '确认 SSH 主机密钥', kind: 'warning', okLabel: '信任并继续', cancelLabel: '取消' }
         )
         if (!accepted) throw new Error('已取消主机密钥确认')
+        if (!componentMountedRef.current) return
         await sftpManager.updateHostKey(connectionId, result.hostKey.fingerprint)
         await updateProfile(connection.id, { hostKeyFingerprint: result.hostKey.fingerprint })
         result = await sftpManager.connect(connectionId)
+        if (!componentMountedRef.current) {
+          await sftpManager.disconnect(connectionId).catch(() => undefined)
+          return
+        }
       }
 
       if (!result.connected) throw new Error('服务器连接失败')
+      authenticated = true
       // 认证已经成功；密码落盘失败不能撤销远程会话，只提示用户下次需要重新输入。
       try {
         await persistConnectionPassword(connection.id, credentialsValue.password)
-        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+        if (componentMountedRef.current) {
+          setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+        }
       } catch (credentialError) {
-        void notification.error(`密码持久化失败：${ normalizeError(credentialError) }`)
+        if (componentMountedRef.current) {
+          void notification.error(`密码持久化失败：${ normalizeError(credentialError) }`)
+        }
       }
 
       const home = await sftpManager.getRemoteUserHome(connectionId)
+      if (!componentMountedRef.current) {
+        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        return
+      }
       const profile = {
         ...(connectionsRef.current.find(item => item.id === connection.id) || connection),
         hostKeyFingerprint: result.hostKey?.fingerprint
@@ -583,34 +668,49 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         throw new Error('连接已断开')
       }
       setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+      setConnectionFailure('')
+      onSessionConnected?.({ ...profile, id: connectionId })
       void notification.success('连接成功')
     } catch (error) {
+      if (!componentMountedRef.current) {
+        if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
+        return
+      }
       if (connectionId) {
         await sftpManager.removeConnection(connectionId).catch(() => undefined)
       } else {
         await sftpManager.removeConnection(connection.id).catch(() => undefined)
       }
-      setCredentials(previous => {
-        const updated = new Map(previous)
-        updated.delete(connection.id)
-        return updated
-      })
+      ownedConnectionIdRef.current = null
       const readableError = getReadableConnectionError(error)
-      retryMessage = isCredentialError(error) ? readableError : ''
+      const credentialFailed = isCredentialError(error)
+      if (credentialFailed) {
+        setCredentials(previous => {
+          const updated = new Map(previous)
+          updated.delete(connection.id)
+          return updated
+        })
+      } else if (authenticated) {
+        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+      }
+      retryMessage = credentialFailed ? readableError : ''
+      setConnectionFailure(readableError)
       void notification.error(readableError)
     } finally {
-      if (connectingIdRef.current === connection.id) {
-        connectingIdRef.current = null
-        setLoading(false)
-        setPasswordLoading(false)
-        setConnectingId(null)
-      }
-      if (retryMessage) {
-        setPasswordPrompt(connection)
-        setPasswordPromptError(retryMessage)
-      } else {
-        setPasswordPrompt(null)
-        setPasswordPromptError('')
+      if (componentMountedRef.current) {
+        if (connectingIdRef.current === connection.id) {
+          connectingIdRef.current = null
+          setLoading(false)
+          setPasswordLoading(false)
+          setConnectingId(null)
+        }
+        if (retryMessage) {
+          setPasswordPrompt(connection)
+          setPasswordPromptError(retryMessage)
+        } else {
+          setPasswordPrompt(null)
+          setPasswordPromptError('')
+        }
       }
     }
   }
@@ -623,8 +723,23 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
    */
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
-    await connectionsReadyRef.current
+    try {
+      await connectionsReadyRef.current
+    } catch (loadError) {
+      const message = `读取连接配置失败：${ normalizeError(loadError) }`
+      setConnectionFailure(message)
+      void notification.error(message)
+      return
+    }
     const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
+    if (workspaceMode === 'launcher' && onOpenConnection) {
+      onOpenConnection(latestConnection)
+      return
+    }
+    if (
+      activeConnectionIdRef.current === latestConnection.id
+      && sftpManager.getConnectionStatus(latestConnection.id) === SftpConnectionStatus.CONNECTED
+    ) return
     let credentialsValue = credentials.get(latestConnection.id)
     if (!credentialsValue?.password && latestConnection.encryptedPassword) {
       try {
@@ -644,6 +759,22 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     }
     await connectWithPassword(latestConnection, credentialsValue)
   }
+  handleConnectRef.current = handleConnect
+
+  // 新文件标签创建或首页再次请求同一断线标签时启动连接；已连接标签只获得焦点。
+  useEffect(() => {
+    if (workspaceMode !== 'session' || !initialConnectionRef.current || connectRequestId <= 0) return undefined
+    const timer = window.setTimeout(() => {
+      const connection = initialConnectionRef.current
+      if (!connection || !componentMountedRef.current) return
+      if (
+        activeConnectionIdRef.current === connection.id
+        && sftpManager.getConnectionStatus(connection.id) === SftpConnectionStatus.CONNECTED
+      ) return
+      void handleConnectRef.current?.(connection)
+    }, 0)
+    return () => window.clearTimeout(timer)
+  }, [ connectRequestId, workspaceMode ])
 
   /**
    * 关闭密码输入框并清理当前认证错误状态。
@@ -654,6 +785,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     setPasswordPrompt(null)
     setPasswordPromptError('')
     setPasswordLoading(false)
+    if (workspaceMode === 'session') setConnectionFailure('尚未连接服务器')
   }
 
   /**
@@ -694,9 +826,11 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
     const connectionId = currentConnectionId
     // 用户主动断开时忽略正在传输中的连接事件；只有意外断开才显示重连提示。
     activeConnectionIdRef.current = null
-    await closeTerminalWindows().catch(() => undefined)
     if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
+    ownedConnectionIdRef.current = null
     resetRemoteView()
+    setConnectionFailure('')
+    if (connectionId && workspaceMode === 'session') onSessionClose?.(connectionId)
   }
 
   /**
@@ -730,8 +864,10 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         const connectionStillActive = activeConnectionIdRef.current === connectionId
         if (sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
           if (connectionStillActive) {
+            const message = normalizeError(requestError)
             resetRemoteView()
-            void notification.error(`连接已断开：${ normalizeError(requestError) }`)
+            setConnectionFailure(message)
+            void notification.error(`连接已断开：${ message }`)
           }
         } else if (!connectionStillActive) {
           // 连接丢失事件已经完成页面重置，忽略这次过期请求的错误。
@@ -1312,6 +1448,7 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
           handleRenameItem={handleRenameItem}
           handleDriveSelect={path => void loadRemoteDirectory(path)}
           handleDisconnect={handleDisconnect}
+          onOpenTerminal={onOpenTerminal}
         />
         <Modal
           rootClassName="compact-modal preview-modal"
@@ -1324,6 +1461,55 @@ function FileBrowserPanel({ showHiddenFiles = false }) {
         >
           {renderPreviewContent()}
         </Modal>
+        <PasswordPromptModal
+          visible={Boolean(passwordPrompt)}
+          connection={passwordPrompt}
+          loading={passwordLoading}
+          errorMessage={passwordPromptError}
+          onCancel={handlePasswordPromptCancel}
+          onSubmit={handlePasswordPromptSubmit}
+        />
+      </>
+    )
+  }
+
+  if (workspaceMode === 'session') {
+    const connection = initialConnectionRef.current
+    const isConnecting = Boolean(connectingId)
+    return (
+      <>
+        <div className="session-connection-state" role="status" aria-live="polite">
+          <AppIcon name="server" />
+          <h2>{connection?.name || connection?.host || '服务器连接'}</h2>
+          <span className="session-connection-endpoint">
+            {connection?.username || '用户'}@{connection?.host || '服务器'}:{connection?.port || 22}
+          </span>
+          {isConnecting ? (
+            <div className="session-connection-progress">
+              <Spin size="small" />
+              <span>正在建立 SSH 连接...</span>
+            </div>
+          ) : (
+            <>
+              <p>{connectionFailure || (passwordPrompt ? '请输入连接密码' : '尚未连接服务器')}</p>
+              <div className="session-connection-actions">
+                <Button
+                  icon={<AppIcon name="reload" />}
+                  onClick={() => connection && void handleConnect(connection)}
+                >
+                  重新连接
+                </Button>
+                <Button
+                  type="text"
+                  icon={<AppIcon name="close" />}
+                  onClick={() => onSessionClose?.(connection?.id || '')}
+                >
+                  关闭标签
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
         <PasswordPromptModal
           visible={Boolean(passwordPrompt)}
           connection={passwordPrompt}

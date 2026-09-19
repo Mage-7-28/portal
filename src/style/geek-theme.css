@@ -72,22 +72,15 @@ body {
 
 .app-shell {
   position: relative;
-  padding: 8px;
-  background-image:
-    linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(166, 173, 183, 0.018) 1px, transparent 1px);
-  background-size: 32px 32px;
+  padding: 0;
+  background: none;
 }
 
 .app-frame {
-  border-color: var(--portal-geek-line-strong);
-  border-radius: 10px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.028), transparent 58px),
-    var(--portal-geek-surface-0);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.025),
-    0 14px 34px var(--portal-geek-shadow);
+  border: 0;
+  border-radius: 0;
+  background: var(--portal-geek-surface-0);
+  box-shadow: none;
 }
 
 .app-content {
@@ -97,13 +90,28 @@ body {
   background-size: 100% 100%;
 }
 
-.download-status {
-  min-height: 29px;
-  border-top-color: var(--portal-geek-line-soft);
-  border-radius: 0 0 9px 9px;
+/* 标签栏只承担一级导航，窗口两侧留白由固定首页与会话滚动区共同遵守。 */
+.workspace-tabbar {
+  border-bottom-color: var(--portal-geek-line-soft);
+  background: linear-gradient(180deg, #25272a, #222326);
+}
+
+.workspace-terminal-panel {
+  padding: 10px 12px 7px;
   background:
-    linear-gradient(90deg, rgba(127, 166, 164, 0.045), transparent 38%),
-    var(--portal-geek-surface-1);
+    linear-gradient(180deg, rgba(127, 166, 164, 0.025), transparent 120px),
+    var(--portal-geek-canvas);
+}
+
+.download-status {
+  min-height: 30px;
+  padding-inline: 11px;
+  border-top-color: var(--portal-geek-line-soft);
+  border-radius: 0;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.055), transparent 36%),
+    #27292c;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.018);
   color: var(--portal-geek-text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -111,7 +119,13 @@ body {
 .download-status-label {
   color: var(--portal-geek-text);
   font-size: 11px;
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
+}
+
+.download-status-path {
+  color: #969aa2;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
 }
 
 .download-status-label::before {
@@ -268,9 +282,9 @@ body {
   color: var(--portal-geek-text);
 }
 
-/* 连接页采用节点面板样式，强化层级但不压缩已有可操作区域。 */
+/* 连接页按节点卡片排列，横向空间充足时使用双列，窄窗口恢复单列。 */
 .connection-page {
-  padding: 14px;
+  padding: 13px 14px 10px;
   background:
     linear-gradient(180deg, rgba(127, 166, 164, 0.035), transparent 150px),
     transparent;
@@ -278,8 +292,8 @@ body {
 
 .connection-header {
   min-height: 40px;
-  margin-bottom: 12px;
-  padding: 0 0 10px;
+  margin-bottom: 11px;
+  padding: 0 2px 10px;
   border-bottom: 1px solid var(--portal-geek-line-soft);
 }
 
@@ -290,7 +304,7 @@ body {
 .connection-header h1 {
   color: var(--portal-geek-text);
   font-size: 15px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0;
 }
 
 .connection-header h1::before {
@@ -309,7 +323,7 @@ body {
   color: var(--portal-geek-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
-  letter-spacing: 0.025em;
+  letter-spacing: 0;
 }
 
 .connection-header > div > .connection-header-hint {
@@ -317,17 +331,46 @@ body {
 }
 
 .connection-list .ant-list-items {
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px;
 }
 
 .connection-row.ant-list-item {
-  min-height: 58px;
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 68px;
+  align-items: center;
+  overflow: hidden;
+  padding: 10px 11px !important;
+  box-sizing: border-box;
   border-color: var(--portal-geek-line-soft) !important;
-  border-radius: 8px;
+  border-radius: 7px;
   background:
     linear-gradient(90deg, rgba(127, 166, 164, 0.04), transparent 30%),
     var(--portal-geek-surface-1);
-  box-shadow: inset 2px 0 0 rgba(127, 166, 164, 0.42);
+  box-shadow:
+    inset 2px 0 0 rgba(127, 166, 164, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.022);
+}
+
+.connection-row.ant-list-item::before {
+  position: absolute;
+  top: 0;
+  right: 11px;
+  left: 11px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(235, 144, 112, 0.6),
+    rgba(127, 166, 164, 0.5),
+    transparent
+  );
+  content: '';
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .connection-row.ant-list-item:hover {
@@ -335,6 +378,13 @@ body {
   background:
     linear-gradient(90deg, rgba(127, 166, 164, 0.075), transparent 35%),
     #35373c;
+  box-shadow:
+    inset 2px 0 0 var(--portal-geek-primary),
+    inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+
+.connection-row.ant-list-item:hover::before {
+  opacity: 1;
 }
 
 .connection-row.ant-list-item.is-connecting,
@@ -344,7 +394,31 @@ body {
 }
 
 .connection-row-icon {
+  width: 18px;
+  height: 18px;
+  padding: 6px;
+  box-sizing: content-box;
+  border: 1px solid rgba(127, 166, 164, 0.24);
+  border-radius: 6px;
+  background: rgba(127, 166, 164, 0.075);
   color: var(--portal-geek-primary);
+}
+
+.connection-row .ant-list-item-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.connection-row .ant-list-item-meta-avatar {
+  height: 32px;
+  margin-inline-end: 10px;
+}
+
+.connection-row .ant-list-item-action {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-inline-start: 8px;
 }
 
 .connection-row-name,
@@ -361,12 +435,28 @@ body {
 }
 
 .connection-empty {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(380px, calc(100% - 24px));
+  height: auto;
+  min-height: 180px;
+  padding: 20px;
+  transform: translate(-50%, -50%);
   border: 1px dashed var(--portal-geek-line-soft);
   border-radius: 8px;
   background: rgba(36, 37, 41, 0.74);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.022);
 }
 
 .connection-empty .app-icon {
+  width: 22px;
+  height: 22px;
+  padding: 8px;
+  box-sizing: content-box;
+  border: 1px solid rgba(127, 166, 164, 0.24);
+  border-radius: 7px;
+  background: rgba(127, 166, 164, 0.065);
   color: var(--portal-geek-teal);
 }
 
@@ -381,7 +471,7 @@ body {
   background-color: var(--portal-geek-primary);
 }
 
-/* 文件区保持“数据面板”层次，路径栏、连接栏和文件列表使用一致边框系统。 */
+/* 文件区将服务器状态、操作与路径导航收拢为同一控制台头部。 */
 .file-browser {
   padding: 12px;
   background:
@@ -389,9 +479,39 @@ body {
     transparent;
 }
 
+.file-workspace-header {
+  margin-bottom: 9px;
+  padding: 9px;
+  overflow: hidden;
+  border: 1px solid var(--portal-geek-line-soft);
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, rgba(235, 144, 112, 0.055), transparent 38%),
+    linear-gradient(225deg, rgba(127, 166, 164, 0.055), transparent 48%),
+    #292b2f;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+
+.file-workspace-header::before {
+  position: absolute;
+  top: 0;
+  right: 18px;
+  left: 18px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: linear-gradient(90deg, transparent, var(--portal-geek-primary) 32%, var(--portal-geek-teal) 72%, transparent);
+  content: '';
+  opacity: 0.72;
+  pointer-events: none;
+}
+
 .path-toolbar {
   gap: 7px;
   margin-bottom: 9px;
+}
+
+.file-workspace-header .path-toolbar {
+  margin-bottom: 0;
 }
 
 .toolbar-icon-button.ant-btn {
@@ -430,7 +550,7 @@ body {
   background: transparent !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12.5px;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
 }
 
 .path-menu-button.ant-btn {
@@ -447,6 +567,16 @@ body {
     #292b2f;
 }
 
+.file-workspace-header .connection-toolbar {
+  min-height: 31px;
+  margin: 0 0 8px;
+  padding: 0 1px 8px;
+  border: 0;
+  border-bottom: 1px solid rgba(91, 94, 102, 0.65);
+  border-radius: 0;
+  background: transparent;
+}
+
 .connection-status-dot {
   width: 8px;
   height: 8px;
@@ -460,7 +590,7 @@ body {
 }
 
 .connection-name {
-  letter-spacing: 0.025em;
+  letter-spacing: 0;
 }
 
 .connection-actions .ant-btn {
@@ -475,6 +605,9 @@ body {
     var(--portal-geek-canvas);
   background-size: 100% 46px;
   scrollbar-gutter: stable;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.018),
+    0 5px 18px rgba(0, 0, 0, 0.08);
 }
 
 .file-list-shell.is-upload-drop-target {
@@ -534,6 +667,7 @@ body {
 
 .selection-action-bar {
   border-color: var(--portal-geek-line-strong);
+  border-radius: 7px;
   background: rgba(47, 49, 54, 0.97);
   box-shadow: 0 10px 28px rgba(0, 0, 0, 0.38), inset 0 1px 0 rgba(255, 255, 255, 0.04);
   backdrop-filter: blur(8px);
@@ -546,17 +680,37 @@ body {
 
 /* 模态框、上传区和关于页沿用同一套面板语言。 */
 .compact-modal .ant-modal-content {
+  position: relative;
+  overflow: hidden;
   border-color: var(--portal-geek-line-strong);
-  border-radius: 9px;
+  border-radius: 8px;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 74px),
     var(--portal-geek-surface-1);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
 }
 
+.compact-modal .ant-modal-content::before {
+  position: absolute;
+  top: 0;
+  right: 22px;
+  left: 22px;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: linear-gradient(90deg, transparent, var(--portal-geek-primary) 34%, var(--portal-geek-teal) 72%, transparent);
+  content: '';
+  opacity: 0.82;
+  pointer-events: none;
+}
+
+.compact-modal .ant-modal-header {
+  padding-bottom: 9px;
+  border-bottom: 1px solid rgba(69, 71, 77, 0.72);
+}
+
 .compact-modal .ant-modal-title {
   color: var(--portal-geek-text);
-  letter-spacing: 0.025em;
+  letter-spacing: 0;
 }
 
 .compact-modal .ant-modal-close:hover {
@@ -568,6 +722,12 @@ body {
   color: #d9dce1;
 }
 
+.compact-form > .modal-actions {
+  margin-top: 2px;
+  padding-top: 11px;
+  border-top: 1px solid rgba(69, 71, 77, 0.72);
+}
+
 .connection-test-result {
   border-radius: 7px;
   background: rgba(30, 31, 34, 0.72);
@@ -575,7 +735,7 @@ body {
 
 .upload-drop-zone.ant-upload-drag {
   border-color: var(--portal-geek-line-strong);
-  border-radius: 7px;
+  border-radius: 6px;
   background:
     linear-gradient(rgba(166, 173, 183, 0.022) 1px, transparent 1px),
     #232529;
@@ -610,7 +770,7 @@ body {
 }
 
 .about-title {
-  letter-spacing: 0.08em;
+  letter-spacing: 0;
 }
 
 .about-meta {
@@ -636,18 +796,25 @@ body {
   color: var(--portal-geek-text);
 }
 
-/* 终端保持 ANSI 原始颜色，仅为容器增加克制的设备边框与扫描感。 */
+/* 终端状态栏与模拟器使用同一面板语言，ANSI 前景色保持不变。 */
 .terminal-window-shell {
   --terminal-window-gap: 8px;
   background:
     linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
     var(--portal-geek-canvas);
   background-size: 100% 30px;
-  padding: 8px 12px;
+  padding: 10px 12px 8px;
 }
 
 .terminal-connection-meta {
-  padding: 0 3px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 0 10px;
+  border: 1px solid var(--portal-geek-line-soft);
+  border-radius: 6px;
+  background:
+    linear-gradient(90deg, rgba(127, 166, 164, 0.055), transparent 42%),
+    #292b2f;
   color: #c0c4ca;
 }
 
@@ -657,7 +824,7 @@ body {
 }
 
 .terminal-window-shell .terminal-connection-meta {
-  min-height: 20px;
+  min-height: 34px;
   margin-bottom: 0;
 }
 
@@ -667,9 +834,11 @@ body {
 
 .terminal-emulator {
   border-color: var(--portal-geek-line-soft);
-  border-radius: 7px;
+  border-radius: 6px;
   background: var(--portal-geek-canvas);
-  box-shadow: inset 0 0 0 1px rgba(127, 166, 164, 0.025);
+  box-shadow:
+    inset 0 1px 0 rgba(127, 166, 164, 0.07),
+    0 5px 18px rgba(0, 0, 0, 0.08);
   transition: border-color 180ms ease, box-shadow 180ms ease;
 }
 
@@ -724,7 +893,7 @@ body {
 .terminal-hint {
   box-sizing: border-box;
   min-height: 28px;
-  padding: 0 2px;
+  padding: 3px 3px 0;
   color: var(--portal-geek-text-muted);
 }
 
@@ -737,6 +906,7 @@ body {
 .file-preview,
 .image-preview-shell {
   border-color: var(--portal-geek-line-soft);
+  border-radius: 6px;
   background: var(--portal-geek-canvas);
   color: var(--portal-geek-text);
 }
@@ -840,6 +1010,12 @@ body {
   .connection-header > div > .connection-header-hint,
   .connection-endpoint {
     display: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .connection-list .ant-list-items {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

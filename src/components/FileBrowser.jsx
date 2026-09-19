@@ -111,6 +111,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  * @param {(entry: Object, name: string) => Promise<void>} props.handleRenameItem - 重命名回调。
  * @param {(path: string) => void} props.handleDriveSelect - 选择远程盘符回调。
  * @param {() => Promise<void>} props.handleDisconnect - 断开当前连接回调。
+ * @param {(connection: Object) => void|Promise<void>} [props.onOpenTerminal] - 在主窗口创建终端标签的回调。
  * @returns {JSX.Element} 路径工具栏、远程条目、上传对话框和批量操作控件。
  */
 const FileBrowser = ({
@@ -134,7 +135,8 @@ const FileBrowser = ({
   handleDownloadItems,
   handleRenameItem,
   handleDriveSelect,
-  handleDisconnect
+  handleDisconnect,
+  onOpenTerminal
 }) => {
   // 新建目录弹窗及其表单提交状态。
   const [ directoryModalOpen, setDirectoryModalOpen ] = React.useState(false)
@@ -153,7 +155,7 @@ const FileBrowser = ({
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
-  // 独立终端窗口打开状态，以及用于并发调用计数的引用。
+  // 终端工作区打开状态，以及用于并发调用计数的引用。
   const [ terminalOpening, setTerminalOpening ] = React.useState(false)
   const terminalOpeningCountRef = React.useRef(0)
   // 原生拖放目标、上传队列回调和多选锚点均需跨渲染保持稳定引用。
@@ -238,7 +240,7 @@ const FileBrowser = ({
   const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
 
   /**
-   * 打开当前连接的独立终端窗口，避免主窗口布局被 xterm 影响。
+   * 打开当前连接的终端工作区；没有标签宿主时兼容旧版独立窗口。
    *
    * @returns {Promise<void>} 窗口创建流程完成后的 Promise；错误通过通知展示。
    */
@@ -247,7 +249,12 @@ const FileBrowser = ({
     terminalOpeningCountRef.current += 1
     setTerminalOpening(true)
     try {
-      await openTerminalWindow({ ...currentConnection, id: currentConnectionId })
+      const connection = { ...currentConnection, id: currentConnectionId }
+      if (onOpenTerminal) {
+        await onOpenTerminal(connection)
+      } else {
+        await openTerminalWindow(connection)
+      }
     } catch (openError) {
       void notification.error(`打开终端失败：${ openError?.message || '未知错误' }`)
     } finally {
@@ -570,92 +577,92 @@ const FileBrowser = ({
 
   return (
     <div className="file-browser">
-      <div className="path-toolbar">
-        <Tooltip title="返回上级目录">
-          <Button
-            className="toolbar-icon-button"
-            size="small"
-            onClick={handleGoBack}
-            icon={<AppIcon name="chevronUp" />}
-            aria-label="返回上级目录"
-          />
-        </Tooltip>
-
-        <div
-          className="remote-path-bar"
-        >
-          <AppIcon name="folderOpen" className="remote-path-icon" />
-          <Input
-            className="remote-path-input"
-            variant="borderless"
-            value={currentPath}
-            onChange={handlePathChange}
-            onPressEnter={handlePathSubmit}
-            aria-label="远程路径"
-          />
-
-          <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+      <div className="file-workspace-header">
+        <div className="connection-toolbar">
+          <div
+            className="connection-summary"
+            title={`${ currentConnection?.name || '未知' } (${ currentConnection?.host || '未知' }:${ currentConnection?.port || '未知' })`}
+          >
+            <span className="connection-status-dot" aria-hidden="true" />
+            <span className="connection-name">{currentConnection?.name || '未知'}</span>
+            <span className="connection-endpoint">
+              {currentConnection?.host || '未知'}:{currentConnection?.port || '未知'}
+            </span>
+          </div>
+          <div className="connection-actions">
             <Button
-              className="path-menu-button"
-              type="text"
               size="small"
-              icon={<AppIcon name="chevronDown" />}
-              aria-label="快速定位目录"
+              icon={<AppIcon name="terminal" />}
+              loading={terminalOpening}
+              onClick={handleOpenTerminal}
+              aria-label="打开远程终端"
+            >
+              终端
+            </Button>
+            <Button size="small" icon={<AppIcon name="upload" />} loading={uploadSubmitting} onClick={handleUpload}>
+              上传
+            </Button>
+            <Button
+              size="small"
+              icon={<AppIcon name="folderAdd" />}
+              onClick={() => setDirectoryModalOpen(true)}
+              aria-label="新建文件夹"
+            >
+              新建文件夹
+            </Button>
+            <Button
+              size="small"
+              danger
+              icon={<AppIcon name="disconnect" />}
+              onClick={() => handleDisconnect()}
+            >
+              断开连接
+            </Button>
+          </div>
+        </div>
+
+        <div className="path-toolbar">
+          <Tooltip title="返回上级目录">
+            <Button
+              className="toolbar-icon-button"
+              size="small"
+              onClick={handleGoBack}
+              icon={<AppIcon name="chevronUp" />}
+              aria-label="返回上级目录"
             />
-          </Dropdown>
-        </div>
+          </Tooltip>
 
-        <Tooltip title="刷新目录">
-          <Button
-            className="toolbar-icon-button"
-            size="small"
-            onClick={handleRefresh}
-            icon={<AppIcon name="reload" />}
-            aria-label="刷新目录"
-          />
-        </Tooltip>
-      </div>
+          <div className="remote-path-bar">
+            <AppIcon name="folderOpen" className="remote-path-icon" />
+            <Input
+              className="remote-path-input"
+              variant="borderless"
+              value={currentPath}
+              onChange={handlePathChange}
+              onPressEnter={handlePathSubmit}
+              aria-label="远程路径"
+            />
 
-      <div className="connection-toolbar">
-        <div
-          className="connection-summary"
-          title={`${ currentConnection?.name || '未知' } (${ currentConnection?.host || '未知' }:${ currentConnection?.port || '未知' })`}
-        >
-          <span className="connection-status-dot" aria-hidden="true" />
-          <span className="connection-name">{currentConnection?.name || '未知'}</span>
-          <span className="connection-endpoint">
-            {currentConnection?.host || '未知'}:{currentConnection?.port || '未知'}
-          </span>
-        </div>
-        <div className="connection-actions">
-          <Button
-            size="small"
-            icon={<AppIcon name="terminal" />}
-            loading={terminalOpening}
-            onClick={handleOpenTerminal}
-            aria-label="打开远程终端"
-          >
-            终端
-          </Button>
-          <Button size="small" icon={<AppIcon name="upload" />} loading={uploadSubmitting} onClick={handleUpload}>
-            上传
-          </Button>
-          <Button
-            size="small"
-            icon={<AppIcon name="folderAdd" />}
-            onClick={() => setDirectoryModalOpen(true)}
-            aria-label="新建文件夹"
-          >
-            新建文件夹
-          </Button>
-          <Button
-            size="small"
-            danger
-            icon={<AppIcon name="disconnect" />}
-            onClick={() => handleDisconnect()}
-          >
-            断开连接
-          </Button>
+            <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+              <Button
+                className="path-menu-button"
+                type="text"
+                size="small"
+                icon={<AppIcon name="chevronDown" />}
+                aria-label="快速定位目录"
+              />
+            </Dropdown>
+          </div>
+
+          <Tooltip title="刷新目录">
+            <Button
+              className="toolbar-icon-button"
+              size="small"
+              onClick={handleRefresh}
+              icon={<AppIcon name="reload" />}
+              aria-label="刷新目录"
+            />
+          </Tooltip>
         </div>
       </div>
 

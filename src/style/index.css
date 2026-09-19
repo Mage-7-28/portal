@@ -1,14 +1,14 @@
-/* 应用最外层与圆角窗口内容区；保留固定视口高度，避免主 WebView 出现整页滚动。 */
+/* 应用内容铺满整个 WebView，固定视口高度以避免出现整页滚动。 */
 .app-shell {
   display: flex;
   flex-direction: column;
   height: 100dvh;
-  padding: 6px;
+  padding: 0;
   overflow: hidden;
   box-sizing: border-box;
 }
 
-/* 主框架负责边框、圆角和上下布局；具体页面内容由子组件填充。 */
+/* 主框架只负责上下布局，窗口边缘不再附加边框、圆角或留白。 */
 .app-frame {
   display: flex;
   flex: 1;
@@ -16,16 +16,378 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid #3c3f41;
-  border-radius: 8px;
+  border: 0;
+  border-radius: 0;
   background: #1f1f1f;
 }
 
 .app-content {
+  display: flex;
   flex: 1;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+/* 主窗口工作区：连接首页固定保留，文件和终端标签共享同一内容区域。 */
+.workspace-tabbar {
+  position: relative;
+  display: flex;
+  flex: 0 0 43px;
+  min-width: 0;
+  height: 43px;
+  align-items: stretch;
+  gap: 3px;
+  padding: 4px 8px 0;
+  box-sizing: border-box;
+  overflow: hidden;
+  border-bottom: 1px solid #3c3f41;
+  background: transparent;
+}
+
+.workspace-tab-list {
+  display: flex;
+  flex: 1 1 auto;
+  width: 0;
+  min-width: 0;
+  height: 100%;
+  align-items: stretch;
+  gap: 3px;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.workspace-tab-list::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.workspace-tab {
+  display: flex;
+  position: relative;
+  flex: 0 0 210px;
+  width: 210px;
+  min-width: 210px;
+  max-width: 210px;
+  align-items: center;
+  isolation: isolate;
+  box-sizing: border-box;
+  border: 1px solid rgba(91, 94, 102, 0.56);
+  border-bottom: 0;
+  border-radius: 7px 7px 0 0;
+  color: #aaa9a5;
+  background:
+    linear-gradient(135deg, rgba(127, 166, 164, 0.075), transparent 48%),
+    linear-gradient(180deg, #2b2d31, #25272a);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    0 -3px 10px rgba(0, 0, 0, 0.13);
+  animation: workspace-tab-enter 180ms cubic-bezier(0.2, 0.75, 0.25, 1);
+  transition:
+    color 140ms ease,
+    background-color 140ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+/* 连接首页位于固定轨道，会话标签只在右侧剩余空间内横向滚动。 */
+.workspace-tab.is-home {
+  flex: 0 0 116px;
+  width: 116px;
+  min-width: 116px;
+  max-width: 116px;
+}
+
+.workspace-tab::before,
+.workspace-tab::after {
+  position: absolute;
+  content: '';
+  pointer-events: none;
+}
+
+.workspace-tab::before {
+  top: -1px;
+  right: 10px;
+  left: 10px;
+  z-index: 1;
+  height: 2px;
+  border-radius: 0 0 2px 2px;
+  background: linear-gradient(90deg, transparent, #eb9070 34%, #7fa6a4 72%, transparent);
+  box-shadow: 0 0 9px rgba(235, 144, 112, 0.22);
+  opacity: 0.32;
+  transition:
+    opacity 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.workspace-tab::after {
+  right: -1px;
+  bottom: -1px;
+  left: -1px;
+  height: 1px;
+  background: transparent;
+}
+
+.workspace-tab:not(.is-active):hover {
+  border-color: #62666d;
+  color: #d5d2cb;
+  background:
+    linear-gradient(135deg, rgba(235, 144, 112, 0.105), transparent 44%),
+    linear-gradient(225deg, rgba(127, 166, 164, 0.11), transparent 58%),
+    #303236;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.075),
+    0 -3px 13px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-tab:not(.is-active):hover::before {
+  opacity: 0.66;
+}
+
+.workspace-tab.is-active {
+  z-index: 1;
+  border-color: #686b72;
+  color: #ebe8e1;
+  background:
+    linear-gradient(135deg, rgba(235, 144, 112, 0.13), transparent 37%),
+    linear-gradient(225deg, rgba(127, 166, 164, 0.1), transparent 48%),
+    #1f1f1f;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 -4px 14px rgba(0, 0, 0, 0.2);
+}
+
+.workspace-tab.is-active::before {
+  box-shadow:
+    0 0 8px rgba(235, 144, 112, 0.32),
+    0 0 13px rgba(127, 166, 164, 0.14);
+  opacity: 1;
+}
+
+.workspace-tab.is-active::after {
+  background: #1f1f1f;
+}
+
+.workspace-tab-select,
+.workspace-tab-close {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+.workspace-tab-select {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 11px;
+  box-sizing: border-box;
+  cursor: pointer;
+  line-height: 16px;
+  text-align: left;
+}
+
+.workspace-tab-select .app-icon {
+  flex: 0 0 15px;
+  width: 15px;
+  height: 15px;
+  color: #9d9a93;
+  transition:
+    color 140ms ease,
+    filter 140ms ease;
+}
+
+.workspace-tab.is-active .workspace-tab-select .app-icon {
+  color: #eb9070;
+}
+
+.workspace-tab:not(.is-active):hover .workspace-tab-select .app-icon {
+  color: #c5a188;
+  filter: drop-shadow(0 0 4px rgba(197, 161, 136, 0.26));
+}
+
+.workspace-tab-select span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.workspace-tab-select:focus-visible,
+.workspace-tab-close:focus-visible {
+  outline: 1px solid #b18c68;
+  outline-offset: -2px;
+}
+
+.workspace-tab-close {
+  display: inline-flex;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin-right: 6px;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  opacity: 0.45;
+  transition:
+    color 120ms ease,
+    background-color 120ms ease,
+    opacity 120ms ease,
+    transform 120ms ease;
+}
+
+.workspace-tab:hover .workspace-tab-close,
+.workspace-tab.is-active .workspace-tab-close {
+  opacity: 0.78;
+}
+
+.workspace-tab-close:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: #ebe8e1;
+  opacity: 1;
+  transform: scale(1.06);
+}
+
+.workspace-tab-close .app-icon {
+  width: 13px;
+  height: 13px;
+}
+
+@keyframes workspace-tab-enter {
+  from {
+    opacity: 0;
+    filter: brightness(1.22);
+  }
+
+  to {
+    opacity: 1;
+    filter: brightness(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workspace-tab {
+    animation: none;
+    transition: none;
+  }
+
+  .workspace-tab-select .app-icon,
+  .workspace-tab-close {
+    transition: none;
+  }
+}
+
+.workspace-panels {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-panel[hidden] {
+  display: none !important;
+}
+
+.workspace-terminal-panel {
+  padding: 9px 11px 7px;
+  box-sizing: border-box;
+  background: #1f1f1f;
+}
+
+.workspace-terminal-panel .terminal-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.workspace-terminal-panel .terminal-emulator {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+}
+
+/* 文件标签连接中、失败或等待密码时使用稳定占位，避免切换标签造成布局跳动。 */
+.session-connection-state {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  box-sizing: border-box;
+  color: #aaa69d;
+  text-align: center;
+}
+
+.session-connection-state > .app-icon {
+  width: 28px;
+  height: 28px;
+  margin-bottom: 10px;
+  color: #eb9070;
+}
+
+.session-connection-state h2 {
+  max-width: min(460px, 90%);
+  margin: 0 0 4px;
+  overflow: hidden;
+  color: #ebe8e1;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-connection-state p {
+  max-width: min(520px, 92%);
+  margin: 14px 0 0;
+  color: #c0bcb4;
+  font-size: 12px;
+}
+
+.session-connection-endpoint {
+  max-width: min(520px, 92%);
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-connection-progress,
+.session-connection-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 16px;
 }
 
 /* 底部下载地址与传输状态栏；宽度不足时由后面的断点逐级隐藏次要文本。 */
@@ -37,7 +399,7 @@
   padding: 0 8px;
   overflow: hidden;
   border-top: 1px solid #3c3f41;
-  border-radius: 0 0 7px 7px;
+  border-radius: 0;
   background: #252526;
   color: #c0bcb4;
   font-size: 12px;
@@ -813,6 +1175,7 @@ html,
   justify-content: center;
   height: 100%;
   min-height: 160px;
+  box-sizing: border-box;
   gap: 9px;
   color: #c0bcb4;
   font-size: 13px;
@@ -853,6 +1216,13 @@ html,
   border: 0;
   border-radius: 0;
   background: #1f1f1f;
+}
+
+/* 服务器状态、远程操作和路径导航组成同一工作区头部。 */
+.file-workspace-header {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
 }
 
 /* 路径工具栏由返回、路径输入和刷新组成，所有子项允许在窄屏收缩。 */

@@ -101,14 +101,24 @@ const decorateTerminalOutput = data => {
  * @param {Object} props - 终端视图属性。
  * @param {string|null} props.connectionId - 当前 SSH 连接 ID。
  * @param {{username?: string, host?: string, port?: number}|null} props.connection - 用于展示终端标题的连接信息。
+ * @param {boolean} [props.active=true] - 当前终端标签是否可见；重新显示时会校正尺寸并聚焦。
+ * @param {boolean} [props.showFooter=true] - 是否显示独立终端宿主使用的底部关闭区域。
  * @param {() => void|Promise<void>} [props.onRequestClose] - 请求外层宿主关闭终端的回调。
  * @param {(closeHandler: () => Promise<unknown>) => void} [props.onCloseReady] - 接收可幂等释放后端 PTY 的回调。
- * @returns {JSX.Element} 包含连接状态、xterm 容器和关闭按钮的终端视图。
+ * @returns {JSX.Element} 包含连接状态和 xterm 容器，并可按宿主配置显示底部关闭区域的终端视图。
  */
-export const TerminalView = ({ connectionId, connection, onRequestClose, onCloseReady }) => {
+export const TerminalView = ({
+  connectionId,
+  connection,
+  active = true,
+  showFooter = true,
+  onRequestClose,
+  onCloseReady
+}) => {
   // xterm 容器和实例引用；实例存于 ref 以便按钮和清理回调读取最新对象。
   const containerRef = useRef(null)
   const terminalRef = useRef(null)
+  const fitTerminalRef = useRef(() => undefined)
   // 后端 PTY 生命周期标志，避免在尚未建立或已经关闭后继续发送数据。
   const backendReadyRef = useRef(false)
   const closingRef = useRef(false)
@@ -197,6 +207,7 @@ export const TerminalView = ({ connectionId, connection, onRequestClose, onClose
         fitTerminal()
       })
     }
+    fitTerminalRef.current = scheduleFit
     const ResizeObserverConstructor = typeof window !== 'undefined' ? window.ResizeObserver : undefined
     const resizeObserver = typeof ResizeObserverConstructor === 'function'
       ? new ResizeObserverConstructor(scheduleFit)
@@ -312,9 +323,20 @@ export const TerminalView = ({ connectionId, connection, onRequestClose, onClose
       fitAddon.dispose()
       terminal.dispose()
       terminalRef.current = null
+      fitTerminalRef.current = () => undefined
       closeTerminalRef.current = () => Promise.resolve()
     }
   }, [ connectionId, onCloseReady ])
+
+  // 隐藏标签重新显示后，按新的可用区域校正 PTY 行列并把输入焦点交还终端。
+  useEffect(() => {
+    if (!active) return undefined
+    const frame = window.requestAnimationFrame(() => {
+      fitTerminalRef.current()
+      terminalRef.current?.focus()
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [active])
 
   /**
    * 请求宿主关闭终端；没有宿主回调时直接释放当前 PTY。
@@ -350,18 +372,20 @@ export const TerminalView = ({ connectionId, connection, onRequestClose, onClose
         aria-label="远程终端"
         onClick={() => terminalRef.current?.focus()}
       />
-      <div className="terminal-hint">
-        <span className="terminal-session-label">远程 Shell · 独立 SSH 会话</span>
-        <Button
-          type="text"
-          size="small"
-          className="terminal-close-button"
-          icon={<AppIcon name="disconnect" />}
-          onClick={handleClose}
-        >
-          关闭终端
-        </Button>
-      </div>
+      {showFooter && (
+        <div className="terminal-hint">
+          <span className="terminal-session-label">远程 Shell · 独立 SSH 会话</span>
+          <Button
+            type="text"
+            size="small"
+            className="terminal-close-button"
+            icon={<AppIcon name="disconnect" />}
+            onClick={handleClose}
+          >
+            关闭终端
+          </Button>
+        </div>
+      )}
     </div>
   )
 }

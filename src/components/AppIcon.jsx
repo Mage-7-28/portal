@@ -23,6 +23,7 @@ const ICON_PATHS = {
       <path d="M12 5v14M5 12h14" />
     </>
   ),
+  close: <path d="m7 7 10 10M17 7 7 17" />,
   server: (
     <>
       <rect x="4" y="4" width="16" height="6" rx="1.5" />
