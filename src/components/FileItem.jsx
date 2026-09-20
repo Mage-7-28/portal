@@ -22,6 +22,23 @@ import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 const joinRemotePath = (base, name) => `${ base.replace(/\/+$/, '') || '' }/${ name }` || `/${ name }`
 
 /**
+ * 将 SFTP 返回的 Unix 秒级修改时间格式化为本机时区的固定宽度文本。
+ *
+ * @param {number|string|null|undefined} modifiedAt - 服务器返回的最后修改时间。
+ * @returns {string} `YYYY-MM-DD HH:mm:ss` 格式文本；时间缺失或无效时返回空字符串。
+ */
+const formatRemoteModifiedTime = (modifiedAt) => {
+  if (modifiedAt === null || modifiedAt === undefined || modifiedAt === '') return ''
+  const seconds = Number(modifiedAt)
+  if (!Number.isFinite(seconds) || seconds < 0) return ''
+
+  const date = new Date(seconds * 1000)
+  if (Number.isNaN(date.getTime())) return ''
+  const pad = value => String(value).padStart(2, '0')
+  return `${ date.getFullYear() }-${ pad(date.getMonth() + 1) }-${ pad(date.getDate()) } ${ pad(date.getHours()) }:${ pad(date.getMinutes()) }:${ pad(date.getSeconds()) }`
+}
+
+/**
  * 将 Rust 返回的目录大小统一为可展示的聚合结果。
  *
  * @param {number|Object} result - Rust 返回的旧版数字结果或统计对象。
@@ -87,6 +104,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
   const completedDirectorySizeKeyRef = useRef('')
   const fileIcon = entry.isDirectory ? { name: 'folder', type: 'directory' } : resolveFileIcon(entry.name)
   const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
+  const modifiedTime = formatRemoteModifiedTime(entry.modifiedAt)
   const directorySizeCacheVersion = entry.modifiedAt
   const includeHiddenFiles = showHiddenFiles === true
   const directorySizeKey = `${ connectionId }\u0000${ remotePath }\u0000${ directorySizeCacheVersion ?? '' }\u0000${ includeHiddenFiles ? 'with-hidden' : 'without-hidden' }`
@@ -354,8 +372,16 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
             />
           }
           title={
-            <span className={`file-item-name${ entry.isDirectory ? ' is-directory' : '' }`}>
-              {entry.name}
+            <span className="file-item-primary">
+              <span className={`file-item-name${ entry.isDirectory ? ' is-directory' : '' }`}>
+                {entry.name}
+              </span>
+              {modifiedTime && (
+                <span className="file-item-modified-time">
+                  <span className="file-item-modified-label">最后修改</span>
+                  <span className="file-item-modified-value">{modifiedTime}</span>
+                </span>
+              )}
             </span>
           }
         />
