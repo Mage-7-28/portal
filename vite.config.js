@@ -35,6 +35,10 @@ export default defineConfig(({ mode }) => ({
   esbuild: {
     drop: mode === 'production' ? ['debugger'] : []
   },
+  // 预览 Worker 按需加载 Prism 语法，生产资源需保留 ES module 分片。
+  worker: {
+    format: 'es'
+  },
   build: {
     // 禁止 CSS 分片，所有第三方样式随主 CSS 一起加载，适配 Tauri 内置资源协议。
     cssCodeSplit: false,

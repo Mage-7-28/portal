@@ -12,6 +12,7 @@ import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
+import { observeDirectoryVisibility } from '../utils/directoryVisibility.js'
 
 /**
  * 拼接远程 POSIX 风格路径，避免重复分隔符影响 SFTP 调用。
@@ -117,22 +118,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
       return undefined
     }
 
-    const row = rowRef.current
-    if (!row || typeof window === 'undefined' || typeof window.IntersectionObserver !== 'function') {
-      setDirectorySizeVisible(true)
-      return undefined
-    }
-
-    const observer = new window.IntersectionObserver(entries => {
-      setDirectorySizeVisible(Boolean(entries[0]?.isIntersecting))
-    }, {
-      root: row.closest('.file-list-shell'),
-      // 预先计算即将进入视区的少量目录，滚动时无需等待新的完整扫描。
-      rootMargin: '160px 0px',
-      threshold: 0
-    })
-    observer.observe(row)
-    return () => observer.disconnect()
+    return observeDirectoryVisibility(rowRef.current, setDirectorySizeVisible)
   }, [ entry.isDirectory, remotePath ])
 
   // 当前条目、连接或隐藏文件偏好变化时，废弃旧统计结果并恢复等待状态。

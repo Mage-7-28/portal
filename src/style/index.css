@@ -747,22 +747,6 @@ html,
   line-height: 1;
 }
 
-.preview-progress .ant-progress-inner {
-  height: 9px;
-  overflow: hidden;
-  border: 1px solid #4a443b;
-  border-radius: 999px;
-  background: #35322d;
-}
-
-.preview-progress .ant-progress-bg {
-  height: 100% !important;
-  border-radius: 999px;
-  background: #eb9070 !important;
-  background: lab(68.9646% 33.16 32.3692) !important;
-  box-shadow: none;
-}
-
 .preview-progress-meta {
   display: flex;
   align-items: center;
@@ -1703,14 +1687,7 @@ html,
   white-space: nowrap;
 }
 
-/* 通用紧凑弹窗和上传选择器：控制内边距、列表高度及拖放反馈。 */
-.compact-modal .ant-modal-content {
-  padding: 16px 18px;
-  border: 1px solid #3c3f41;
-  border-radius: 7px;
-  background: #242424;
-}
-
+/* 通用紧凑弹窗标题和上传选择器：控制列表高度及拖放反馈。 */
 .compact-modal .ant-modal-header {
   margin-bottom: 11px;
   background: transparent;
@@ -1888,10 +1865,6 @@ html,
 }
 
 /* 远程终端使用独立 PTY，模拟器负责光标、滚动、ANSI 颜色和键盘交互。 */
-.terminal-modal .ant-modal-content {
-  padding: 14px;
-}
-
 .terminal-modal .ant-modal-header {
   margin-bottom: 9px;
 }
@@ -2080,10 +2053,6 @@ html,
 }
 
 @media (max-width: 560px) {
-  .terminal-modal .ant-modal-content {
-    padding: 12px;
-  }
-
   .terminal-emulator {
     height: clamp(260px, calc(100dvh - 142px), 540px);
     min-height: 260px;
@@ -2098,10 +2067,6 @@ html,
 }
 
 /* 关于与更新弹窗采用独立的内容层级，避免通用弹窗标题占用过多空间。 */
-.about-modal .ant-modal-content {
-  padding: 20px 22px 16px;
-}
-
 .about-modal .ant-modal-close {
   top: 7px;
 }
@@ -2258,10 +2223,6 @@ html,
 }
 
 /* 更新提示突出新旧版本对比，同时保留手动前往发布页的明确操作。 */
-.update-modal .ant-modal-content {
-  padding: 18px 20px 16px;
-}
-
 .update-modal .ant-modal-footer {
   margin-top: 15px;
   padding-top: 12px;
@@ -2422,11 +2383,6 @@ html,
 
 .password-prompt-error {
   margin-bottom: 12px;
-}
-
-.password-prompt-error .ant-alert-message {
-  font-size: 12px;
-  line-height: 18px;
 }
 
 .connection-test-result {

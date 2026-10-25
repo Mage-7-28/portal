@@ -1,11 +1,12 @@
 /**
  * 新建或编辑 SSH 连接配置弹窗。
- * 测试连接阶段可先确认主机指纹，保存阶段只把密码交给当前进程内的连接管理器。
+ * 测试连接可选；已信任的主机指纹会随配置保存，密码交给当前进程内的连接管理器。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useLayoutEffect, useRef, useState } from 'react'
 import { Button, Form, Input, Modal, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import * as dialog from '@tauri-apps/plugin-dialog'
+import { createConnectionFormGuard } from '../utils/connectionFormGuard.js'
 import sftpManager from '../utils/sftpUtils.js'
 import { normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
 import { notification } from '../utils/notificationUtils.js'
@@ -35,9 +36,14 @@ const newId = () => {
 const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection = null }) => {
   // Ant Design 表单实例，用于校验、读取和在弹窗关闭时重置字段。
   const [form] = Form.useForm()
+  // 同步追踪弹窗会话、表单版本及异步操作，避免依赖 React 状态更新时序。
+  const guardRef = useRef(null)
+  if (!guardRef.current) guardRef.current = createConnectionFormGuard()
+  const guard = guardRef.current
   // 连接测试请求状态及最近一次测试/指纹信任结果。
   const [ testing, setTesting ] = useState(false)
   const [ testResult, setTestResult ] = useState(null)
+  const [ saving, setSaving ] = useState(false)
   // 根据测试结果决定结果面板的语义颜色（成功、待确认或失败）。
   const testResultColor = testResult?.success
     ? THEME_SUCCESS
@@ -45,8 +51,9 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
       ? THEME_WARNING
       : THEME_DANGER
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (visible) {
+      guard.openSession()
       form.setFieldsValue(editingConnection ? {
         name: editingConnection.name,
         host: editingConnection.host,
@@ -54,22 +61,53 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         username: editingConnection.username,
         password: ''
       } : { port: 22 })
+      setTestResult(null)
+      setTesting(false)
     } else {
+      guard.closeSession()
       form.resetFields()
       setTestResult(null)
       setTesting(false)
     }
-  }, [ editingConnection, form, visible ])
+
+    return () => guard.closeSession()
+  }, [ editingConnection, form, guard, visible ])
 
   /**
-   * 先验证网络和主机指纹，只有确认指纹后才允许提交连接配置。
+   * 关闭当前会话后通知受控弹窗的父组件。
+   *
+   * @returns {void}
+   */
+  const handleCancel = () => {
+    guard.closeSession()
+    onCancel()
+  }
+
+  /**
+   * 记录表单编辑并清除基于旧值的测试和信任结果。
+   *
+   * @returns {void}
+   */
+  const handleValuesChange = () => {
+    guard.changeForm()
+    setTestResult(null)
+    setTesting(false)
+  }
+
+  /**
+   * 测试网络连接，并在需要时请求用户确认服务器主机指纹。
    *
    * @returns {Promise<void>} 测试流程完成后的 Promise；失败信息写入本地状态。
    */
   const handleTestConnection = async () => {
+    const ticket = guard.beginTest()
+    if (!ticket) return
+    setTesting(true)
+
     try {
       const values = await form.validateFields()
-      setTesting(true)
+      if (!guard.isCurrentTest(ticket)) return
+
       const host = values.host.trim()
       const port = Number(values.port)
       const endpointChanged = editingConnection
@@ -84,7 +122,12 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         hostKeyFingerprint: endpointChanged ? null : editingConnection?.hostKeyFingerprint || null
       }
       let result = await sftpManager.testConnection(config)
-      setTestResult({ ...result, trusted: Boolean(result.success && config.hostKeyFingerprint) })
+      if (!guard.isCurrentTest(ticket)) return
+      setTestResult({
+        ...result,
+        trusted: Boolean(result.success && config.hostKeyFingerprint),
+        formTicket: ticket
+      })
 
       if (result.requiresHostKeyConfirmation && result.hostKey?.fingerprint) {
         const accepted = await dialog.confirm(
@@ -96,8 +139,9 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
             cancelLabel: '取消'
           }
         )
+        if (!guard.isCurrentTest(ticket)) return
         if (!accepted) {
-          setTestResult({ ...result, trusted: false })
+          setTestResult({ ...result, trusted: false, formTicket: ticket })
           void notification.error('未信任服务器指纹，连接测试已取消')
           return
         }
@@ -107,14 +151,16 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
           ...config,
           hostKeyFingerprint: trustedHostKey.fingerprint
         })
+        if (!guard.isCurrentTest(ticket)) return
         setTestResult({
           ...result,
           hostKey: result.hostKey || trustedHostKey,
-          trusted: Boolean(result.success)
+          trusted: Boolean(result.success),
+          formTicket: ticket
         })
       } else if (result.success) {
         // 已有指纹验证成功，或测试环境直接返回成功时，保存当前指纹。
-        setTestResult({ ...result, trusted: true })
+        setTestResult({ ...result, trusted: true, formTicket: ticket })
       }
 
       if (result.success) {
@@ -123,47 +169,55 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         void notification.error(`连接测试失败：${ result.error }`)
       }
     } catch (error) {
+      if (!guard.isCurrentTest(ticket)) return
       if (error?.errorFields) return
       void notification.error(`连接测试失败：${ normalizeError(error) }`)
     } finally {
-      setTesting(false)
+      if (guard.isCurrentTest(ticket)) setTesting(false)
     }
   }
 
   /**
-   * 将表单值转换为连接配置；未知主机指纹会先弹出确认流程。
+   * 将表单值转换为连接配置；未经测试的配置也可以保存。
    *
    * @param {{name: string, host: string, port: number|string, username: string, password?: string}} values - Ant Design 表单值。
    * @returns {Promise<void>} 保存回调和成功/失败通知完成后的 Promise。
    */
   const handleSubmit = async (values) => {
-    const host = values.host.trim()
-    const port = Number(values.port)
-    const endpointChanged = editingConnection
-      && (editingConnection.host !== host || Number(editingConnection.port) !== port)
-    const trustedFingerprint = testResult?.trusted
-      ? testResult.hostKey?.fingerprint || null
-      : endpointChanged
-        ? null
-        : editingConnection?.hostKeyFingerprint || null
-    const profile = {
-      id: editingConnection?.id || newId(),
-      name: values.name.trim(),
-      host,
-      port,
-      username: values.username.trim(),
-      authMethod: 'password',
-      hostKeyFingerprint: trustedFingerprint,
-      createdAt: editingConnection?.createdAt || new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    }
+    const ticket = guard.beginSave()
+    if (!ticket) return
+    setSaving(true)
 
     try {
+      const host = values.host.trim()
+      const port = Number(values.port)
+      const endpointChanged = editingConnection
+        && (editingConnection.host !== host || Number(editingConnection.port) !== port)
+      const trustedFingerprint = guard.isCurrentForm(testResult?.formTicket) && testResult?.trusted
+        ? testResult.hostKey?.fingerprint || null
+        : endpointChanged
+          ? null
+          : editingConnection?.hostKeyFingerprint || null
+      const profile = {
+        id: editingConnection?.id || newId(),
+        name: values.name.trim(),
+        host,
+        port,
+        username: values.username.trim(),
+        authMethod: 'password',
+        hostKeyFingerprint: trustedFingerprint,
+        createdAt: editingConnection?.createdAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
+
       await onAddSuccess(profile, { password: values.password || '' })
       void notification.success(editingConnection ? '连接配置已更新' : '连接配置已保存')
-      onCancel()
+      if (guard.isCurrentSave(ticket)) handleCancel()
     } catch (error) {
       void notification.error(`保存连接失败：${ normalizeError(error) }`)
+    } finally {
+      guard.finishSave(ticket)
+      setSaving(false)
     }
   }
 
@@ -172,7 +226,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
       rootClassName="compact-modal"
       title={editingConnection ? '编辑 SSH 连接' : '新建 SSH 连接'}
       open={visible}
-      onCancel={onCancel}
+      onCancel={handleCancel}
       centered
       footer={null}
       width="min(420px, calc(100vw - 24px))"
@@ -183,7 +237,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         form={form}
         layout="vertical"
         onFinish={handleSubmit}
-        onValuesChange={() => setTestResult(null)}
+        onValuesChange={handleValuesChange}
         requiredMark="optional"
       >
         <Form.Item
@@ -271,9 +325,9 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         </Text>
 
         <div className="modal-actions">
-          <Button onClick={onCancel}>取消</Button>
+          <Button onClick={handleCancel}>取消</Button>
           <Button onClick={handleTestConnection} loading={testing}>测试连接</Button>
-          <Button type="primary" htmlType="submit">保存配置</Button>
+          <Button type="primary" htmlType="submit" loading={saving}>保存配置</Button>
         </div>
       </Form>
     </Modal>

@@ -219,6 +219,8 @@ function FileBrowserPanel({
   const [ currentConnectionId, setCurrentConnectionId ] = useState(null)
   // 远程文件浏览位置、列表数据及目录加载状态。
   const [ currentPath, setCurrentPath ] = useState('/')
+  // 路径栏允许编辑未提交的草稿；所有远程操作仍绑定当前已加载目录。
+  const [ pathInput, setPathInput ] = useState('/')
   const [ files, setFiles ] = useState([])
   const [ loading, setLoading ] = useState(false)
   const [ error, setError ] = useState(null)
@@ -241,6 +243,7 @@ function FileBrowserPanel({
   const requestId = useRef(0)
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
+  const previewAbortRef = useRef(null)
   // 不触发渲染的连接标记，供断线监听和异步探测判断事件是否仍属于当前会话。
   const activeConnectionIdRef = useRef(null)
   const connectingIdRef = useRef(null)
@@ -310,6 +313,8 @@ function FileBrowserPanel({
    */
   const closePreview = useCallback(() => {
     previewRequestId.current += 1
+    previewAbortRef.current?.abort()
+    previewAbortRef.current = null
     releasePreviewUrl()
     setPreview(null)
     setPreviewTargetName('')
@@ -329,6 +334,7 @@ function FileBrowserPanel({
     setCurrentConnection(null)
     setCurrentConnectionId(null)
     setCurrentPath('/')
+    setPathInput('/')
     setFiles([])
     setHomeDir('')
     setDrives([])
@@ -344,6 +350,7 @@ function FileBrowserPanel({
       componentMountedRef.current = false
       requestId.current += 1
       previewRequestId.current += 1
+      previewAbortRef.current?.abort()
       const connectionId = ownedConnectionIdRef.current
       ownedConnectionIdRef.current = null
       activeConnectionIdRef.current = null
@@ -662,6 +669,7 @@ function FileBrowserPanel({
       setHomeDir(home || '/')
       setDrives(deriveRemoteDrives(home || '/'))
       setCurrentPath(home || '/')
+      setPathInput(home || '/')
       await loadRemoteDirectory(home || '/', connectionId)
       if (
         activeConnectionIdRef.current !== connectionId
@@ -860,6 +868,7 @@ function FileBrowserPanel({
       if (currentRequest !== requestId.current) return
       setFiles(result)
       setCurrentPath(normalizedPath)
+      setPathInput(normalizedPath)
     } catch (requestError) {
       if (currentRequest === requestId.current) {
         setFiles([])
@@ -929,6 +938,9 @@ function FileBrowserPanel({
       return
     }
     const currentPreviewRequest = ++previewRequestId.current
+    previewAbortRef.current?.abort()
+    const previewController = new window.AbortController()
+    previewAbortRef.current = previewController
     const previewId = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
       ? crypto.randomUUID()
       : `preview-${ Date.now() }-${ Math.random().toString(16).slice(2) }`
@@ -966,10 +978,11 @@ function FileBrowserPanel({
       } else {
         const content = new TextDecoder('utf-8', { fatal: false }).decode(bytes)
         setPreviewStage('processing')
-        const jsonPreview = descriptor.language === 'json' ? await formatJsonPreviewAsync(content) : null
+        const previewOptions = { signal: previewController.signal }
+        const jsonPreview = descriptor.language === 'json' ? await formatJsonPreviewAsync(content, previewOptions) : null
         const displayContent = jsonPreview?.content ?? content
         const highlighted = descriptor.kind === 'code'
-          ? await highlightCode(displayContent, descriptor.language)
+          ? await highlightCode(displayContent, descriptor.language, previewOptions)
           : null
         if (currentPreviewRequest !== previewRequestId.current) return
         setPreview({
@@ -989,6 +1002,7 @@ function FileBrowserPanel({
       }
     } finally {
       if (currentPreviewRequest === previewRequestId.current) {
+        previewAbortRef.current = null
         setPreviewLoading(false)
         setPreviewProgress(null)
         setPreviewStage('reading')
@@ -1435,6 +1449,7 @@ function FileBrowserPanel({
       <>
         <FileBrowser
           currentPath={currentPath}
+          pathInput={pathInput}
           files={files}
           loading={loading}
           error={error}
@@ -1444,7 +1459,7 @@ function FileBrowserPanel({
           homeDir={homeDir}
           drives={drives}
           handleGoBack={handleGoBack}
-          handlePathChange={event => setCurrentPath(event.target.value)}
+          handlePathChange={event => setPathInput(event.target.value)}
           handlePathSubmit={handlePathSubmit}
           handleRefresh={handleRefresh}
           handleItemClick={handleItemClick}
@@ -1543,10 +1558,7 @@ function FileBrowserPanel({
         visible={editModalVisible}
         editingConnection={editingConnection}
         onCancel={closeEditModal}
-        onAddSuccess={async (profile, credentialsForProfile) => {
-          await handleAddConnection(profile, credentialsForProfile)
-          closeEditModal()
-        }}
+        onAddSuccess={handleAddConnection}
       />
       <PasswordPromptModal
         visible={Boolean(passwordPrompt)}

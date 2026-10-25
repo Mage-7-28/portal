@@ -74,7 +74,7 @@ const UpdateAvailableModal = ({ open, update, canSkipVersion = true, onCancel, o
       centered
       width="min(380px, calc(100vw - 24px))"
       closable={!opening}
-      maskClosable={!opening}
+      mask={{ closable: !opening }}
       onCancel={handleCancel}
       footer={(
         <div className="modal-actions">

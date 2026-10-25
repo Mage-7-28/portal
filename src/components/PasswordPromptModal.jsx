@@ -1,6 +1,7 @@
 /**
  * 输入已保存连接的会话密码。
- * 密码通过连接流程加密后持久化；弹窗本身只处理当前输入。
+ * 明文密码仅用于当前连接流程，不会直接持久化；连接成功后保存的凭据为密文。
+ * 弹窗关闭时重置密码字段，清除当前输入。
  */
 import React, { useEffect } from 'react'
 import { Alert, Button, Form, Input, Modal } from 'antd'
@@ -19,10 +20,10 @@ import AppIcon from './AppIcon'
  * @returns {JSX.Element} 密码输入弹窗。
  */
 const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading, errorMessage }) => {
-  // 表单实例用于提交密码并在弹窗关闭时清除上次输入，避免残留敏感信息。
+  // 表单实例用于提交当前密码，并在弹窗关闭时清除字段，避免明文残留。
   const [form] = Form.useForm()
 
-  // 每次关闭弹窗都重置密码字段；密码不会写入持久化 Store。
+  // 明文仅用于当前连接流程；父层持久化成功连接凭据时保存的是密文。
   useEffect(() => {
     if (!visible) form.resetFields()
   }, [ form, visible ])
@@ -44,7 +45,7 @@ const PasswordPromptModal = ({ visible, connection, onCancel, onSubmit, loading,
           type="error"
           showIcon
           icon={<AppIcon name="warningCircle" />}
-          message={errorMessage}
+          title={errorMessage}
         />
       )}
       <Form className="compact-form" form={form} layout="vertical" onFinish={onSubmit}>

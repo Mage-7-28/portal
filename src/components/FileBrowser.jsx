@@ -92,6 +92,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  *
  * @param {Object} props - 文件浏览器属性。
  * @param {string} props.currentPath - 当前显示的远程目录路径。
+ * @param {string} props.pathInput - 尚未提交的路径输入，不参与远程操作目标计算。
  * @param {Array<Object>} props.files - 当前目录的远程条目。
  * @param {boolean} props.loading - 当前目录是否正在加载。
  * @param {string|null} props.error - 目录读取错误信息。
@@ -101,7 +102,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  * @param {string} props.homeDir - 远程用户主目录。
  * @param {string[]} props.drives - 可切换的远程盘符列表。
  * @param {() => void} props.handleGoBack - 返回上级目录回调。
- * @param {(path: string) => void} props.handlePathChange - 路径输入变更回调。
+ * @param {(event: Object) => void} props.handlePathChange - 路径输入变更回调。
  * @param {(event: Object) => void} props.handlePathSubmit - 路径表单提交回调。
  * @param {() => Promise<void>} props.handleRefresh - 刷新当前目录回调。
  * @param {(entry: Object) => void} props.handleItemClick - 进入目录或打开文件回调。
@@ -117,6 +118,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  */
 const FileBrowser = ({
   currentPath,
+  pathInput = currentPath,
   files,
   loading,
   error,
@@ -154,6 +156,7 @@ const FileBrowser = ({
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
   // 当前目录中的多选结果和批量操作 loading 状态。
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
+  const selectedKeySet = React.useMemo(() => new Set(selectedKeys), [selectedKeys])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
   // 终端工作区打开状态，以及用于并发调用计数的引用。
@@ -224,7 +227,7 @@ const FileBrowser = ({
    */
   const handleBatchDelete = async () => {
     if (batchDeleting || batchDownloading || selectedKeys.length < 2 || !handleDeleteItems) return
-    const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
+    const selectedEntries = files.filter(entry => selectedKeySet.has(getEntryKey(entry)))
     if (selectedEntries.length < 2) return
     setBatchDeleting(true)
     try {
@@ -238,7 +241,10 @@ const FileBrowser = ({
   }
 
   // 将稳定键还原为当前目录条目，批量操作只处理仍存在的可见项目。
-  const selectedEntries = files.filter(entry => selectedKeys.includes(getEntryKey(entry)))
+  const selectedEntries = React.useMemo(
+    () => files.filter(entry => selectedKeySet.has(getEntryKey(entry))),
+    [ files, selectedKeySet ]
+  )
 
   /**
    * 打开当前连接的终端工作区；没有标签宿主时兼容旧版独立窗口。
@@ -643,7 +649,7 @@ const FileBrowser = ({
             <Input
               className="remote-path-input"
               variant="borderless"
-              value={currentPath}
+              value={pathInput}
               onChange={handlePathChange}
               onPressEnter={handlePathSubmit}
               aria-label="远程路径"
@@ -681,7 +687,7 @@ const FileBrowser = ({
             type="error"
             showIcon
             icon={<AppIcon name="warningCircle" />}
-            message="目录加载失败"
+            title="目录加载失败"
             description={error}
             className="file-list-alert"
           />
@@ -706,7 +712,7 @@ const FileBrowser = ({
                 currentPath={currentPath}
                 connectionId={currentConnectionId}
                 showHiddenFiles={showHiddenFiles}
-                selected={selectedKeys.includes(getEntryKey(entry))}
+                selected={selectedKeySet.has(getEntryKey(entry))}
                 onSelect={event => handleItemSelect(entry, event)}
                 onActivate={() => handleItemClick(entry)}
                 onDelete={() => handleDeleteItem(entry)}

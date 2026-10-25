@@ -411,7 +411,7 @@ const TerminalModal = ({ open, onClose, connectionId, connection }) => {
       footer={null}
       width="min(1120px, calc(100vw - 32px))"
       onCancel={onClose}
-      maskClosable
+      mask={{ closable: true }}
       keyboard
       destroyOnHidden
     >

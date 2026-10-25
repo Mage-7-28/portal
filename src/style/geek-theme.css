@@ -147,14 +147,12 @@ body {
   color: var(--portal-geek-text);
 }
 
-.transfer-inline-progress .ant-progress-rail,
-.preview-progress .ant-progress-inner {
+.transfer-inline-progress .ant-progress-rail {
   border-color: #50535a;
   background: #3a3c42;
 }
 
-.transfer-inline-progress .ant-progress-track,
-.preview-progress .ant-progress-bg {
+.transfer-inline-progress .ant-progress-track {
   background: var(--portal-geek-primary) !important;
 }
 
@@ -678,31 +676,7 @@ body {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
 
-/* 模态框、上传区和关于页沿用同一套面板语言。 */
-.compact-modal .ant-modal-content {
-  position: relative;
-  overflow: hidden;
-  border-color: var(--portal-geek-line-strong);
-  border-radius: 8px;
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 74px),
-    var(--portal-geek-surface-1);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
-}
-
-.compact-modal .ant-modal-content::before {
-  position: absolute;
-  top: 0;
-  right: 22px;
-  left: 22px;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: linear-gradient(90deg, transparent, var(--portal-geek-primary) 34%, var(--portal-geek-teal) 72%, transparent);
-  content: '';
-  opacity: 0.82;
-  pointer-events: none;
-}
-
+/* 紧凑弹窗标题、上传区和关于页沿用同一套面板语言。 */
 .compact-modal .ant-modal-header {
   padding-bottom: 9px;
   border-bottom: 1px solid rgba(69, 71, 77, 0.72);
@@ -757,12 +731,6 @@ body {
 
 .upload-picker-list {
   background: #202124;
-}
-
-.about-modal .ant-modal-content {
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 86px),
-    var(--portal-geek-surface-1);
 }
 
 .about-logo {

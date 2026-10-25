@@ -1,16 +1,14 @@
 /**
- * 预览类型识别、按需加载语法高亮和大型 JSON 工作线程调度。
+ * 预览类型识别与有界、可取消的 JSON 格式化和高亮任务。
  *
- * 大文件格式化会切换到 Worker，避免阻塞文件浏览器主线程。
+ * 浏览器中的格式化和高亮均交给 Worker，避免阻塞文件浏览器主线程。
  */
-import Prism from 'prismjs'
+import { createPreviewTaskRunner } from './previewTasks.js'
 import { formatJsonContent } from './jsonFormat.js'
 
 // 远程文件预览和语法高亮的内存上限，避免把大型二进制或文本一次性加载进 WebView。
 export const MAX_PREVIEW_BYTES = 5 * 1024 * 1024
-export const MAX_HIGHLIGHT_BYTES = 1024 * 1024
-// 超过该阈值的 JSON 转交 Worker，较小内容直接格式化以减少线程通信开销。
-const JSON_WORKER_THRESHOLD = 256 * 1024
+const MAX_HIGHLIGHT_CHARS = 1024 * 1024
 
 /**
  * @typedef {Object} PreviewDescriptor
@@ -95,107 +93,6 @@ const codeLanguages = {
   csv: 'csv'
 }
 
-// language -> Promise，合并同一语言的并发动态 import。
-const languagePromises = new Map()
-
-/**
- * 按需加载 Prism 语言定义，并共享并发加载 Promise。
- *
- * @param {string} language - Prism 语言标识。
- * @returns {Promise<boolean>} 语言定义已可用时返回 true；不支持时返回 false。
- */
-const loadLanguage = async (language) => {
-  if (!language || Prism.languages[language]) return Boolean(Prism.languages[language])
-  const loader = languageLoaders[language]
-  if (!loader) return false
-  if (!languagePromises.has(language)) {
-    languagePromises.set(language, loader().then(() => Boolean(Prism.languages[language])))
-  }
-  return languagePromises.get(language)
-}
-
-// Prism 语言模块的按需加载器；依赖语言先加载父语法再加载具体扩展。
-const languageLoaders = {
-  markup: () => import('prismjs/components/prism-markup.js'),
-  css: () => import('prismjs/components/prism-css.js'),
-  scss: async () => {
-    await loadLanguage('css')
-    await import('prismjs/components/prism-scss.js')
-  },
-  less: async () => {
-    await loadLanguage('css')
-    await import('prismjs/components/prism-less.js')
-  },
-  clike: () => import('prismjs/components/prism-clike.js'),
-  javascript: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-javascript.js')
-  },
-  jsx: async () => {
-    await loadLanguage('markup')
-    await loadLanguage('javascript')
-    await import('prismjs/components/prism-jsx.js')
-  },
-  typescript: async () => {
-    await loadLanguage('javascript')
-    await import('prismjs/components/prism-typescript.js')
-  },
-  tsx: async () => {
-    await loadLanguage('jsx')
-    await loadLanguage('typescript')
-    await import('prismjs/components/prism-tsx.js')
-  },
-  json: () => import('prismjs/components/prism-json.js'),
-  json5: async () => {
-    await loadLanguage('json')
-    await import('prismjs/components/prism-json5.js')
-  },
-  python: () => import('prismjs/components/prism-python.js'),
-  java: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-java.js')
-  },
-  go: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-go.js')
-  },
-  rust: () => import('prismjs/components/prism-rust.js'),
-  sql: () => import('prismjs/components/prism-sql.js'),
-  bash: () => import('prismjs/components/prism-bash.js'),
-  yaml: () => import('prismjs/components/prism-yaml.js'),
-  toml: () => import('prismjs/components/prism-toml.js'),
-  markdown: async () => {
-    await loadLanguage('markup')
-    await import('prismjs/components/prism-markdown.js')
-  },
-  c: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-c.js')
-  },
-  cpp: async () => {
-    await loadLanguage('c')
-    await import('prismjs/components/prism-cpp.js')
-  },
-  csharp: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-csharp.js')
-  },
-  php: async () => {
-    await loadLanguage('markup')
-    await import('prismjs/components/prism-markup-templating.js')
-    await import('prismjs/components/prism-php.js')
-  },
-  kotlin: async () => {
-    await loadLanguage('clike')
-    await import('prismjs/components/prism-kotlin.js')
-  },
-  swift: () => import('prismjs/components/prism-swift.js'),
-  docker: () => import('prismjs/components/prism-docker.js'),
-  ini: () => import('prismjs/components/prism-ini.js'),
-  properties: () => import('prismjs/components/prism-properties.js'),
-  csv: () => import('prismjs/components/prism-csv.js')
-}
-
 // 无需语法高亮即可安全展示的纯文本扩展名。
 const textExtensions = new Set([ 'txt', 'text', 'log', 'rst', 'adoc' ])
 
@@ -268,94 +165,42 @@ export const getPreviewDescriptor = (name) => {
   return { kind: 'unsupported', name: fileName }
 }
 
-// Worker 延迟创建并复用；任务表用于把异步消息路由回对应 Promise。
-let jsonWorker = null
-let jsonWorkerSequence = 0
-const jsonWorkerJobs = new Map()
-
-// 大型 JSON 格式化放到独立线程执行，小文件保持同步处理。
-/**
- * 创建并复用 JSON 格式化 Worker，同时集中处理任务回调和线程异常。
- *
- * @returns {Worker} 可接收 `format-json` 请求的浏览器 Worker 实例。
- */
-const getJsonWorker = () => {
-  if (jsonWorker) return jsonWorker
-  jsonWorker = new Worker(
-    new URL('../workers/previewWorker.js', import.meta.url),
-    { type: 'module' }
-  )
-  // Worker 完成消息按任务 ID 还原到对应 Promise，并立即移除任务引用。
-  jsonWorker.onmessage = event => {
-    const { id, content, formatted } = event.data || {}
-    const job = jsonWorkerJobs.get(id)
-    if (!job) return
-    jsonWorkerJobs.delete(id)
-    job.resolve({ content, formatted })
-  }
-  // Worker 发生线程级错误时拒绝全部等待任务并销毁实例，下一次请求会重新创建。
-  jsonWorker.onerror = event => {
-    const error = new Error(event.message || 'JSON 格式化线程失败')
-    jsonWorkerJobs.forEach(job => job.reject(error))
-    jsonWorkerJobs.clear()
-    jsonWorker?.terminate()
-    jsonWorker = null
-  }
-  return jsonWorker
-}
+// 不在调用线程执行 Prism；每个任务拥有独立线程，关闭时可以立即终止。
+const runPreviewTask = createPreviewTaskRunner(() => new Worker(
+  new URL('../workers/previewWorker.js', import.meta.url),
+  { type: 'module' }
+))
 
 /**
- * 小 JSON 同步格式化，大 JSON 转交 Worker 避免阻塞界面线程。
+ * 在 Worker 中格式化 JSON；无 Worker 的环境仍使用有预算的共享格式化器。
  *
- * @param {string|unknown} content - 待格式化的原始文本或可转换为文本的值。
- * @returns {Promise<JsonFormatResult>} 原始或格式化后的 JSON 文本及成功状态。
+ * @param {string|unknown} content - 待格式化文本。
+ * @param {{signal?: AbortSignal}} [options={}] - 当前预览生命周期的取消信号。
+ * @returns {Promise<JsonFormatResult>} 格式化文本或保留原文的降级结果。
  */
-export const formatJsonPreviewAsync = (content) => {
+export const formatJsonPreviewAsync = async (content, { signal } = {}) => {
   const source = String(content || '').replace(/^\uFEFF/, '')
-  if (source.length <= JSON_WORKER_THRESHOLD) return Promise.resolve(formatJsonContent(source))
-  if (typeof window === 'undefined' || typeof Worker === 'undefined') {
-    return Promise.resolve(formatJsonContent(source))
+  if (signal?.aborted) {
+    const error = new Error('预览已取消')
+    error.name = 'AbortError'
+    throw error
   }
-
-  return new Promise((resolve, reject) => {
-    const id = `json-${ ++jsonWorkerSequence }`
-    jsonWorkerJobs.set(id, { resolve, reject })
-    getJsonWorker().postMessage({ id, type: 'format-json', content: source })
-  })
+  if (typeof Worker === 'undefined') return formatJsonContent(source)
+  return runPreviewTask('format-json', { content: source }, signal)
 }
 
 /**
- * 在大小限制内异步加载语法并返回高亮 HTML；失败时保留原文。
+ * 在 Worker 中高亮源代码；失败、超时或超预算时保留原文。
  *
- * @param {string|unknown} content - 待高亮的源代码文本。
+ * @param {string|unknown} content - 待高亮文本。
  * @param {string} language - Prism 语言标识。
- * @returns {Promise<HighlightResult>} 高亮 HTML，或保留原文的降级结果。
+ * @param {{signal?: AbortSignal}} [options={}] - 当前预览生命周期的取消信号。
+ * @returns {Promise<HighlightResult>} 已转义的 HTML 或原文降级结果。
  */
-export const highlightCode = async (content, language) => {
+export const highlightCode = async (content, language, { signal } = {}) => {
   const source = String(content || '')
-  if (source.length > MAX_HIGHLIGHT_BYTES) {
-    return {
-      content: source,
-      highlighted: false
-    }
+  if (source.length > MAX_HIGHLIGHT_CHARS || typeof Worker === 'undefined') {
+    return { content: source, highlighted: false }
   }
-  try {
-    await loadLanguage(language)
-    const grammar = Prism.languages[language]
-    if (!grammar) {
-      return {
-        content: source,
-        highlighted: false
-      }
-    }
-    return {
-      html: Prism.highlight(source, grammar, language),
-      highlighted: true
-    }
-  } catch {
-    return {
-      content: source,
-      highlighted: false
-    }
-  }
+  return runPreviewTask('highlight', { content: source, language }, signal)
 }

@@ -1,11 +1,11 @@
 /**
- * 在生产构建前静态提取 Ant Design 组件样式，减少 Tauri CSP 对运行时注入
- * style 标签的影响。输出文件由构建流程覆盖，不应手动编辑。
+ * 在生产构建前静态提取 Ant Design 组件样式，保证首屏样式随主 CSS 加载。
+ * 动态组件状态仍使用运行时样式；输出由构建覆盖，不应手动编辑。
  */
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-// 生产构建前提取 Ant Design 样式，避免 Tauri 生产 CSP 阻止运行时插入 style 标签。
+// 采用生产模式提取组件样式，与正式构建的运行环境保持一致。
 process.env.NODE_ENV = 'production'
 
 const React = (await import('react')).default

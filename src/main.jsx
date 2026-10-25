@@ -8,12 +8,11 @@ import { flushSync } from 'react-dom'
 import App from './App.jsx'
 
 // 引入样式文件
-// Ant Design 和 react-hot-toast 的静态样式用于生产包，避免 CSP 阻止运行时注入导致组件退化为原生 HTML。
+// 静态样式随首屏一起加载；Ant Design 仍保留运行时样式以覆盖动态组件状态。
 import './style/antd-theme.css'
 import './style/react-hot-toast.css'
 import './style/index.css'
 import './style/geek-theme.css'
-import './style/fonts.css'
 // xterm 官方要求在应用入口加载基础 CSS，终端组件只负责创建实例和写入 PTY 数据。
 import '@xterm/xterm/css/xterm.css'
 import { GlobalFontFamily } from './utils/common.js'
