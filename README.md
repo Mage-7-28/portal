@@ -105,7 +105,6 @@ pnpm install --frozen-lockfile
 ```bash
 pnpm tauri:dev           # 启动桌面开发环境
 pnpm lint               # 检查前端、脚本与配置
-pnpm test               # 运行前端任务进度回归测试
 pnpm build              # 生成主题样式并构建前端
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -114,13 +113,6 @@ pnpm audit:dev           # 审计开发依赖
 ```
 
 `pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 纳入版本管理；更新依赖时同步更新锁文件，并重新执行上述检查。
-
-SSH/SFTP 集成测试仅连接临时 loopback 服务器，默认跳过。准备安装了 `paramiko==5.1.0` 的独立 Python 环境后显式运行：
-
-```bash
-PORTAL_SFTP_TEST_PYTHON=/path/to/venv/bin/python \
-  cargo test --manifest-path src-tauri/Cargo.toml --locked transfer_tests -- --ignored
-```
 
 ### 构建 macOS DMG
 

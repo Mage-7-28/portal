@@ -1,7 +1,7 @@
 //! Portal Tauri 应用入口和本地文件系统命令。
 //!
-//! 本模块组装插件、原生菜单和 SSH 状态，并提供跨平台的本地目录读取、
-//! 路径检查、平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
+//! 本模块组装插件、原生菜单和 SSH 状态，并提供本地路径检查、
+//! 平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
 
 mod local_transfer;
 mod remote_policy;
@@ -27,20 +27,6 @@ const CREDENTIAL_VERSION: &str = "v1";
 // 密钥首次创建可能同时被多个启动解密请求触发；进程级锁配合 create_new
 // 保证不会互相覆盖，也不会在异常退出时静默替换历史密钥。
 static CREDENTIAL_KEY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-
-/// 返回用于验证 IPC 链路的问候语。
-///
-/// # Arguments
-///
-/// * `name` - 要插入问候语的调用方名称。
-///
-/// # Returns
-///
-/// 返回包含调用方名称的问候字符串。
-#[tauri::command]
-fn greet(name: &str) -> String {
-    format!("Hello, {}! You've been greeted from Rust!", name)
-}
 
 /// 请求 Tauri 退出当前应用。
 ///
@@ -99,18 +85,6 @@ fn set_show_hidden_files_menu_checked(
     Ok(())
 }
 
-/// 本地目录列表返回给前端的条目。
-#[derive(serde::Serialize)]
-struct FileEntry {
-    /// 文件或目录名称。
-    name: String,
-    /// 是否为目录；目录大小由前端按需递归统计。
-    #[serde(rename = "isDirectory")]
-    is_directory: bool,
-    /// 普通文件的字节数，目录固定返回 0。
-    size: u64,
-}
-
 /// 拖放路径检查后返回给前端的本地条目。
 #[derive(serde::Serialize)]
 struct LocalPathEntry {
@@ -135,56 +109,6 @@ fn get_home_dir() -> Result<String, String> {
     dirs::home_dir()
         .map(|path| path.to_string_lossy().to_string())
         .ok_or_else(|| "Failed to get home directory".to_string())
-}
-
-/// 读取本地目录的直接子项，不递归计算目录大小。
-///
-/// # Arguments
-///
-/// * `path` - 要读取的本地目录路径。
-///
-/// # Returns
-///
-/// 返回直接子项数组；普通文件包含字节数，目录的大小固定为 `0`。
-///
-/// # Errors
-///
-/// 当路径不存在、不是目录或目录读取失败时返回错误。
-#[tauri::command]
-fn read_directory(path: &str) -> Result<Vec<FileEntry>, String> {
-    let path = Path::new(path);
-
-    if !path.exists() {
-        return Err("Path does not exist".to_string());
-    }
-
-    if !path.is_dir() {
-        return Err("Path is not a directory".to_string());
-    }
-
-    let mut entries = Vec::new();
-
-    match std::fs::read_dir(path) {
-        Ok(dir_entries) => {
-            for entry in dir_entries.flatten() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                let is_directory = entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false);
-                let size = if is_directory {
-                    0
-                } else {
-                    entry.metadata().map(|m| m.len()).unwrap_or(0)
-                };
-
-                entries.push(FileEntry {
-                    name,
-                    is_directory,
-                    size,
-                });
-            }
-            Ok(entries)
-        }
-        Err(e) => Err(format!("Failed to read directory: {}", e)),
-    }
 }
 
 /// 校验拖放到窗口的本地路径，拒绝符号链接和特殊文件。
@@ -230,60 +154,6 @@ fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String
 #[tauri::command]
 fn get_platform() -> String {
     std::env::consts::OS.to_string()
-}
-
-/// 列出本地可浏览根路径；Windows 返回逻辑盘符，其余平台返回根目录。
-///
-/// # Returns
-///
-/// 返回可供文件浏览器切换的根路径数组。
-///
-/// # Errors
-///
-/// 当前实现仅在 Windows 原生盘符查询失败且无法构造回退结果时可能返回错误；
-/// 非 Windows 平台始终返回根目录。
-#[tauri::command]
-fn list_drives() -> Result<Vec<String>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        use std::ffi::OsString;
-        use std::os::windows::ffi::OsStringExt;
-
-        unsafe {
-            let mut drives = Vec::new();
-            let buffer_size = 256;
-            let mut buffer: Vec<u16> = vec![0; buffer_size];
-
-            let len = windows_sys::Win32::Storage::FileSystem::GetLogicalDriveStringsW(
-                buffer_size as u32,
-                buffer.as_mut_ptr(),
-            );
-
-            if len > 0 {
-                let mut start = 0;
-                for i in 0..len as usize {
-                    if buffer[i] == 0 {
-                        if i > start {
-                            let drive = OsString::from_wide(&buffer[start..i]);
-                            drives.push(drive.to_string_lossy().to_string());
-                        }
-                        start = i + 1;
-                    }
-                }
-            }
-
-            if drives.is_empty() {
-                drives.push("C:".to_string());
-            }
-
-            Ok(drives)
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        Ok(vec!["/".to_string()])
-    }
 }
 
 /// 使用应用本地密钥加密密码；密钥仅保存在应用数据目录，不通过前端 IPC 暴露。
@@ -441,14 +311,11 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())
         .invoke_handler(tauri::generate_handler![
-            greet,
             exit_application,
             set_show_hidden_files_menu_checked,
             get_home_dir,
-            read_directory,
             inspect_local_paths,
             get_platform,
-            list_drives,
             encrypt_password,
             decrypt_password,
             ssh::test_sftp_connection,

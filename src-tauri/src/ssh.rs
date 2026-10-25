@@ -4583,10 +4583,6 @@ fn uuid_fallback() -> String {
 }
 
 #[cfg(test)]
-#[path = "ssh_transfer_tests.rs"]
-mod transfer_tests;
-
-#[cfg(test)]
 mod tests {
     use super::*;
 

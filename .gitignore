@@ -8,6 +8,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.pnpm-store/
 dist
 dist-ssr
 *.local
@@ -25,5 +26,5 @@ dist-ssr
 
 package-lock.json
 
-# Python SSH/SFTP test fixture
+# Temporary Python caches
 __pycache__/
