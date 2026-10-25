@@ -2,11 +2,12 @@
  * 文件传输与批量操作状态栏。
  * upload、download、目录传输和删除操作共用同一进度事件与取消回调。
  */
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useEffect, useReducer, useState } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import PubSub from 'pubsub-js'
 import { PubSubBusinessKeyEnum, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
+import { PROGRESS_END, PROGRESS_EVENT_END, PROGRESS_UPDATE, createInitialProgressState, getCurrentProgress, getProgressKey, progressReducer } from '../utils/progressState.js'
 
 const { Text } = Typography
 
@@ -16,23 +17,24 @@ const { Text } = Typography
  * @returns {JSX.Element|null} 当前传输/批量操作的状态 UI；没有活动操作时返回 null。
  */
 const ProgressMask = () => {
-  // 当前共享操作载荷；null 表示底部状态栏没有活动任务。
-  const [ maskData, setMaskData ] = useState(null)
-  // 取消按钮的异步 loading，防止重复发送取消请求。
-  const [ cancelling, setCancelling ] = useState(false)
-  // 已明确关闭的 maskId 集合，用于过滤迟到的进度事件。
-  const dismissedMaskIds = useRef(new Set())
+  // 每个任务独立保留进度；结束任务的有限墓碑用于过滤迟到事件。
+  const [ progressState, dispatch ] = useReducer(progressReducer, undefined, createInitialProgressState)
+  // 取消按钮的异步 loading 绑定当前任务，避免任务切换时串用状态。
+  const [ cancellingTaskKey, setCancellingTaskKey ] = useState(null)
 
   // 订阅 PubSub 进度总线，并在卸载时撤销唯一订阅令牌。
   useEffect(() => {
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
-      if (data?.dismissMaskId) {
-        dismissedMaskIds.current.add(data.dismissMaskId)
-        setMaskData(current => current?.maskId === data.dismissMaskId ? null : current)
+      if (!data?.taskId || !data?.maskId) return
+      if (data.event === PROGRESS_EVENT_END) {
+        dispatch({
+          type: PROGRESS_END,
+          taskId: data.taskId,
+          maskId: data.maskId
+        })
         return
       }
-      if (data?.maskId && dismissedMaskIds.current.has(data.maskId)) return
-      setMaskData(data)
+      dispatch({ type: PROGRESS_UPDATE, payload: data })
     })
 
     return () => {
@@ -40,9 +42,12 @@ const ProgressMask = () => {
     }
   }, [])
 
+  const maskData = getCurrentProgress(progressState)
   if (!maskData) {
     return null
   }
+
+  const currentTaskKey = getProgressKey(maskData)
 
   // 确保 maskData 有必要的属性
   const {
@@ -82,14 +87,16 @@ const ProgressMask = () => {
    * @returns {Promise<void>} 取消请求及状态清理完成后的 Promise。
    */
   const handleCancel = async () => {
-    if (!onCancel || cancelling) return
-    setCancelling(true)
+    if (!onCancel || cancellingTaskKey === currentTaskKey) return
+    setCancellingTaskKey(currentTaskKey)
     try {
       await onCancel()
     } finally {
-      setCancelling(false)
+      setCancellingTaskKey(currentKey => currentKey === currentTaskKey ? null : currentKey)
     }
   }
+
+  const cancelling = cancellingTaskKey === currentTaskKey
 
   if (isInlineOperation) {
     const isDirectoryUpload = operation === 'upload-directory'
@@ -134,35 +141,26 @@ const ProgressMask = () => {
     if (pendingCountLabel) {
       pendingLabel = [ pendingDetail, pendingKind, pendingCountLabel ].filter(Boolean).join(' ')
     }
+    const itemPositionLabel = operation === 'delete'
+      ? `第 ${ queueIndex + 1 }/${ queueTotal } 个文件`
+      : isDirectoryTransfer && folderTotal > 0
+        ? `项目 ${ queueIndex + 1 }/${ queueTotal } · 文件 ${ Math.min(folderIndex + 1, folderTotal) }/${ folderTotal }`
+        : `项目 ${ queueIndex + 1 }/${ queueTotal }`
     const cancelLabel = isMutation ? '取消操作' : isDownloadOperation ? '取消下载' : '取消上传'
     return (
       <div
-        className={`transfer-inline-status${ isMutation ? ' is-operation' : '' }`}
+        className="transfer-inline-status"
         title={`${ operationLabel }：${ fileName }${ message ? ` - ${ message }` : '' }`}
       >
         <span className="transfer-inline-operation">{operationLabel}</span>
         {showItemPosition && (
-          <span className="transfer-inline-position">
-            {operation === 'delete'
-              ? `第 ${ queueIndex + 1 }/${ queueTotal } 个文件`
-              : isDirectoryTransfer && folderTotal > 0
-                ? `项目 ${ queueIndex + 1 }/${ queueTotal } · 文件 ${ Math.min(folderIndex + 1, folderTotal) }/${ folderTotal }`
-                : `项目 ${ queueIndex + 1 }/${ queueTotal }`}
+          <span className="transfer-inline-position" title={itemPositionLabel}>
+            {itemPositionLabel}
           </span>
         )}
         <span className="transfer-inline-file" title={fileName}>{fileName || '准备中'}</span>
-        <Progress
-          className="transfer-inline-progress"
-          percent={Math.round(displayProgress)}
-          status={isMutation ? 'active' : undefined}
-          strokeColor={THEME_PRIMARY_COLOR}
-          railColor={THEME_BORDER_COLOR}
-          showInfo={false}
-          size="small"
-        />
-        <span className="transfer-inline-percent">{Math.round(displayProgress)}%</span>
         {pendingLabel && (
-          <span className={`transfer-inline-pending${ isMutation ? ' transfer-inline-message' : '' }`} title={pendingLabel}>
+          <span className={`transfer-inline-pending${ pendingCountLabel ? '' : ' transfer-inline-message' }`} title={pendingLabel}>
             {pendingCountLabel ? (
               <>
                 {pendingDetail && <span className="transfer-inline-pending-detail">{pendingDetail}</span>}
@@ -172,20 +170,33 @@ const ProgressMask = () => {
             ) : pendingLabel}
           </span>
         )}
-        {onCancel && (
-          <Tooltip title={cancelLabel}>
-            <Button
-              className="transfer-inline-cancel"
-              type="text"
-              size="small"
-              danger
-              icon={<AppIcon name="stop" />}
-              loading={cancelling}
-              onClick={handleCancel}
-              aria-label={cancelLabel}
-            />
-          </Tooltip>
-        )}
+        {/* 将动态描述留在左侧，避免文字长度改变进度条和取消入口的位置。 */}
+        <div className="transfer-inline-controls">
+          <Progress
+            className="transfer-inline-progress"
+            percent={Math.round(displayProgress)}
+            status={isMutation ? 'active' : undefined}
+            strokeColor={THEME_PRIMARY_COLOR}
+            railColor={THEME_BORDER_COLOR}
+            showInfo={false}
+            size="small"
+          />
+          <span className="transfer-inline-percent">{Math.round(displayProgress)}%</span>
+          {onCancel && (
+            <Tooltip title={cancelLabel}>
+              <Button
+                className="transfer-inline-cancel"
+                type="text"
+                size="small"
+                danger
+                icon={<AppIcon name="stop" />}
+                loading={cancelling}
+                onClick={handleCancel}
+                aria-label={cancelLabel}
+              />
+            </Tooltip>
+          )}
+        </div>
       </div>
     )
   }

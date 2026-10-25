@@ -18,6 +18,7 @@ import PasswordPromptModal from './PasswordPromptModal.jsx'
 import AppIcon from './AppIcon.jsx'
 import { notification } from '../utils/notificationUtils.js'
 import { decryptPassword, encryptPassword } from '../utils/credentialUtils.js'
+import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 
 /**
  * @typedef {Object} ConnectionProfile
@@ -252,19 +253,17 @@ function FileBrowserPanel({
   const ownedConnectionIdRef = useRef(null)
   const initialConnectionRef = useRef(initialConnection)
   const handleConnectRef = useRef(null)
-  // 为删除/重命名进度生成单调序号，避免相同毫秒时间戳导致 maskId 冲突。
-  const operationStatusSequence = useRef(0)
   initialConnectionRef.current = initialConnection
 
   /**
-   * 创建带 maskId 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
+   * 创建带任务和遮罩 ID 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
    *
    * @param {'delete'|'rename'} operation - 当前远程变更操作类型。
    * @param {string} fileName - 进度区域展示的文件或目录名称。
    * @returns {OperationStatus} 发布开始、更新和关闭事件的操作状态对象。
    */
   const createOperationStatus = (operation, fileName) => {
-    const maskId = `file-operation-${ operation }-${ Date.now() }-${ ++operationStatusSequence.current }`
+    const progressIds = createProgressIds(`file-operation-${ operation }`)
     /**
      * 向共享状态栏发布当前操作的统一载荷。
      *
@@ -275,7 +274,7 @@ function FileBrowserPanel({
      */
     const publish = (progress, message, details = {}) => {
       PubSubBusinessKeyEnum.SEND_MASK({
-        maskId,
+        ...progressIds,
         operation,
         fileName,
         progress,
@@ -286,7 +285,10 @@ function FileBrowserPanel({
     return {
       start: message => publish(0, message),
       update: (progress, message, details) => publish(progress, message, details),
-      dismiss: () => PubSubBusinessKeyEnum.SEND_MASK({ dismissMaskId: maskId })
+      dismiss: () => PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
+        event: PROGRESS_EVENT_END
+      })
     }
   }
 
@@ -1062,6 +1064,7 @@ function FileBrowserPanel({
     let skippedCount = 0
     let transferId = null
     let cancelled = false
+    const progressIds = createProgressIds('download-batch')
     /**
      * 把单项下载回调转换为批量队列状态栏可消费的进度载荷。
      *
@@ -1076,6 +1079,7 @@ function FileBrowserPanel({
       const fileIndex = Number(payload.fileIndex)
       const fileTotal = Number(payload.fileTotal)
       PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
         progress: Math.round(Number(progress) || 0),
         fileName: isDirectoryDownload ? (payload.fileName || entry.name) : entry.name,
         operation: isDirectoryDownload ? 'download-directory' : 'download',
@@ -1166,7 +1170,10 @@ function FileBrowserPanel({
       }
     } finally {
       transferId = null
-      PubSubBusinessKeyEnum.SEND_MASK(null)
+      PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
+        event: PROGRESS_EVENT_END
+      })
     }
 
     if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {

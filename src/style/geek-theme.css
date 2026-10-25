@@ -147,13 +147,13 @@ body {
   color: var(--portal-geek-text);
 }
 
-.transfer-inline-progress .ant-progress-inner,
+.transfer-inline-progress .ant-progress-rail,
 .preview-progress .ant-progress-inner {
   border-color: #50535a;
   background: #3a3c42;
 }
 
-.transfer-inline-progress .ant-progress-bg,
+.transfer-inline-progress .ant-progress-track,
 .preview-progress .ant-progress-bg {
   background: var(--portal-geek-primary) !important;
 }

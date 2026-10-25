@@ -15,6 +15,7 @@ import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
+import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 
 /**
  * 从本地路径中提取用于上传列表展示的最后一级名称。
@@ -448,6 +449,7 @@ const FileBrowser = ({
 
     setUploadSubmitting(true)
     setUploadModalOpen(false)
+    const progressIds = createProgressIds('upload')
     try {
       for (const [ queueIndex, item ] of uploadQueue.entries()) {
         const { localPath, fileName, kind } = item
@@ -489,6 +491,7 @@ const FileBrowser = ({
           const fileTotal = Number(payload.fileTotal) || 0
           const fileIndex = Number(payload.fileIndex) || 0
           PubSubBusinessKeyEnum.SEND_MASK({
+            ...progressIds,
             progress,
             overallProgress: kind === 'directory' && Number.isFinite(Number(payload.overallProgress))
               ? Number(payload.overallProgress)
@@ -552,7 +555,10 @@ const FileBrowser = ({
     } finally {
       setUploadSubmitting(false)
       setUploadItems([])
-      PubSubBusinessKeyEnum.SEND_MASK(null)
+      PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
+        event: PROGRESS_EVENT_END
+      })
     }
   }
 

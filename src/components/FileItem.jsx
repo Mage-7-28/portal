@@ -11,6 +11,7 @@ import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common'
 import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
+import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 
 /**
  * 拼接远程 POSIX 风格路径，避免重复分隔符影响 SFTP 调用。
@@ -212,6 +213,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     )
     if (!accepted) return
     let transferId = null
+    const progressIds = createProgressIds('download')
     /**
      * 将单项下载回调转换为状态栏进度，并关联可取消的传输 ID。
      *
@@ -223,6 +225,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
       const fileIndex = Number(payload.fileIndex)
       const fileTotal = Number(payload.fileTotal)
       PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
         progress: Math.round(Number(progress) || 0),
         fileName: entry.isDirectory ? (payload.fileName || entry.name) : entry.name,
         operation: entry.isDirectory ? 'download-directory' : 'download',
@@ -292,7 +295,10 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
       }
     } finally {
       setDownloading(false)
-      PubSubBusinessKeyEnum.SEND_MASK(null)
+      PubSubBusinessKeyEnum.SEND_MASK({
+        ...progressIds,
+        event: PROGRESS_EVENT_END
+      })
     }
   }
 

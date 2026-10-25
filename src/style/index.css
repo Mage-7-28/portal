@@ -394,6 +394,7 @@
 .download-status {
   display: flex;
   align-items: center;
+  column-gap: 10px;
   min-width: 0;
   min-height: 26px;
   padding: 0 8px;
@@ -408,7 +409,7 @@
 
 .download-status-location {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-width: 0;
   align-items: center;
   gap: 7px;
@@ -440,23 +441,22 @@
 
 .download-status-transfer:not(:empty) {
   display: flex;
-  flex: 0 1 min(560px, 58%);
-  width: min(560px, 58%);
+  flex: 0 1 auto;
+  max-width: min(560px, 58%);
   min-width: 0;
   min-height: 24px;
   align-items: center;
-  margin-left: 10px;
+  margin-left: auto;
 }
 
-/* 轻量传输状态以内联方式展示，适用于下载、上传、删除和重命名操作。 */
+/* 状态组按内容占宽并贴右，文字只在空间不足时收缩，避免短内容留下固定占位。 */
 .transfer-inline-status {
   display: flex;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   align-items: center;
   justify-content: flex-end;
-  width: 100%;
   min-width: 0;
-  max-width: none;
+  max-width: 100%;
   gap: 6px;
   height: 24px;
   margin-left: 0;
@@ -466,9 +466,7 @@
 }
 
 .transfer-inline-operation,
-.transfer-inline-position,
-.transfer-inline-percent,
-.transfer-inline-pending {
+.transfer-inline-percent {
   flex: 0 0 auto;
   white-space: nowrap;
 }
@@ -479,17 +477,32 @@
 }
 
 .transfer-inline-position {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
   color: #aaa69d;
   font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .transfer-inline-file {
-  flex: 0 1 170px;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 170px;
   overflow: hidden;
+  text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 右侧进度、百分比和取消入口作为一个不可压缩的整体，动态描述在其左侧伸缩。 */
+.transfer-inline-controls {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
 }
 
 .transfer-inline-progress {
@@ -499,7 +512,8 @@
   line-height: 1;
 }
 
-.transfer-inline-progress .ant-progress-inner {
+.transfer-inline-progress .ant-progress-rail {
+  box-sizing: border-box;
   height: 6px;
   overflow: hidden;
   border: 1px solid #4a443b;
@@ -507,7 +521,7 @@
   background: #35322d;
 }
 
-.transfer-inline-progress .ant-progress-bg {
+.transfer-inline-progress .ant-progress-track {
   height: 100% !important;
   border-radius: 999px;
   background: #eb9070 !important;
@@ -516,7 +530,8 @@
 }
 
 .transfer-inline-percent {
-  min-width: 34px;
+  /* 仅为 100% 预留空间，避免数字位数变化推动进度条。 */
+  width: calc(3ch + 1em);
   color: #e0b59b;
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -524,42 +539,44 @@
 
 .transfer-inline-pending {
   display: inline-flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 240px;
   align-items: center;
+  justify-content: flex-end;
   gap: 3px;
+  overflow: hidden;
   color: #aaa69d;
   white-space: nowrap;
 }
 
 .transfer-inline-pending-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: #aaa69d;
+  text-overflow: ellipsis;
 }
 
 .transfer-inline-pending-kind {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: #c0bcb4;
+  text-overflow: ellipsis;
 }
 
 .transfer-inline-pending-count {
+  flex: 0 0 auto;
   color: #e8e5de;
   font-variant-numeric: tabular-nums;
 }
 
-.transfer-inline-status.is-operation {
-  flex-basis: auto;
-}
-
-.transfer-inline-status.is-operation .transfer-inline-file {
-  max-width: 132px;
-}
-
 .transfer-inline-message {
   display: block;
-  flex: 0 1 180px;
-  min-width: 0;
   max-width: 180px;
-  overflow: hidden;
+  text-align: right;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .transfer-inline-cancel.ant-btn {
@@ -588,33 +605,17 @@
   font-size: 12px;
 }
 
-/* 中等宽度：压缩文件名并隐藏队列描述，保留操作、进度和取消入口。 */
+/* 中等宽度优先隐藏进度详情；宽度上限保持连续，不切换为按比例撑满。 */
 @media (max-width: 1040px) {
-  .download-status-transfer:not(:empty) {
-    flex-basis: 58%;
-    width: 58%;
-  }
-
-  .transfer-inline-status {
-    gap: 5px;
-  }
-
-  .transfer-inline-file {
-    max-width: 116px;
-  }
-
-  .transfer-inline-pending {
-    max-width: none;
-  }
-
   .transfer-inline-pending-detail {
     display: none;
   }
 }
 
-/* 平板宽度：移除路径和项目序号，让进度条保持稳定的最小尺寸。 */
+/* 较窄窗口隐藏项目序号和文件名，保留操作、队列提示与右侧进度入口。 */
 @media (max-width: 760px) {
   .download-status {
+    column-gap: 6px;
     padding-inline: 6px;
   }
 
@@ -623,17 +624,7 @@
   }
 
   .download-status-transfer:not(:empty) {
-    flex: 1 1 0;
-    width: auto;
-    margin-left: 6px;
-  }
-
-  .transfer-inline-status,
-  .transfer-inline-status.is-operation {
-    flex: 1 1 0;
-    max-width: none;
-    gap: 5px;
-    margin-left: 0;
+    max-width: 75%;
   }
 
   .transfer-inline-position,
@@ -641,19 +632,14 @@
     display: none;
   }
 
-  .transfer-inline-file {
-    flex-basis: 100px;
-    max-width: 100px;
-  }
-
   .transfer-inline-progress {
-    flex: 0 1 72px;
-    min-width: 54px;
-    width: 72px;
+    flex-basis: 64px;
+    min-width: 64px;
+    width: 64px;
   }
 }
 
-/* 窄屏：缩短下载地址与文件名，避免状态栏挤压操作按钮。 */
+/* 窄屏优先保留传输状态，下载地址继续在剩余空间内省略。 */
 @media (max-width: 520px) {
   .download-status-label {
     max-width: 42px;
@@ -663,27 +649,18 @@
   }
 
   .download-status-location {
-    flex: 0 1 30%;
-  }
-
-  .download-status-path {
-    flex: 1 1 auto;
-  }
-
-  .transfer-inline-file {
-    flex-basis: 76px;
-    max-width: 76px;
+    max-width: 30%;
   }
 }
 
-/* 极窄屏：隐藏地址和文件名，仅保留操作类型、进度和取消按钮。 */
+/* 极窄窗口隐藏下载地址，为传输状态保留全部宽度。 */
 @media (max-width: 420px) {
   .download-status-location {
     display: none;
   }
 
-  .transfer-inline-file {
-    display: none;
+  .download-status-transfer:not(:empty) {
+    max-width: 100%;
   }
 
   .transfer-inline-operation {
@@ -693,8 +670,9 @@
   }
 
   .transfer-inline-progress {
-    width: 58px;
-    min-width: 48px;
+    flex-basis: 56px;
+    width: 56px;
+    min-width: 56px;
   }
 }
 
