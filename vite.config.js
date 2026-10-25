@@ -4,8 +4,8 @@ import react from '@vitejs/plugin-react'
 const host = process.env.TAURI_DEV_HOST
 
 // Vite 配置文档：https://vite.dev/config/
-export default defineConfig(async () => ({
-  plugins: [ react() ],
+export default defineConfig(({ mode }) => ({
+  plugins: [react()],
 
   // Tauri 生产包通过内置资源协议加载文件，使用相对路径可兼容开发服务器和安装包。
   base: './',
@@ -31,13 +31,13 @@ export default defineConfig(async () => ({
       ignored: ['**/src-tauri/**']
     }
   },
-  // 4. 构建配置：移除 console 日志
+  // 4. 生产构建移除 debugger，保留 console.warn/error 以便保留可操作诊断信息。
+  esbuild: {
+    drop: mode === 'production' ? ['debugger'] : []
+  },
   build: {
     // 禁止 CSS 分片，所有第三方样式随主 CSS 一起加载，适配 Tauri 内置资源协议。
     cssCodeSplit: false,
-    minify: 'esbuild',
-    esbuild: {
-      drop: [ 'console', 'debugger' ]
-    }
+    minify: 'esbuild'
   }
 }))

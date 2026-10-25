@@ -89,15 +89,37 @@ Windows 和 Linux 暂未提供官方安装包。如果你希望在这些平台�
 
 ### 环境要求
 
-- Node.js（建议使用当前 LTS 版本）
-- pnpm
+- Node.js 22（至少 22.12）
+- pnpm（使用 `package.json` 中 `packageManager` 指定的版本）
 - Rust stable toolchain
 - macOS 构建还需要 Xcode Command Line Tools
 
 ### 安装依赖
 
 ```bash
-pnpm install
+pnpm install --frozen-lockfile
+```
+
+### 本地开发与检查
+
+```bash
+pnpm tauri:dev           # 启动桌面开发环境
+pnpm lint               # 检查前端、脚本与配置
+pnpm test               # 运行前端任务进度回归测试
+pnpm build              # 生成主题样式并构建前端
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo test --manifest-path src-tauri/Cargo.toml
+pnpm audit:prod          # 审计生产依赖
+pnpm audit:dev           # 审计开发依赖
+```
+
+`pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 纳入版本管理；更新依赖时同步更新锁文件，并重新执行上述检查。
+
+SSH/SFTP 集成测试仅连接临时 loopback 服务器，默认跳过。准备安装了 `paramiko==5.1.0` 的独立 Python 环境后显式运行：
+
+```bash
+PORTAL_SFTP_TEST_PYTHON=/path/to/venv/bin/python \
+  cargo test --manifest-path src-tauri/Cargo.toml --locked transfer_tests -- --ignored
 ```
 
 ### 构建 macOS DMG
@@ -139,7 +161,8 @@ Windows 和 Linux 构建目前属于自行尝试，不代表项目已经提供�
 
 - SSH 服务可连接，端口和账户凭据有效。
 - 已启用 SFTP 子系统，并允许当前账户访问目标目录。
-- 文件浏览和传输不要求远程 Shell；Shell 只用于可选的目录大小快速统计和远程终端。
+- 浏览、预览和下载只依赖 SFTP；上传、新建、重命名和删除还需要通过固定命令 `id -u` 验证身份，以及可信的 POSIX 所有者与权限元数据。无法完成验证时会拒绝变更。
+- 变更路径的目录须由当前用户或 root 所有，且不能允许组或其他用户写入。sticky 共享目录只能作为已验证私有子目录的祖先，不能直接作为变更目录。
 - 目录大小统计受服务器命令、网络速度、目录规模和账户权限影响。
 
 ## 已知限制
@@ -147,13 +170,19 @@ Windows 和 Linux 构建目前属于自行尝试，不代表项目已经提供�
 - 目前仅支持密码认证。
 - 暂不支持私钥、SSH Agent、键盘交互认证或跳板机配置。
 - 本地符号链接和特殊文件不会在文件夹传输中被跟随或复制，远程目录大小也不会跟随符号链接。
+- SFTP 扫描累计限制为 100,000 个条目、32 MiB 路径数据、128 层路径和 120 秒；达到任一限制时请缩小操作范围。远端 `du` 也有总时间和输出大小限制。
+- 缺少 POSIX 身份/权限元数据的 Windows SFTP 或仅开放 SFTP 的账户仍可浏览和下载，但会拒绝远端变更。
+- 不支持覆盖重命名的 SFTP 服务器会拒绝覆盖上传；Portal 会保留旧文件，不会先删除旧目标再尝试提交。
+- 本地“禁止覆盖”下载使用硬链接原子提交；目标文件系统不支持硬链接时会报错，不会降级为可能覆盖并发创建文件的操作。
 - Windows 和 Linux 当前没有项目作者提供的官方安装包，需要自行构建验证。
 
 ## 安全说明
 
 - 文件浏览、上传、下载和远程操作均通过加密的 SSH/SFTP 会话完成。
 - 首次连接请认真核对主机指纹；服务器更换密钥时，不要未经核实直接重新信任。
-- 密码不会写入连接配置、终端窗口地址或应用日志，但会在当前进程内存中使用。
+- 明文密码不会写入连接配置、终端窗口地址或应用日志，但会在当前进程内存中使用。
+- 本地下载通过目录句柄创建独占私有临时文件，完成后提交；覆盖失败或取消时保留原文件。远端上传同样使用随机、排他创建的私有临时文件，不以先删除旧文件的方式模拟覆盖。
+- 远端路径检查依赖可信服务器提供的权限元数据；SFTP 无法提供与本地目录句柄等价的保证，不能防御同 UID 的恶意进程或元数据未反映的 ACL 授权。相关目录应使用专用账户与私有权限。
 - 请不要把密码、主机指纹、服务器地址或操作日志发布到公开 Issue、截图或讨论中。
 
 ## 技术栈

@@ -5,7 +5,9 @@
 //! blocking runtime 中执行，并通过事件把进度和状态返回给前端。
 
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::fs::{self, File};
+#[cfg(test)]
+use std::fs;
+use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::{Component, Path, PathBuf};
@@ -14,6 +16,9 @@ use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::local_transfer::{LocalDownload, LocalTransferRoot};
+use crate::remote_policy::{parse_remote_uid, RemoteMutationPolicy};
+use crate::scan_budget::ScanBudget;
 use serde::Serialize;
 use serde_json::json;
 use ssh2::{Channel, ErrorCode, ExtendedData, HashType, RenameFlags, Session, Sftp};
@@ -40,6 +45,41 @@ const TERMINAL_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(12);
 const DEFAULT_TERMINAL_COLUMNS: u32 = 100;
 const DEFAULT_TERMINAL_ROWS: u32 = 30;
+const MAX_BLOCKING_COMMANDS: usize = 16;
+static ACTIVE_BLOCKING_COMMANDS: AtomicUsize = AtomicUsize::new(0);
+
+struct BlockingCommandSlot;
+
+impl Drop for BlockingCommandSlot {
+    fn drop(&mut self) {
+        ACTIVE_BLOCKING_COMMANDS.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// 在创建后台任务前取得名额，任务完成或创建失败时由 RAII 释放。
+fn blocking_command_slot() -> Result<BlockingCommandSlot, SshError> {
+    ACTIVE_BLOCKING_COMMANDS
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+            (count < MAX_BLOCKING_COMMANDS).then_some(count + 1)
+        })
+        .map_err(|_| {
+            SshError::FileOperationFailed("后台操作已达到并发上限，请稍后重试".to_string())
+        })?;
+    Ok(BlockingCommandSlot)
+}
+
+/// 原生异步命令只负责调度；同步DNS/SSH/SFTP在有界阻塞池中执行。
+async fn run_blocking_command<T: Send + 'static>(
+    task: impl FnOnce() -> Result<T, SshError> + Send + 'static,
+) -> Result<T, SshError> {
+    let slot = blocking_command_slot()?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _slot = slot;
+        task()
+    })
+    .await
+    .map_err(|error| SshError::FileOperationFailed(format!("后台操作失败: {error}")))?
+}
 
 // libssh2-sys 中的传输和 SFTP 错误码。这里在本地维护，避免 ssh2 已提供原始值时
 // 再增加一个直接依赖。
@@ -259,8 +299,6 @@ pub struct RemoteDirectorySize {
 
 /// 文件夹上传计划中的单个普通文件及其相对路径。
 struct FolderUploadFile {
-    /// 本机文件的绝对路径。
-    local_path: PathBuf,
     /// 相对于上传根目录的远程目标路径。
     relative_path: PathBuf,
 }
@@ -446,6 +484,8 @@ struct DirectorySizeSftpSession {
 // 一个扫描任务共享待处理目录和聚合结果；工作者完成一个目录后继续取下一个目录。
 /// 在多个工作线程之间共享的递归目录扫描状态。
 struct DirectorySizeScan {
+    /// 所有工作者共用累计预算，不能按子目录重新开始计数。
+    budget: Mutex<ScanBudget>,
     /// 待处理目录和聚合结果的互斥状态。
     state: Mutex<DirectorySizeScanState>,
     /// 目录入队或任务完成时唤醒工作线程。
@@ -517,6 +557,7 @@ impl DirectorySizeScan {
         let mut pending = VecDeque::new();
         pending.push_back((PathBuf::from(remote_path), true));
         Self {
+            budget: Mutex::new(ScanBudget::default()),
             state: Mutex::new(DirectorySizeScanState {
                 pending,
                 pending_count: 1,
@@ -1212,7 +1253,7 @@ fn mark_io_error_if_connection_lost(state: &SshState, id: &str, error: &std::io:
     }
 }
 
-/// 判断重命名错误是否允许回退到删除后重建策略。
+/// 判断是否可以去掉可选的原子/本机标志重试重命名；始终保留旧目标。
 ///
 /// # Arguments
 ///
@@ -1239,6 +1280,44 @@ fn is_rename_compatibility_error(error: &ssh2::Error) -> bool {
 /// 错误码为“无此文件/目录”时返回 `true`。
 fn is_sftp_missing_path(error: &ssh2::Error) -> bool {
     matches!(error.code(), ErrorCode::SFTP(LIBSSH2_FX_NO_SUCH_FILE))
+}
+
+/// 从已认证会话读取 UID；不能用可由其他用户拥有的 home 目录反推身份。
+///
+/// SFTP 不提供目录句柄相对变更，权限策略只保护普通 POSIX 私有目录。
+/// 不支持 UID 命令或可信权限元数据的服务器会明确拒绝变更，不静默降级。
+fn remote_mutation_policy(
+    state: &SshState,
+    id: &str,
+    session: &Arc<Mutex<Session>>,
+) -> Result<RemoteMutationPolicy, SshError> {
+    let channel = {
+        let session = session
+            .lock()
+            .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
+        session.channel_session()
+    };
+    let mut channel = channel.map_err(|error| {
+        mark_ssh_error_if_connection_lost(state, id, &error);
+        SshError::FileOperationFailed(format!("无法验证远端变更身份: {error}"))
+    })?;
+    let result = (|| -> Result<u32, SshError> {
+        channel.handle_extended_data(ExtendedData::Merge)?;
+        channel.exec("id -u")?;
+        let mut output = Vec::new();
+        (&mut channel).take(32).read_to_end(&mut output)?;
+        // 先解析有界输出，避免异常命令持续输出或永不退出时等待关闭。
+        let uid = parse_remote_uid(&output).map_err(SshError::FileOperationFailed)?;
+        channel.wait_close()?;
+        if channel.exit_status()? != 0 {
+            return Err(SshError::FileOperationFailed(
+                "远端无法提供可信 UID，已拒绝变更".to_string(),
+            ));
+        }
+        Ok(uid)
+    })();
+    let _ = channel.close();
+    result.map(RemoteMutationPolicy::new)
 }
 
 // 递归统计时，子目录的权限或瞬时删除不应丢弃已经得出的统计结果。
@@ -1291,67 +1370,60 @@ fn display_relative_path(relative_path: &Path) -> String {
 }
 
 /// 预扫描本地目录，建立不跟随符号链接的上传计划。
-fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, SshError> {
-    let root_metadata = fs::symlink_metadata(local_root)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法读取本地文件夹: {error}")))?;
-    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
-        return Err(SshError::FileOperationFailed(
-            "请选择一个普通本地文件夹，符号链接不支持直接上传".to_string(),
-        ));
-    }
-
+fn collect_folder_upload_plan(
+    local_root: &LocalTransferRoot,
+    cancelled: impl Fn() -> bool,
+) -> Result<FolderUploadPlan, SshError> {
     let mut plan = FolderUploadPlan {
         directories: Vec::new(),
         files: Vec::new(),
         total_bytes: 0,
         skipped_entries: 0,
     };
-    let mut pending_directories = vec![local_root.to_path_buf()];
+    let mut pending_directories = vec![PathBuf::new()];
+    let mut budget = ScanBudget::default();
 
     while let Some(directory) = pending_directories.pop() {
-        let mut entries = fs::read_dir(&directory)
-            .map_err(|error| {
-                SshError::FileOperationFailed(format!(
-                    "无法读取本地文件夹“{}”: {error}",
-                    directory.display()
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                SshError::FileOperationFailed(format!(
-                    "无法读取本地文件夹“{}”: {error}",
-                    directory.display()
-                ))
-            })?;
+        if cancelled() {
+            return Err(SshError::TransferCancelled);
+        }
+        budget.check().map_err(SshError::ReadDirFailed)?;
+        let mut entries = Vec::new();
+        for entry in local_root.entries(&directory)? {
+            if cancelled() {
+                return Err(SshError::TransferCancelled);
+            }
+            let entry = entry?;
+            budget
+                .record(&directory.join(entry.file_name()))
+                .map_err(SshError::ReadDirFailed)?;
+            entries.push(entry);
+        }
         entries.sort_by_key(|entry| entry.file_name());
 
         for entry in entries {
-            let local_path = entry.path();
-            let relative_path = local_path
-                .strip_prefix(local_root)
-                .map_err(|error| {
-                    SshError::FileOperationFailed(format!("无法计算本地相对路径: {error}"))
-                })?
-                .to_path_buf();
-            let metadata = fs::symlink_metadata(&local_path).map_err(|error| {
+            if cancelled() {
+                return Err(SshError::TransferCancelled);
+            }
+            budget.check().map_err(SshError::ReadDirFailed)?;
+            let relative_path = directory.join(entry.file_name());
+            let metadata = local_root.metadata(&relative_path).map_err(|error| {
                 SshError::FileOperationFailed(format!(
                     "无法读取本地文件“{}”: {error}",
-                    local_path.display()
+                    relative_path.display()
                 ))
             })?;
+            budget.check().map_err(SshError::ReadDirFailed)?;
 
             if metadata.file_type().is_symlink() {
                 plan.skipped_entries += 1;
             } else if metadata.is_dir() {
-                plan.directories.push(relative_path);
-                pending_directories.push(local_path);
+                plan.directories.push(relative_path.clone());
+                pending_directories.push(relative_path);
             } else if metadata.is_file() {
                 let size = metadata.len();
                 plan.total_bytes = plan.total_bytes.saturating_add(size);
-                plan.files.push(FolderUploadFile {
-                    local_path,
-                    relative_path,
-                });
+                plan.files.push(FolderUploadFile { relative_path });
             } else {
                 plan.skipped_entries += 1;
             }
@@ -1367,6 +1439,59 @@ fn collect_folder_upload_plan(local_root: &Path) -> Result<FolderUploadPlan, Ssh
     plan.files
         .sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
     Ok(plan)
+}
+
+/// 逐条读取远端目录，收集前检查共享预算和取消信号。
+fn bounded_remote_entries(
+    sftp: &Sftp,
+    path: &Path,
+    budget: &Mutex<ScanBudget>,
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<(PathBuf, ssh2::FileStat)>, ssh2::Error> {
+    // 使用客户端本地错误码，避免被目录统计当作可忽略的 SFTP 权限错误。
+    let failure = |message: &'static str| ssh2::Error::new(ErrorCode::Session(-34), message);
+    let mut directory = sftp.opendir(path)?;
+    let mut entries = Vec::new();
+    loop {
+        if cancelled() {
+            return Err(failure("目录扫描已取消"));
+        }
+        budget
+            .lock()
+            .map_err(|_| failure("扫描预算锁已损坏"))?
+            .check()
+            .map_err(|_| failure("目录扫描超过120秒总时限，请缩小操作范围"))?;
+        match directory.readdir() {
+            Ok((name, stat)) => {
+                if name == Path::new(".") || name == Path::new("..") {
+                    continue;
+                }
+                // 保留 POSIX 的原始文件名；下载转换到本地路径时另行校验可表示性。
+                let mut components = name.components();
+                if !matches!(components.next(), Some(Component::Normal(_)))
+                    || components.next().is_some()
+                {
+                    return Err(failure("远端目录包含不安全的项目名称"));
+                }
+                let child = path.join(name);
+                budget
+                    .lock()
+                    .map_err(|_| failure("扫描预算锁已损坏"))?
+                    .record(&child)
+                    .map_err(|_| {
+                        failure("目录扫描超过条目、路径内存、深度或120秒预算，请缩小操作范围")
+                    })?;
+                entries.push((child, stat));
+            }
+            // ssh2::File::readdir 使用 LIBSSH2_ERROR_FILE 表示目录结束。
+            Err(error) if error.code() == ErrorCode::Session(-16) => break,
+            Err(error) if error.code() == ErrorCode::Session(-37) => {
+                thread::sleep(Duration::from_millis(10))
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(entries)
 }
 
 /// 校验远程子项名称并按 SFTP 规则拼接子路径。
@@ -1425,12 +1550,19 @@ fn collect_folder_download_plan(
         skipped_entries: 0,
     };
     let mut pending = vec![(normalized_root, PathBuf::new())];
+    let budget = Mutex::new(ScanBudget::default());
 
     while let Some((directory, relative_directory)) = pending.pop() {
         if is_cancelled(&state.cancelled_transfers, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
-        let entries = sftp.readdir(Path::new(&directory)).map_err(|error| {
+        let entries = bounded_remote_entries(sftp, Path::new(&directory), &budget, || {
+            is_cancelled(&state.cancelled_transfers, transfer_id)
+        })
+        .map_err(|error| {
+            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+                return SshError::TransferCancelled;
+            }
             mark_ssh_error_if_connection_lost(state, connection_id, &error);
             SshError::FileOperationFailed(format!("读取远程文件夹“{directory}”失败: {error}"))
         })?;
@@ -1439,6 +1571,11 @@ fn collect_folder_download_plan(
             if is_cancelled(&state.cancelled_transfers, transfer_id) {
                 return Err(SshError::TransferCancelled);
             }
+            budget
+                .lock()
+                .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
+                .check()
+                .map_err(SshError::ReadDirFailed)?;
             let Some(name) = listed_path.file_name().and_then(|value| value.to_str()) else {
                 plan.skipped_entries = plan.skipped_entries.saturating_add(1);
                 continue;
@@ -1466,9 +1603,13 @@ fn collect_folder_download_plan(
                     )));
                 }
             };
+            budget
+                .lock()
+                .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
+                .check()
+                .map_err(SshError::ReadDirFailed)?;
             if child_stat.file_type() == ssh2::FileType::Symlink {
-                // 创建本地路径时绝不跟随远程链接；即使链接指向目录树外，
-                // 也能保证处理计划的安全性。
+                // 跳过扫描时发现的远端链接；本地根约束由 LocalTransferRoot 保证。
                 plan.skipped_entries = plan.skipped_entries.saturating_add(1);
                 continue;
             }
@@ -1501,59 +1642,29 @@ fn collect_folder_download_plan(
     Ok(plan)
 }
 
-/// 使用兼容性回退策略原子地重命名远程文件。
+/// 仅通过服务器重命名提交；不删除旧目标来模拟覆盖。
 fn rename_remote_file(
     sftp: &Sftp,
     source_path: &Path,
     target_path: &Path,
     overwrite: bool,
 ) -> Result<(), ssh2::Error> {
-    let preferred_flags = if overwrite {
-        RenameFlags::ATOMIC | RenameFlags::OVERWRITE | RenameFlags::NATIVE
+    let required = if overwrite {
+        RenameFlags::OVERWRITE
     } else {
-        RenameFlags::ATOMIC | RenameFlags::NATIVE
+        RenameFlags::empty()
     };
-
-    match sftp.rename(source_path, target_path, Some(preferred_flags)) {
+    match sftp.rename(
+        source_path,
+        target_path,
+        Some(required | RenameFlags::ATOMIC | RenameFlags::NATIVE),
+    ) {
         Ok(()) => Ok(()),
-        Err(error) if !is_rename_compatibility_error(&error) => Err(error),
-        // 某些 SFTP 服务器虽然支持普通覆盖重命名，却会拒绝 ATOMIC/NATIVE 标志。
-        // 先仅使用必要标志重试。
-        Err(error) if !overwrite => sftp
-            .rename(source_path, target_path, Some(RenameFlags::empty()))
-            .map_err(|fallback_error| {
-                if is_rename_compatibility_error(&fallback_error) {
-                    error
-                } else {
-                    fallback_error
-                }
-            }),
-        Err(error) => match sftp.rename(source_path, target_path, Some(RenameFlags::OVERWRITE)) {
-            Ok(()) => Ok(()),
-            Err(fallback_error) if !is_rename_compatibility_error(&fallback_error) => {
-                Err(fallback_error)
-            }
-            Err(fallback_error) => {
-                if sftp
-                    .stat(target_path)
-                    .map(|stat| stat.is_dir())
-                    .unwrap_or(true)
-                {
-                    return Err(fallback_error);
-                }
-                // 较旧的服务器有时完全不支持通过重命名覆盖文件。只有在用户明确要求
-                // 覆盖非目录项目时，才使用这个最后的降级方案。
-                sftp.unlink(target_path)
-                    .and_then(|_| sftp.rename(source_path, target_path, Some(RenameFlags::empty())))
-                    .map_err(|fallback_error| {
-                        if is_rename_compatibility_error(&fallback_error) {
-                            error
-                        } else {
-                            fallback_error
-                        }
-                    })
-            }
-        },
+        Err(error) if is_rename_compatibility_error(&error) => {
+            // 不支持安全覆盖时直接失败，保留原目标；不能 unlink 后再试。
+            sftp.rename(source_path, target_path, Some(required))
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -1644,10 +1755,15 @@ fn read_directory_size_command_output(
 ) -> Result<Option<Vec<u8>>, SshError> {
     let mut output = Vec::with_capacity(128);
     let mut buffer = [0_u8; 4096];
+    let budget = ScanBudget::default();
     loop {
         if cancellation.load(Ordering::Acquire) {
             let _ = channel.close();
             return Err(SshError::DirectorySizeCancelled);
+        }
+        if let Err(message) = budget.check() {
+            let _ = channel.close();
+            return Err(SshError::ReadFailed(message));
         }
 
         match channel.read(&mut buffer) {
@@ -1918,18 +2034,27 @@ fn collect_remote_delete_plan(
     state: &SshState,
     connection_id: &str,
     sftp: &Sftp,
+    policy: &RemoteMutationPolicy,
     remote_path: &Path,
 ) -> Result<Vec<RemoteDeleteTarget>, SshError> {
-    // 使用 lstat 构建处理计划，这样指向目录的符号链接会作为链接删除，
-    // 不会跟随到用户选择目录之外。
+    // lstat 不递归扫描当时的链接；实际操作前仍需核验路径和共享目录策略。
     let mut pending = vec![(
         remote_path.to_path_buf(),
         remote_delete_display_path(remote_path),
     )];
     let mut files = Vec::new();
     let mut directories = Vec::new();
+    let budget = Mutex::new(ScanBudget::default());
 
     while let Some((path, display_path)) = pending.pop() {
+        budget
+            .lock()
+            .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
+            .check()
+            .map_err(SshError::ReadDirFailed)?;
+        policy
+            .validate_parent(sftp, &path)
+            .map_err(SshError::FileOperationFailed)?;
         let stat = match sftp.lstat(&path) {
             Ok(stat) => stat,
             // 其他客户端可能已经删除了该项目。由于目标状态已经达到，
@@ -1953,12 +2078,16 @@ fn collect_remote_delete_plan(
             continue;
         }
 
+        policy
+            .validate_directory(sftp, &path)
+            .map_err(SshError::FileOperationFailed)?;
+
         directories.push(RemoteDeleteTarget {
             path: path.clone(),
             display_path: display_path.clone(),
             is_directory: true,
         });
-        let entries = sftp.readdir(&path).map_err(|error| {
+        let entries = bounded_remote_entries(sftp, &path, &budget, || false).map_err(|error| {
             mark_ssh_error_if_connection_lost(state, connection_id, &error);
             SshError::FileOperationFailed(format!(
                 "读取远程文件夹“{}”失败: {error}",
@@ -1985,6 +2114,11 @@ fn collect_remote_delete_plan(
     // 每个目录都会在内容删除完成后再被删除。
     directories.reverse();
     files.extend(directories);
+    budget
+        .lock()
+        .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
+        .check()
+        .map_err(SshError::ReadDirFailed)?;
     Ok(files)
 }
 
@@ -2026,6 +2160,7 @@ fn delete_remote_path(
     state: &SshState,
     connection_id: &str,
     sftp: &Sftp,
+    policy: &RemoteMutationPolicy,
     remote_path: &Path,
     operation_id: Option<&str>,
 ) -> Result<(), SshError> {
@@ -2039,12 +2174,44 @@ fn delete_remote_path(
         0,
         "scanning",
     );
-    let plan = collect_remote_delete_plan(state, connection_id, sftp, remote_path)?;
+    let plan = collect_remote_delete_plan(state, connection_id, sftp, policy, remote_path)?;
     let file_total = plan.iter().filter(|target| !target.is_directory).count();
     let mut file_index = 0usize;
     let mut cleaning_started = false;
 
     for target in plan.iter() {
+        match sftp.lstat(&target.path) {
+            // 已由其他客户端删除的子树，无需再检查不存在的父目录。
+            Err(error) if is_sftp_missing_path(&error) => {
+                if !target.is_directory {
+                    delete_progress(
+                        state,
+                        connection_id,
+                        operation_id,
+                        &target.display_path,
+                        file_index,
+                        file_total,
+                        "deleting",
+                    );
+                    file_index = file_index.saturating_add(1);
+                }
+                continue;
+            }
+            Err(error) => {
+                mark_ssh_error_if_connection_lost(state, connection_id, &error);
+                return Err(SshError::FileOperationFailed(error.to_string()));
+            }
+            Ok(_) => {}
+        }
+        // 扫描和删除之间可能有其他客户端操作；不能仅信任预扫描的父路径。
+        policy
+            .validate_parent(sftp, &target.path)
+            .map_err(SshError::FileOperationFailed)?;
+        if target.is_directory {
+            policy
+                .validate_directory(sftp, &target.path)
+                .map_err(SshError::FileOperationFailed)?;
+        }
         if target.is_directory && !cleaning_started {
             delete_progress(
                 state,
@@ -2113,6 +2280,7 @@ fn run_delete(
     remote_path: &str,
     operation_id: &str,
 ) -> Result<(), SshError> {
+    let policy = remote_mutation_policy(state, connection_id, session)?;
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
@@ -2126,6 +2294,7 @@ fn run_delete(
         state,
         connection_id,
         &sftp,
+        &policy,
         Path::new(remote_path),
         Some(operation_id),
     )
@@ -2136,11 +2305,18 @@ fn ensure_remote_directory(
     state: &SshState,
     connection_id: &str,
     sftp: &Sftp,
+    policy: &RemoteMutationPolicy,
     remote_path: &str,
     allow_existing: bool,
 ) -> Result<(), SshError> {
-    match sftp.stat(Path::new(remote_path)) {
-        Ok(stat) if stat.is_dir() && allow_existing => Ok(()),
+    let path = Path::new(remote_path);
+    policy
+        .validate_parent(sftp, path)
+        .map_err(SshError::FileOperationFailed)?;
+    match sftp.lstat(path) {
+        Ok(stat) if stat.is_dir() && allow_existing => policy
+            .validate_directory(sftp, path)
+            .map_err(SshError::FileOperationFailed),
         Ok(stat) if stat.is_dir() => Err(SshError::FileOperationFailed(format!(
             "远程文件夹已存在: {remote_path}"
         ))),
@@ -2148,12 +2324,16 @@ fn ensure_remote_directory(
             "远程路径存在同名文件: {remote_path}"
         ))),
         Err(error) if is_sftp_missing_path(&error) => {
-            match sftp.mkdir(Path::new(remote_path), 0o755) {
-                Ok(()) => Ok(()),
-                Err(mkdir_error) => match sftp.stat(Path::new(remote_path)) {
+            match sftp.mkdir(path, 0o700) {
+                Ok(()) => policy
+                    .validate_directory(sftp, path)
+                    .map_err(SshError::FileOperationFailed),
+                Err(mkdir_error) => match sftp.lstat(path) {
                     // 其他客户端可能在 stat 和 mkdir 之间创建了目录；
                     // 在已确认合并的情况下可以安全继续。
-                    Ok(stat) if stat.is_dir() && allow_existing => Ok(()),
+                    Ok(stat) if stat.is_dir() && allow_existing => policy
+                        .validate_directory(sftp, path)
+                        .map_err(SshError::FileOperationFailed),
                     Ok(stat) if stat.is_dir() => Err(SshError::FileOperationFailed(format!(
                         "远程文件夹已存在: {remote_path}"
                     ))),
@@ -2298,7 +2478,30 @@ fn finish_transfer(state: &SshState, transfer_id: &str) {
 ///
 /// 当连接参数无效、TCP/SSH 握手、主机指纹校验、认证或 SFTP 会话创建失败时返回错误。
 #[tauri::command]
-pub fn test_sftp_connection(
+pub async fn test_sftp_connection(
+    host: String,
+    port: u16,
+    username: String,
+    password: String,
+    auth_method: Option<String>,
+    timeout: Option<u64>,
+    host_key_fingerprint: Option<String>,
+) -> Result<ConnectionTestResult, SshError> {
+    run_blocking_command(move || {
+        test_sftp_connection_blocking(
+            host,
+            port,
+            username,
+            password,
+            auth_method,
+            timeout,
+            host_key_fingerprint,
+        )
+    })
+    .await
+}
+
+fn test_sftp_connection_blocking(
     host: String,
     port: u16,
     username: String,
@@ -2474,7 +2677,15 @@ pub fn list_ssh_connections(state: State<SshState>) -> Result<Vec<SshConnection>
 ///
 /// 当连接配置不存在、网络连接、SSH 握手、主机指纹校验或账户认证失败时返回错误。
 #[tauri::command]
-pub fn connect_ssh(state: State<SshState>, id: String) -> Result<ConnectResult, SshError> {
+pub async fn connect_ssh(
+    state: State<'_, SshState>,
+    id: String,
+) -> Result<ConnectResult, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || connect_ssh_blocking(state, id)).await
+}
+
+fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, SshError> {
     let connection = connection_info(&state, &id, false)?;
     validate_connection(&connection)?;
     close_terminals_for_connection(&state, &id);
@@ -2512,7 +2723,9 @@ pub fn connect_ssh(state: State<SshState>, id: String) -> Result<ConnectResult, 
 fn remove_cached_session(state: &SshState, id: &str) {
     cancel_directory_size_tasks_for_connection(state, id);
     remove_directory_size_worker_pool(state, id);
-    if let Some(session) = state.connection_pool.write().unwrap().remove(id) {
+    // 池锁必须在等待会话锁之前释放；错误路径可能持有会话锁并清理连接池。
+    let session = { state.connection_pool.write().unwrap().remove(id) };
+    if let Some(session) = session {
         if let Ok(session) = session.lock() {
             let _ = session.disconnect(None, "客户端关闭连接", None);
         }
@@ -2534,7 +2747,12 @@ fn remove_cached_session(state: &SshState, id: &str) {
 ///
 /// 当连接配置不存在时返回错误。
 #[tauri::command]
-pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshError> {
+pub async fn disconnect_ssh(state: State<'_, SshState>, id: String) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || disconnect_ssh_blocking(state, id)).await
+}
+
+fn disconnect_ssh_blocking(state: SshState, id: String) -> Result<bool, SshError> {
     let _ = connection_info(&state, &id, false)?;
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
@@ -2559,7 +2777,15 @@ pub fn disconnect_ssh(state: State<SshState>, id: String) -> Result<bool, SshErr
 ///
 /// 当连接不存在、会话锁损坏或探测确认连接已失效时返回错误。
 #[tauri::command]
-pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
+pub async fn check_ssh_connection(
+    state: State<'_, SshState>,
+    id: String,
+) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || check_ssh_connection_blocking(state, id)).await
+}
+
+fn check_ssh_connection_blocking(state: SshState, id: String) -> Result<bool, SshError> {
     let session = session_for(&state, &id)?;
     let result = session
         .lock()
@@ -2596,7 +2822,15 @@ pub fn check_ssh_connection(state: State<SshState>, id: String) -> Result<bool, 
 ///
 /// 当共享连接状态锁已损坏时返回错误。
 #[tauri::command]
-pub fn remove_ssh_connection(state: State<SshState>, id: String) -> Result<bool, SshError> {
+pub async fn remove_ssh_connection(
+    state: State<'_, SshState>,
+    id: String,
+) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || remove_ssh_connection_blocking(state, id)).await
+}
+
+fn remove_ssh_connection_blocking(state: SshState, id: String) -> Result<bool, SshError> {
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
     state
@@ -2630,14 +2864,33 @@ fn should_skip_remote_entry(name: &str, show_hidden_files: bool) -> bool {
 ///
 /// 当连接不存在、SFTP 会话不可用或远程目录读取失败时返回错误。
 #[tauri::command]
-pub fn list_sftp_directory(
-    state: State<SshState>,
+pub async fn list_sftp_directory(
+    state: State<'_, SshState>,
+    id: String,
+    remote_path: String,
+    show_hidden_files: bool,
+) -> Result<Vec<RemoteEntry>, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || {
+        list_sftp_directory_blocking(state, id, remote_path, show_hidden_files)
+    })
+    .await
+}
+
+fn list_sftp_directory_blocking(
+    state: SshState,
     id: String,
     remote_path: String,
     show_hidden_files: bool,
 ) -> Result<Vec<RemoteEntry>, SshError> {
     let sftp = sftp_for(&state, &id)?;
-    let entries = sftp.readdir(Path::new(&remote_path)).map_err(|error| {
+    let entries = bounded_remote_entries(
+        &sftp,
+        Path::new(&remote_path),
+        &Mutex::new(ScanBudget::default()),
+        || false,
+    )
+    .map_err(|error| {
         mark_ssh_error_if_connection_lost(&state, &id, &error);
         SshError::ReadDirFailed(error.to_string())
     })?;
@@ -2765,7 +3018,9 @@ fn process_directory_size_job(
         scan.fail(SshError::DirectorySizeCancelled);
         return false;
     }
-    let entries = sftp.readdir(&directory);
+    let entries = bounded_remote_entries(sftp, &directory, &scan.budget, || {
+        scan.cancellation.load(Ordering::Acquire)
+    });
     match entries {
         Ok(entries) => {
             let mut child_directories = Vec::new();
@@ -2797,6 +3052,10 @@ fn process_directory_size_job(
             true
         }
         Err(error) => {
+            if scan.cancellation.load(Ordering::Acquire) {
+                scan.fail(SshError::DirectorySizeCancelled);
+                return false;
+            }
             mark_ssh_error_if_connection_lost(state, id, &error);
             if is_root_directory || !is_recoverable_directory_size_error(&error) {
                 scan.fail(SshError::ReadDirFailed(format!(
@@ -3157,11 +3416,7 @@ pub async fn get_sftp_file_content(
     preview_id: Option<String>,
 ) -> Result<Vec<u8>, SshError> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        read_sftp_file_content(&state, id, remote_path, preview_id)
-    })
-    .await
-    .map_err(|error| SshError::ReadFailed(format!("预览任务失败: {error}")))?
+    run_blocking_command(move || read_sftp_file_content(&state, id, remote_path, preview_id)).await
 }
 
 /// 在远程创建一个目录。
@@ -3180,17 +3435,19 @@ pub async fn get_sftp_file_content(
 ///
 /// 当连接不可用、路径无效或远程目录创建失败时返回错误。
 #[tauri::command]
-pub fn sftp_mkdir(
-    state: State<SshState>,
+pub async fn sftp_mkdir(
+    state: State<'_, SshState>,
     id: String,
     remote_path: String,
 ) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || sftp_mkdir_blocking(state, id, remote_path)).await
+}
+
+fn sftp_mkdir_blocking(state: SshState, id: String, remote_path: String) -> Result<bool, SshError> {
+    let policy = remote_mutation_policy(&state, &id, &session_for(&state, &id)?)?;
     let sftp = sftp_for(&state, &id)?;
-    sftp.mkdir(Path::new(&remote_path), 0o755)
-        .map_err(|error| {
-            mark_ssh_error_if_connection_lost(&state, &id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?;
+    ensure_remote_directory(&state, &id, &sftp, &policy, &remote_path, false)?;
     Ok(true)
 }
 
@@ -3225,29 +3482,34 @@ pub fn sftp_delete(
     let state_handle = state.inner().clone();
     let connection_id = id.clone();
     let operation_id_for_thread = operation_id.clone();
-    thread::spawn(move || {
-        let result = run_delete(
-            &state_handle,
-            &session,
-            &connection_id,
-            &remote_path,
-            &operation_id_for_thread,
-        );
-        let (success, message) = match result {
-            Ok(()) => (true, "删除成功".to_string()),
-            Err(error) => (false, error.to_string()),
-        };
-        emit_event(
-            &state_handle.app_handle,
-            "delete-complete",
-            json!({
-                "id": connection_id,
-                "operationId": operation_id_for_thread,
-                "success": success,
-                "message": message
-            }),
-        );
-    });
+    let slot = blocking_command_slot()?;
+    thread::Builder::new()
+        .name("sftp-delete".to_string())
+        .spawn(move || {
+            let _slot = slot;
+            let result = run_delete(
+                &state_handle,
+                &session,
+                &connection_id,
+                &remote_path,
+                &operation_id_for_thread,
+            );
+            let (success, message) = match result {
+                Ok(()) => (true, "删除成功".to_string()),
+                Err(error) => (false, error.to_string()),
+            };
+            emit_event(
+                &state_handle.app_handle,
+                "delete-complete",
+                json!({
+                    "id": connection_id,
+                    "operationId": operation_id_for_thread,
+                    "success": success,
+                    "message": message
+                }),
+            );
+        })
+        .map_err(|error| SshError::FileOperationFailed(format!("无法创建删除任务: {error}")))?;
     Ok(true)
 }
 
@@ -3269,14 +3531,35 @@ pub fn sftp_delete(
 ///
 /// 当连接不可用、路径无效或远程重命名失败时返回错误。
 #[tauri::command]
-pub fn sftp_rename(
-    state: State<SshState>,
+pub async fn sftp_rename(
+    state: State<'_, SshState>,
     id: String,
     source_path: String,
     target_path: String,
     overwrite: Option<bool>,
 ) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || {
+        sftp_rename_blocking(state, id, source_path, target_path, overwrite)
+    })
+    .await
+}
+
+fn sftp_rename_blocking(
+    state: SshState,
+    id: String,
+    source_path: String,
+    target_path: String,
+    overwrite: Option<bool>,
+) -> Result<bool, SshError> {
+    let policy = remote_mutation_policy(&state, &id, &session_for(&state, &id)?)?;
     let sftp = sftp_for(&state, &id)?;
+    policy
+        .validate_parent(&sftp, Path::new(&source_path))
+        .map_err(SshError::FileOperationFailed)?;
+    policy
+        .validate_parent(&sftp, Path::new(&target_path))
+        .map_err(SshError::FileOperationFailed)?;
     rename_remote_file(
         &sftp,
         Path::new(&source_path),
@@ -3305,7 +3588,15 @@ pub fn sftp_rename(
 ///
 /// 当连接不可用或远程路径解析失败时返回错误。
 #[tauri::command]
-pub fn get_sftp_user_home(state: State<SshState>, id: String) -> Result<String, SshError> {
+pub async fn get_sftp_user_home(
+    state: State<'_, SshState>,
+    id: String,
+) -> Result<String, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || get_sftp_user_home_blocking(state, id)).await
+}
+
+fn get_sftp_user_home_blocking(state: SshState, id: String) -> Result<String, SshError> {
     let sftp = sftp_for(&state, &id)?;
     Ok(sftp
         .realpath(Path::new("."))
@@ -3505,10 +3796,33 @@ fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'
     );
 }
 
-/// 以临时远程文件写入单个本地文件，成功后再重命名到目标路径。
+fn open_local_upload_file(path: &Path) -> Result<File, SshError> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| SshError::FileOperationFailed("上传路径缺少文件名".to_string()))?;
+    Ok(LocalTransferRoot::open(parent)?.open_source(Path::new(name))?)
+}
+
+fn prepare_local_download(path: &Path, overwrite: bool) -> Result<LocalDownload, SshError> {
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .ok_or_else(|| SshError::FileOperationFailed("下载路径缺少文件名".to_string()))?;
+    Ok(LocalTransferRoot::open(parent)?.prepare_download(Path::new(name), overwrite)?)
+}
+
+/// 以私有且排他创建的远端临时文件上传，成功后再提交。
 fn upload_file_to_sftp<F>(
     context: &FileTransferContext<'_>,
-    local_path: &Path,
+    policy: &RemoteMutationPolicy,
+    local_file: File,
     remote_path: &str,
     mut report_progress: F,
 ) -> Result<u64, SshError>
@@ -3520,17 +3834,30 @@ where
     let sftp = context.sftp;
     let transfer_id = context.transfer_id;
     let overwrite = context.overwrite;
-    let local_file = File::open(local_path)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法打开本地文件: {error}")))?;
+    policy
+        .validate_parent(sftp, Path::new(remote_path))
+        .map_err(SshError::FileOperationFailed)?;
     let total = local_file
         .metadata()
         .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
         .len();
-    let temporary_path = format!("{remote_path}.portal-part-{transfer_id}");
-    let mut remote_file = sftp.create(Path::new(&temporary_path)).map_err(|error| {
-        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
+    // 临时名不拼接原文件名，避免合法的长文件名超过服务器单个组件长度限制。
+    let temporary_name = format!(".portal-part-{:032x}", rand::random::<u128>());
+    let temporary_path = match remote_path.rsplit_once('/') {
+        Some((parent, _)) => format!("{parent}/{temporary_name}"),
+        None => temporary_name,
+    };
+    let mut remote_file = sftp
+        .open_mode(
+            Path::new(&temporary_path),
+            ssh2::OpenFlags::WRITE | ssh2::OpenFlags::CREATE | ssh2::OpenFlags::EXCLUSIVE,
+            0o600,
+            ssh2::OpenType::File,
+        )
+        .map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
+            SshError::FileOperationFailed(error.to_string())
+        })?;
     let mut reader = BufReader::new(local_file);
     let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0u64;
@@ -3554,8 +3881,9 @@ where
             current += count as u64;
             report_progress(current, total);
         }
-        remote_file.flush().map_err(|error| {
-            mark_io_error_if_connection_lost(state, &connection.id, &error);
+        // ssh2::File::flush 是空操作；必须确认远端 CLOSE 成功后才能提交临时文件。
+        remote_file.close().map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
             SshError::FileOperationFailed(error.to_string())
         })?;
         Ok(())
@@ -3563,6 +3891,12 @@ where
     drop(remote_file);
 
     let result = write_result.and_then(|_| {
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
+        }
+        policy
+            .validate_parent(sftp, Path::new(remote_path))
+            .map_err(SshError::FileOperationFailed)?;
         rename_remote_file(
             sftp,
             Path::new(&temporary_path),
@@ -3576,7 +3910,13 @@ where
     });
 
     if result.is_err() {
-        let _ = sftp.unlink(Path::new(&temporary_path));
+        // 父路径变得不可信时不按字符串清理，避免误删重定向后的其他目录。
+        if policy
+            .validate_parent(sftp, Path::new(&temporary_path))
+            .is_ok()
+        {
+            let _ = sftp.unlink(Path::new(&temporary_path));
+        }
     }
     result.map(|_| total)
 }
@@ -3591,6 +3931,7 @@ fn run_upload(
     remote_path: &str,
     overwrite: bool,
 ) -> Result<String, SshError> {
+    let policy = remote_mutation_policy(state, &connection.id, session)?;
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
@@ -3609,7 +3950,8 @@ fn run_upload(
     };
     upload_file_to_sftp(
         &transfer_context,
-        Path::new(local_path),
+        &policy,
+        open_local_upload_file(Path::new(local_path))?,
         remote_path,
         |current, total| {
             transfer_progress(
@@ -3635,11 +3977,15 @@ fn run_upload_directory(
     remote_path: &str,
     overwrite: bool,
 ) -> Result<String, SshError> {
-    let plan = collect_folder_upload_plan(Path::new(local_path))?;
+    let local_root = LocalTransferRoot::open(Path::new(local_path))?;
+    let plan = collect_folder_upload_plan(&local_root, || {
+        is_cancelled(&state.cancelled_transfers, transfer_id)
+    })?;
     if is_cancelled(&state.cancelled_transfers, transfer_id) {
         return Err(SshError::TransferCancelled);
     }
 
+    let policy = remote_mutation_policy(state, &connection.id, session)?;
     let session = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
@@ -3649,7 +3995,14 @@ fn run_upload_directory(
     })?;
     drop(session);
 
-    ensure_remote_directory(state, &connection.id, &sftp, remote_path, overwrite)?;
+    ensure_remote_directory(
+        state,
+        &connection.id,
+        &sftp,
+        &policy,
+        remote_path,
+        overwrite,
+    )?;
     let transfer_context = FileTransferContext {
         state,
         connection,
@@ -3662,14 +4015,20 @@ fn run_upload_directory(
             return Err(SshError::TransferCancelled);
         }
         let remote_directory = join_remote_path(remote_path, relative_path)?;
-        ensure_remote_directory(state, &connection.id, &sftp, &remote_directory, true).map_err(
-            |error| {
-                SshError::FileOperationFailed(format!(
-                    "创建远程文件夹“{}”失败: {error}",
-                    display_relative_path(relative_path)
-                ))
-            },
-        )?;
+        ensure_remote_directory(
+            state,
+            &connection.id,
+            &sftp,
+            &policy,
+            &remote_directory,
+            true,
+        )
+        .map_err(|error| {
+            SshError::FileOperationFailed(format!(
+                "创建远程文件夹“{}”失败: {error}",
+                display_relative_path(relative_path)
+            ))
+        })?;
     }
 
     let file_total = plan.files.len();
@@ -3682,7 +4041,8 @@ fn run_upload_directory(
         let display_path = display_relative_path(&file.relative_path);
         let uploaded_size = upload_file_to_sftp(
             &transfer_context,
-            &file.local_path,
+            &policy,
+            local_root.open_source(&file.relative_path)?,
             &remote_file_path,
             |current, total| {
                 folder_transfer_progress(
@@ -3731,11 +4091,11 @@ fn run_upload_directory(
     }
 }
 
-/// 下载单个远程文件到本地临时文件，成功后原子替换目标。
+/// 下载到私有临时文件；成功后通过同一父目录句柄提交，失败保留旧目标。
 fn download_file_to_local<F>(
     context: &FileTransferContext<'_>,
     remote_path: &str,
-    target: &Path,
+    mut target: LocalDownload,
     mut report_progress: F,
 ) -> Result<u64, SshError>
 where
@@ -3745,24 +4105,6 @@ where
     let connection = context.connection;
     let sftp = context.sftp;
     let transfer_id = context.transfer_id;
-    let overwrite = context.overwrite;
-    if let Ok(metadata) = fs::symlink_metadata(target) {
-        if metadata.file_type().is_symlink() {
-            return Err(SshError::FileOperationFailed(
-                "本地目标路径是符号链接，不支持直接覆盖".to_string(),
-            ));
-        }
-        if metadata.is_dir() {
-            return Err(SshError::FileOperationFailed(
-                "本地目标路径是文件夹，无法保存文件".to_string(),
-            ));
-        }
-        if !overwrite {
-            return Err(SshError::FileOperationFailed(
-                "本地目标文件已存在".to_string(),
-            ));
-        }
-    }
 
     let mut remote_file = sftp.open(Path::new(remote_path)).map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &connection.id, &error);
@@ -3776,23 +4118,12 @@ where
         })?
         .size
         .unwrap_or(0);
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-    }
-    let target_name = target
-        .file_name()
-        .map(|name| name.to_string_lossy().to_string())
-        .unwrap_or_else(|| "download".to_string());
-    let temporary_path = target.with_file_name(format!("{target_name}.portal-part-{transfer_id}"));
-    let local_file = File::create(&temporary_path)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地临时文件: {error}")))?;
-    let mut writer = BufWriter::new(local_file);
     let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0u64;
     report_progress(current, total);
 
     let result = (|| -> Result<(), SshError> {
+        let mut writer = BufWriter::new(target.file_mut());
         loop {
             if is_cancelled(&state.cancelled_transfers, transfer_id) {
                 return Err(SshError::TransferCancelled);
@@ -3814,18 +4145,13 @@ where
             .flush()
             .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
         drop(writer);
-        if overwrite && target.exists() {
-            fs::remove_file(target)
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            return Err(SshError::TransferCancelled);
         }
-        fs::rename(&temporary_path, target)
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        target.commit()?;
         Ok(())
     })();
 
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary_path);
-    }
     result.map(|_| total)
 }
 
@@ -3857,7 +4183,7 @@ fn run_download(
     download_file_to_local(
         &transfer_context,
         remote_path,
-        Path::new(local_path),
+        prepare_local_download(Path::new(local_path), overwrite)?,
         |current, total| {
             transfer_progress(
                 state,
@@ -3882,24 +4208,12 @@ fn run_download_directory(
     local_path: &str,
     overwrite: bool,
 ) -> Result<String, SshError> {
-    let target_root = PathBuf::from(local_path);
-    if let Ok(metadata) = fs::symlink_metadata(&target_root) {
-        if metadata.file_type().is_symlink() {
-            return Err(SshError::FileOperationFailed(
-                "本地目标文件夹是符号链接，不支持直接覆盖".to_string(),
-            ));
-        }
-        if !metadata.is_dir() {
-            return Err(SshError::FileOperationFailed(
-                "本地目标路径已存在且不是文件夹".to_string(),
-            ));
-        }
-        if !overwrite {
-            return Err(SshError::FileOperationFailed(
-                "本地目标文件夹已存在".to_string(),
-            ));
-        }
-    }
+    let target_root =
+        LocalTransferRoot::download_root(Path::new(local_path), overwrite).map_err(|error| {
+            SshError::FileOperationFailed(format!(
+                "无法准备本地文件夹（已存在时需确认合并）: {error}"
+            ))
+        })?;
 
     let session = session
         .lock()
@@ -3915,8 +4229,6 @@ fn run_download_directory(
     if is_cancelled(&state.cancelled_transfers, transfer_id) {
         return Err(SshError::TransferCancelled);
     }
-    fs::create_dir_all(&target_root)
-        .map_err(|error| SshError::FileOperationFailed(format!("无法创建本地文件夹: {error}")))?;
     let transfer_context = FileTransferContext {
         state,
         connection,
@@ -3928,7 +4240,7 @@ fn run_download_directory(
         if is_cancelled(&state.cancelled_transfers, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
-        fs::create_dir_all(target_root.join(relative_path)).map_err(|error| {
+        target_root.create_dir_all(relative_path).map_err(|error| {
             SshError::FileOperationFailed(format!(
                 "无法创建本地文件夹“{}”: {error}",
                 display_relative_path(relative_path)
@@ -3943,11 +4255,11 @@ fn run_download_directory(
             return Err(SshError::TransferCancelled);
         }
         let display_path = display_relative_path(&file.relative_path);
-        let target = target_root.join(&file.relative_path);
+        let target = target_root.prepare_download(&file.relative_path, overwrite)?;
         let downloaded_size = download_file_to_local(
             &transfer_context,
             &file.remote_path,
-            &target,
+            target,
             |current, total| {
                 folder_transfer_progress(
                     state,
@@ -4271,6 +4583,10 @@ fn uuid_fallback() -> String {
 }
 
 #[cfg(test)]
+#[path = "ssh_transfer_tests.rs"]
+mod transfer_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -4550,7 +4866,8 @@ mod tests {
         fs::write(root.join("root.txt"), b"abc").unwrap();
         fs::write(root.join("nested").join("child.txt"), b"hello").unwrap();
 
-        let plan = collect_folder_upload_plan(&root).unwrap();
+        let plan =
+            collect_folder_upload_plan(&LocalTransferRoot::open(&root).unwrap(), || false).unwrap();
         let directories = plan
             .directories
             .iter()

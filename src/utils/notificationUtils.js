@@ -75,7 +75,7 @@ const isWindowFocused = async () => {
     if (typeof document !== 'undefined' && typeof document.hasFocus === 'function') {
       return document.visibilityState !== 'hidden' && document.hasFocus()
     }
-    console.debug('读取应用窗口状态失败，按前台处理:', error)
+    console.warn('读取应用窗口状态失败，按前台处理:', error)
     return true
   }
 }

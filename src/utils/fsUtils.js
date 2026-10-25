@@ -4,7 +4,6 @@
  * 所有原生调用都通过 Tauri 命令完成，浏览器环境保留可测试的降级路径。
  */
 import { invoke } from '@tauri-apps/api/core'
-import { FileSizeUnits } from './common.js'
 
 /**
  * 获取当前登录用户的主目录绝对路径。

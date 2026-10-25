@@ -24,4 +24,6 @@ dist-ssr
 *.sw?
 
 package-lock.json
-pnpm-lock.yaml
+
+# Python SSH/SFTP test fixture
+__pycache__/

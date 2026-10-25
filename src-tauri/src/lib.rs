@@ -3,6 +3,9 @@
 //! 本模块组装插件、原生菜单和 SSH 状态，并提供跨平台的本地目录读取、
 //! 路径检查、平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
 
+mod local_transfer;
+mod remote_policy;
+mod scan_budget;
 mod ssh;
 
 use aes_gcm::{
