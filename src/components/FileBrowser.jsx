@@ -9,6 +9,7 @@ import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
+import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
@@ -63,20 +64,31 @@ const mergeUploadItems = (previous, items) => {
  */
 const getEntryKey = (entry) => entry?.path || entry?.name || ''
 
+// 按 CSS 像素分别微调上下边界，顶部上移幅度略大于底部。
+const DROP_TARGET_TOP_EXPANSION_PX = 85
+const DROP_TARGET_BOTTOM_INSET_PX = 85
+
 /**
- * 将原生拖放坐标换算为 CSS 像素后判断是否落在目标列表区域。
+ * 按原生拖放坐标和纵向视口偏移判断是否落在目标列表区域。
  *
  * @param {{x: number, y: number}|null|undefined} position - Tauri 原生拖放坐标。
  * @param {Element|null} element - 文件列表的目标 DOM 元素。
+ * @param {number} [yOffset=0] - 原生坐标原点到 WebView 视口的纵向距离，单位为 CSS 像素。
  * @returns {boolean} 坐标位于目标元素矩形范围内时返回 true。
  */
-const isPositionInsideElement = (position, element) => {
+const isPositionInsideElement = (position, element, yOffset = 0) => {
   if (!position || !element || typeof window === 'undefined') return false
   const rect = element.getBoundingClientRect()
-  const scale = window.devicePixelRatio || 1
+  const platform = window.navigator?.userAgentData?.platform
+    || window.navigator?.platform
+    || window.navigator?.userAgent
+    || ''
+  const scale = /^win/i.test(platform) ? window.devicePixelRatio || 1 : 1
   const x = Number(position.x) / scale
-  const y = Number(position.y) / scale
-  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+  const y = Number(position.y) / scale + yOffset
+  const top = rect.top - DROP_TARGET_TOP_EXPANSION_PX
+  const bottom = rect.bottom - DROP_TARGET_BOTTOM_INSET_PX
+  return x >= rect.left && x <= rect.right && y >= top && y <= bottom
 }
 
 /**
@@ -165,6 +177,8 @@ const FileBrowser = ({
   const terminalOpeningCountRef = React.useRef(0)
   // 原生拖放目标、上传队列回调和多选锚点均需跨渲染保持稳定引用。
   const fileListDropRef = React.useRef(null)
+  // macOS 原生拖放坐标需补回窗口外框到 WebView 视口的纵向距离。
+  const dropPositionYOffsetRef = React.useRef(0)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
   const selectionPathRef = React.useRef(currentPath)
@@ -452,6 +466,7 @@ const FileBrowser = ({
   React.useEffect(() => {
     let disposed = false
     let unlisten
+    let unlistenScaleChanged
     /**
      * 注册当前 WebView 的原生拖放监听，并把文件路径交给上传队列处理。
      *
@@ -459,6 +474,44 @@ const FileBrowser = ({
      */
     const registerDragDrop = async () => {
       try {
+        const platform = window.navigator?.userAgentData?.platform
+          || window.navigator?.platform
+          || window.navigator?.userAgent
+          || ''
+        const isMacOS = /^mac/i.test(platform)
+        const currentWindow = getCurrentWindow()
+        const updateDropPositionYOffset = async () => {
+          if (!isMacOS) return
+          try {
+            const [ webviewPosition, windowOuterPosition, scaleFactor ] = await Promise.all([
+              getCurrentWebview().position(),
+              currentWindow.outerPosition(),
+              currentWindow.scaleFactor()
+            ])
+            if (!disposed && Number.isFinite(scaleFactor) && scaleFactor > 0) {
+              dropPositionYOffsetRef.current = (webviewPosition.y - windowOuterPosition.y) / scaleFactor
+            }
+          } catch {
+            dropPositionYOffsetRef.current = 0
+          }
+        }
+
+        await updateDropPositionYOffset()
+        if (isMacOS) {
+          try {
+            const disposeScaleListener = await currentWindow.onScaleChanged(() => {
+              void updateDropPositionYOffset()
+            })
+            if (disposed) {
+              disposeScaleListener()
+            } else {
+              unlistenScaleChanged = disposeScaleListener
+            }
+          } catch {
+            // 缩放监听不可用时继续使用初始计算的视口偏移。
+          }
+        }
+
         const dispose = await getCurrentWebview().onDragDropEvent(event => {
           if (disposed) return
           const payload = event.payload
@@ -468,14 +521,22 @@ const FileBrowser = ({
               setDirectoryDropActive(false)
             } else {
               setUploadDragActive(false)
-              setDirectoryDropActive(isPositionInsideElement(payload.position, fileListDropRef.current))
+              setDirectoryDropActive(isPositionInsideElement(
+                payload.position,
+                fileListDropRef.current,
+                dropPositionYOffsetRef.current
+              ))
             }
           } else if (payload.type === 'leave') {
             setUploadDragActive(false)
             setDirectoryDropActive(false)
           } else if (payload.type === 'drop') {
             setUploadDragActive(false)
-            const isDirectoryDrop = isPositionInsideElement(payload.position, fileListDropRef.current)
+            const isDirectoryDrop = isPositionInsideElement(
+              payload.position,
+              fileListDropRef.current,
+              dropPositionYOffsetRef.current
+            )
             setDirectoryDropActive(false)
             if (!uploadModalOpenRef.current && !isDirectoryDrop) return
             void handleDroppedPaths(payload.paths)
@@ -495,6 +556,8 @@ const FileBrowser = ({
     return () => {
       disposed = true
       unlisten?.()
+      unlistenScaleChanged?.()
+      dropPositionYOffsetRef.current = 0
       setUploadDragActive(false)
       setDirectoryDropActive(false)
     }
