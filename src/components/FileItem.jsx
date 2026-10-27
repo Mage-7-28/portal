@@ -84,9 +84,9 @@ const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
  * @param {boolean} [props.showHiddenFiles=false] - 是否按显示隐藏文件设置统计目录大小。
  * @param {boolean} props.selected - 当前条目是否被选中。
  * @param {(entry: Object, event: Object) => void} props.onSelect - 条目选中回调。
- * @param {() => void} props.onActivate - 双击进入目录或打开文件的回调。
- * @param {() => Promise<void>} props.onDelete - 删除条目回调。
- * @param {(name: string) => Promise<void>} props.onRename - 重命名条目回调。
+ * @param {(entry: Object) => void} props.onActivate - 双击进入目录或打开文件的回调。
+ * @param {(entry: Object) => Promise<void>} props.onDelete - 删除条目回调。
+ * @param {(entry: Object, name: string) => Promise<void>} props.onRename - 重命名条目回调。
  * @returns {JSX.Element} 远程文件/目录列表行。
  */
 const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, selected, onSelect, onActivate, onDelete, onRename }) => {
@@ -301,7 +301,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return
     setRenaming(true)
     try {
-      await onRename(name)
+      await onRename(entry, name)
       setRenameOpen(false)
     } catch (error) {
       notification.error('重命名失败', error.message || error.toString() || '未知错误')
@@ -321,31 +321,34 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     if (deleting) return
     setDeleting(true)
     try {
-      await onDelete()
+      await onDelete(entry)
     } finally {
       setDeleting(false)
     }
   }
+
+  const handleSelect = event => onSelect(entry, event)
+  const handleActivate = () => onActivate(entry)
 
   return (
     <div
       ref={rowRef}
       className={`file-item-row${ selected ? ' is-selected' : '' }`}
       title={entry.isDirectory ? '单击选择，双击进入目录' : '单击选择，双击预览文件'}
-      onClick={onSelect}
+      onClick={handleSelect}
       onDoubleClick={event => {
         event.stopPropagation()
-        onActivate()
+        handleActivate()
       }}
       onKeyDown={event => {
         // 键盘激活只属于当前文件行；操作按钮和重命名弹窗的事件不能激活文件行。
         if (event.target !== event.currentTarget) return
         if (event.key === 'Enter') {
           event.preventDefault()
-          onActivate()
+          handleActivate()
         } else if (event.key === ' ') {
           event.preventDefault()
-          onSelect(event)
+          handleSelect(event)
         }
       }}
       role="button"
@@ -474,4 +477,4 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
   )
 }
 
-export default FileItem
+export default React.memo(FileItem)

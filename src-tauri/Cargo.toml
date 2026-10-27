@@ -28,7 +28,7 @@ dirs = "5"
 tauri-plugin-store = "2"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
-ssh2 = "0.9"
+ssh2 = { version = "0.9", features = ["vendored-openssl"] }
 thiserror = "1"
 aes-gcm = "0.10"
 base64 = "0.22"

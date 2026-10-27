@@ -2,7 +2,7 @@
  * Portal 主窗口入口。
  * 负责应用级菜单、持久化偏好、更新检查和主文件浏览页面的编排。
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Button, ConfigProvider, Modal } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { invoke } from '@tauri-apps/api/core'
@@ -19,14 +19,35 @@ import { notification } from './utils/notificationUtils.js'
 import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
-import TerminalWindow from './components/TerminalWindow.jsx'
-import { TerminalView } from './components/TerminalModal.jsx'
 import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
 import WorkspaceTabBar, { CONNECTIONS_WORKSPACE_ID } from './components/WorkspaceTabBar.jsx'
 import { closeTerminalWindows } from './utils/terminalWindow.js'
 import portalLogo from '../src-tauri/icons/128x128.png'
 import packageInfo from '../package.json'
+
+// 终端依赖体积较大，只有用户打开终端标签或独立终端窗口时才加载。
+const LazyTerminalWindow = lazy(() => import('./components/TerminalWindow.jsx'))
+const LazyTerminalView = lazy(() => import('./components/TerminalModal.jsx').then(module => ({
+  default: module.TerminalView
+})))
+
+/**
+ * 终端异步模块加载期间的轻量占位，避免首屏同步引入 xterm。
+ *
+ * @param {{standalone?: boolean}} props - 是否用于独立终端窗口。
+ * @returns {JSX.Element} 终端加载状态占位。
+ */
+const TerminalLoading = ({ standalone = false }) => (
+  <div
+    className={`terminal-loading${ standalone ? ' terminal-loading-standalone' : '' }`}
+    role="status"
+    aria-live="polite"
+  >
+    <span className="terminal-loading-indicator" aria-hidden="true" />
+    <span>正在加载终端...</span>
+  </div>
+)
 
 /**
  * 从窗口 URL 中读取独立终端窗口参数。
@@ -636,13 +657,15 @@ function MainApp() {
                       onSessionClose={closeConnectionWorkspace}
                     />
                   ) : (
-                    <TerminalView
-                      connectionId={tab.connectionId}
-                      connection={tab.connection}
-                      active={workspace.activeTabId === tab.id}
-                      showFooter={false}
-                      onRequestClose={() => closeWorkspaceTab(tab.id)}
-                    />
+                    <Suspense fallback={<TerminalLoading />}>
+                      <LazyTerminalView
+                        connectionId={tab.connectionId}
+                        connection={tab.connection}
+                        active={workspace.activeTabId === tab.id}
+                        showFooter={false}
+                        onRequestClose={() => closeWorkspaceTab(tab.id)}
+                      />
+                    </Suspense>
                   )}
                 </section>
               ))}
@@ -744,7 +767,11 @@ function MainApp() {
 function App() {
   const terminalWindowParams = getTerminalWindowParams()
   if (terminalWindowParams) {
-    return <TerminalWindow {...terminalWindowParams} />
+    return (
+      <Suspense fallback={<TerminalLoading standalone />}>
+        <LazyTerminalWindow {...terminalWindowParams} />
+      </Suspense>
+    )
   }
   return <MainApp />
 }

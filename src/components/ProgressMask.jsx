@@ -2,11 +2,12 @@
  * 文件传输与批量操作状态栏。
  * upload、download、目录传输和删除操作共用同一进度事件与取消回调。
  */
-import React, { useEffect, useReducer, useState } from 'react'
+import React, { useEffect, useReducer, useRef, useState } from 'react'
 import { Button, Progress, Tooltip, Typography } from 'antd'
 import AppIcon from './AppIcon'
 import PubSub from 'pubsub-js'
 import { PubSubBusinessKeyEnum, THEME_BG_SECONDARY, THEME_BORDER_COLOR, THEME_PRIMARY_COLOR, THEME_TEXT_LINK, THEME_TEXT_PRIMARY, THEME_TEXT_SECONDARY } from '../utils/common'
+import { PROGRESS_UPDATE_INTERVAL_MS } from '../utils/constants.js'
 import { PROGRESS_END, PROGRESS_EVENT_END, PROGRESS_UPDATE, createInitialProgressState, getCurrentProgress, getProgressKey, progressReducer } from '../utils/progressState.js'
 
 const { Text } = Typography
@@ -19,14 +20,34 @@ const { Text } = Typography
 const ProgressMask = () => {
   // 每个任务独立保留进度；结束任务的有限墓碑用于过滤迟到事件。
   const [ progressState, dispatch ] = useReducer(progressReducer, undefined, createInitialProgressState)
+  // 高频传输回调只保留每个任务的最新值，按固定间隔批量刷新 UI。
+  const pendingUpdatesRef = useRef(new Map())
+  const updateTimerRef = useRef(null)
   // 取消按钮的异步 loading 绑定当前任务，避免任务切换时串用状态。
   const [ cancellingTaskKey, setCancellingTaskKey ] = useState(null)
 
-  // 订阅 PubSub 进度总线，并在卸载时撤销唯一订阅令牌。
+  // 订阅 PubSub 进度总线，并在卸载时撤销唯一订阅令牌及待处理刷新。
   useEffect(() => {
+    const flushPendingUpdates = () => {
+      updateTimerRef.current = null
+      const pendingUpdates = pendingUpdatesRef.current
+      if (pendingUpdates.size === 0) return
+
+      pendingUpdatesRef.current = new Map()
+      pendingUpdates.forEach(payload => {
+        dispatch({ type: PROGRESS_UPDATE, payload })
+      })
+    }
+
+    const scheduleUpdate = () => {
+      if (updateTimerRef.current !== null) return
+      updateTimerRef.current = setTimeout(flushPendingUpdates, PROGRESS_UPDATE_INTERVAL_MS)
+    }
+
     const token = PubSub.subscribe(PubSubBusinessKeyEnum.MASK, (_, data) => {
       if (!data?.taskId || !data?.maskId) return
       if (data.event === PROGRESS_EVENT_END) {
+        pendingUpdatesRef.current.delete(getProgressKey(data))
         dispatch({
           type: PROGRESS_END,
           taskId: data.taskId,
@@ -34,11 +55,17 @@ const ProgressMask = () => {
         })
         return
       }
-      dispatch({ type: PROGRESS_UPDATE, payload: data })
+      pendingUpdatesRef.current.set(getProgressKey(data), data)
+      scheduleUpdate()
     })
 
     return () => {
       PubSub.unsubscribe(token)
+      if (updateTimerRef.current !== null) {
+        clearTimeout(updateTimerRef.current)
+        updateTimerRef.current = null
+      }
+      pendingUpdatesRef.current.clear()
     }
   }, [])
 

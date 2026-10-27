@@ -16,6 +16,7 @@ import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
+import { getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
 
 /**
  * 从本地路径中提取用于上传列表展示的最后一级名称。
@@ -167,6 +168,19 @@ const FileBrowser = ({
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
   const selectionPathRef = React.useRef(currentPath)
+  const filesRef = React.useRef(files)
+  const batchStateRef = React.useRef({ batchDeleting, batchDownloading })
+  const itemActionRefs = React.useRef({ handleItemClick, handleDeleteItem, handleRenameItem })
+  const uploadModalOpenRef = React.useRef(uploadModalOpen)
+  const uploadSubmittingRef = React.useRef(uploadSubmitting)
+  const uploadDropProcessingRef = React.useRef(uploadDropProcessing)
+  const uploadSessionRef = React.useRef(0)
+  filesRef.current = files
+  batchStateRef.current = { batchDeleting, batchDownloading }
+  itemActionRefs.current = { handleItemClick, handleDeleteItem, handleRenameItem }
+  uploadModalOpenRef.current = uploadModalOpen
+  uploadSubmittingRef.current = uploadSubmitting
+  uploadDropProcessingRef.current = uploadDropProcessing
 
   // 当前目录或文件列表变化后，移除已经不存在的选中项并校正 Shift 选择锚点。
   React.useEffect(() => {
@@ -193,14 +207,16 @@ const FileBrowser = ({
    * @param {{shiftKey: boolean, ctrlKey: boolean, metaKey: boolean}} event - 选择触发事件。
    * @returns {void}
    */
-  const handleItemSelect = (entry, event) => {
-    if (batchDeleting || batchDownloading) return
+  const handleItemSelect = React.useCallback((entry, event) => {
+    const currentFiles = filesRef.current
+    const { batchDeleting: isBatchDeleting, batchDownloading: isBatchDownloading } = batchStateRef.current
+    if (isBatchDeleting || isBatchDownloading) return
     const key = getEntryKey(entry)
     if (!key) return
-    const currentIndex = files.findIndex(item => getEntryKey(item) === key)
-    const anchorIndex = files.findIndex(item => getEntryKey(item) === selectionAnchorRef.current)
+    const currentIndex = currentFiles.findIndex(item => getEntryKey(item) === key)
+    const anchorIndex = currentFiles.findIndex(item => getEntryKey(item) === selectionAnchorRef.current)
     const rangeSelection = event.shiftKey && anchorIndex >= 0 && currentIndex >= 0
-      ? files
+      ? currentFiles
         .slice(Math.min(anchorIndex, currentIndex), Math.max(anchorIndex, currentIndex) + 1)
         .map(getEntryKey)
       : null
@@ -218,7 +234,19 @@ const FileBrowser = ({
       setSelectedKeys([key])
     }
     selectionAnchorRef.current = key
-  }
+  }, [])
+
+  const handleItemActivate = React.useCallback((entry) => {
+    return itemActionRefs.current.handleItemClick(entry)
+  }, [])
+
+  const handleItemDelete = React.useCallback((entry) => {
+    return itemActionRefs.current.handleDeleteItem(entry)
+  }, [])
+
+  const handleItemRename = React.useCallback((entry, name) => {
+    return itemActionRefs.current.handleRenameItem(entry, name)
+  }, [])
 
   /**
    * 批量删除当前选中项目，具体进度通过共享状态栏展示。
@@ -313,8 +341,11 @@ const FileBrowser = ({
    * @returns {void}
    */
   const handleUpload = () => {
-    if (uploadSubmitting) return
+    if (uploadSubmittingRef.current) return
+    uploadSessionRef.current += 1
     setUploadItems([])
+    setUploadPicking(null)
+    uploadModalOpenRef.current = true
     setUploadModalOpen(true)
   }
 
@@ -325,7 +356,8 @@ const FileBrowser = ({
    * @returns {Promise<void>} 选择器关闭并更新上传队列后的 Promise。
    */
   const addUploadItems = async (kind) => {
-    if (uploadPicking || uploadSubmitting) return
+    if (uploadPicking || uploadSubmittingRef.current || !uploadModalOpenRef.current) return
+    const sessionId = uploadSessionRef.current
     setUploadPicking(kind)
     try {
       const result = await dialog.open({
@@ -334,6 +366,11 @@ const FileBrowser = ({
         directory: kind === 'directory',
         recursive: kind === 'directory'
       })
+      if (!isUploadSessionActive(sessionId, {
+        sessionId: uploadSessionRef.current,
+        modalOpen: uploadModalOpenRef.current,
+        submitting: uploadSubmittingRef.current
+      })) return
       const items = normalizeSelectedPaths(result)
         .map(localPath => ({
           localPath,
@@ -341,14 +378,19 @@ const FileBrowser = ({
           kind
         }))
         .filter(item => item.fileName)
-      setUploadItems(previous => mergeUploadItems(previous, items))
+      setUploadItems(previous => isUploadSessionActive(sessionId, {
+        sessionId: uploadSessionRef.current,
+        modalOpen: uploadModalOpenRef.current,
+        submitting: uploadSubmittingRef.current
+      }) ? mergeUploadItems(previous, items) : previous)
     } catch (error) {
+      if (sessionId !== uploadSessionRef.current || !uploadModalOpenRef.current) return
       notification.error(
         kind === 'directory' ? '添加文件夹失败' : '添加文件失败',
         error.message || error.toString() || '未知错误'
       )
     } finally {
-      setUploadPicking(null)
+      if (sessionId === uploadSessionRef.current) setUploadPicking(null)
     }
   }
 
@@ -359,7 +401,11 @@ const FileBrowser = ({
    * @returns {Promise<void>} 路径检查和上传队列更新完成后的 Promise。
    */
   const handleDroppedPaths = React.useCallback(async (paths) => {
-    if (uploadSubmitting || uploadDropProcessing || !paths?.length) return
+    if (uploadSubmittingRef.current || uploadDropProcessingRef.current || !paths?.length) return
+    const appendToQueue = uploadModalOpenRef.current
+    const sessionId = uploadSessionRef.current
+    const dropOrigin = { appendToQueue, sessionId }
+    uploadDropProcessingRef.current = true
     setUploadDropProcessing(true)
     try {
       const entries = await invoke('inspect_local_paths', { paths })
@@ -370,17 +416,37 @@ const FileBrowser = ({
           kind: entry.isDirectory ? 'directory' : 'file'
         }))
         .filter(item => item.fileName && typeof item.localPath === 'string')
-      if (items.length > 0 && uploadModalOpen) {
-        setUploadItems(previous => mergeUploadItems(previous, items))
-      } else if (items.length > 0) {
-        await startUploadQueueRef.current?.(items)
+      const action = getUploadDropResultAction(
+        dropOrigin,
+        {
+          modalOpen: uploadModalOpenRef.current,
+          sessionId: uploadSessionRef.current,
+          submitting: uploadSubmittingRef.current
+        }
+      )
+      if (items.length > 0 && action === 'append') {
+        const targetSessionId = uploadSessionRef.current
+        setUploadItems(previous => isUploadSessionActive(targetSessionId, {
+          sessionId: uploadSessionRef.current,
+          modalOpen: uploadModalOpenRef.current,
+          submitting: uploadSubmittingRef.current
+        }) ? mergeUploadItems(previous, items) : previous)
+      } else if (items.length > 0 && action === 'upload') {
+        await startUploadQueueRef.current?.(items, true)
       }
     } catch (error) {
+      const action = getUploadDropResultAction(dropOrigin, {
+        modalOpen: uploadModalOpenRef.current,
+        sessionId: uploadSessionRef.current,
+        submitting: uploadSubmittingRef.current
+      })
+      if (action === 'ignore') return
       notification.error('添加拖拽内容失败', error.message || error.toString() || '无法读取拖拽路径')
     } finally {
+      uploadDropProcessingRef.current = false
       setUploadDropProcessing(false)
     }
-  }, [ uploadDropProcessing, uploadModalOpen, uploadSubmitting ])
+  }, [])
 
   // 注册 Tauri 原生拖放事件；清理阶段撤销监听并恢复悬停状态。
   React.useEffect(() => {
@@ -397,7 +463,7 @@ const FileBrowser = ({
           if (disposed) return
           const payload = event.payload
           if (payload.type === 'enter' || payload.type === 'over') {
-            if (uploadModalOpen) {
+            if (uploadModalOpenRef.current) {
               setUploadDragActive(true)
               setDirectoryDropActive(false)
             } else {
@@ -411,7 +477,7 @@ const FileBrowser = ({
             setUploadDragActive(false)
             const isDirectoryDrop = isPositionInsideElement(payload.position, fileListDropRef.current)
             setDirectoryDropActive(false)
-            if (!uploadModalOpen && !isDirectoryDrop) return
+            if (!uploadModalOpenRef.current && !isDirectoryDrop) return
             void handleDroppedPaths(payload.paths)
           }
         })
@@ -432,16 +498,22 @@ const FileBrowser = ({
       setUploadDragActive(false)
       setDirectoryDropActive(false)
     }
-  }, [ handleDroppedPaths, uploadModalOpen ])
+  }, [handleDroppedPaths])
 
   /**
    * 顺序上传队列中的文件或文件夹，保留覆盖确认和取消回调语义。
    *
    * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} uploadQueue - 要提交的本地项目队列。
+   * @param {boolean} [fromDrop=false] - 是否由已完成路径检查的直接拖放启动。
    * @returns {Promise<void>} 队列处理、目录刷新和状态清理完成后的 Promise。
    */
-  const startUploadQueue = async (uploadQueue) => {
-    if (uploadSubmitting || uploadQueue.length === 0) return
+  const startUploadQueue = async (uploadQueue, fromDrop = false) => {
+    if (
+      uploadSubmittingRef.current
+      || (!fromDrop && uploadPicking !== null)
+      || uploadQueue.length === 0
+      || (uploadDropProcessingRef.current && !fromDrop)
+    ) return
     const duplicateNames = uploadQueue
       .map(item => item.fileName)
       .filter((name, index, names) => names.indexOf(name) !== index)
@@ -453,6 +525,9 @@ const FileBrowser = ({
       return
     }
 
+    uploadSessionRef.current += 1
+    uploadSubmittingRef.current = true
+    uploadModalOpenRef.current = false
     setUploadSubmitting(true)
     setUploadModalOpen(false)
     const progressIds = createProgressIds('upload')
@@ -559,6 +634,7 @@ const FileBrowser = ({
     } catch (error) {
       notification.error('上传文件失败', error.message || error.toString() || '未知错误')
     } finally {
+      uploadSubmittingRef.current = false
       setUploadSubmitting(false)
       setUploadItems([])
       PubSubBusinessKeyEnum.SEND_MASK({
@@ -586,6 +662,20 @@ const FileBrowser = ({
       onClick: () => handleDriveSelect(drive)
     })) : [])
   ]
+
+  const renderFileItem = React.useCallback(entry => (
+    <FileItem
+      entry={entry}
+      currentPath={currentPath}
+      connectionId={currentConnectionId}
+      showHiddenFiles={showHiddenFiles}
+      selected={selectedKeySet.has(getEntryKey(entry))}
+      onSelect={handleItemSelect}
+      onActivate={handleItemActivate}
+      onDelete={handleItemDelete}
+      onRename={handleItemRename}
+    />
+  ), [ currentPath, currentConnectionId, showHiddenFiles, selectedKeySet, handleItemSelect, handleItemActivate, handleItemDelete, handleItemRename ])
 
   return (
     <div className="file-browser">
@@ -706,19 +796,7 @@ const FileBrowser = ({
             itemLayout="horizontal"
             dataSource={files}
             rowKey={entry => entry.path || entry.name}
-            renderItem={entry => (
-              <FileItem
-                entry={entry}
-                currentPath={currentPath}
-                connectionId={currentConnectionId}
-                showHiddenFiles={showHiddenFiles}
-                selected={selectedKeySet.has(getEntryKey(entry))}
-                onSelect={event => handleItemSelect(entry, event)}
-                onActivate={() => handleItemClick(entry)}
-                onDelete={() => handleDeleteItem(entry)}
-                onRename={name => handleRenameItem(entry, name)}
-              />
-            )}
+            renderItem={renderFileItem}
           />
         )}
       </div>
@@ -760,11 +838,16 @@ const FileBrowser = ({
         rootClassName="compact-modal upload-modal"
         title="选择上传内容"
         open={uploadModalOpen}
-        onCancel={() => setUploadModalOpen(false)}
+        onCancel={() => {
+          uploadSessionRef.current += 1
+          uploadModalOpenRef.current = false
+          setUploadPicking(null)
+          setUploadModalOpen(false)
+        }}
         onOk={() => void startUploadQueue([...uploadItems])}
         okText="开始上传"
         cancelText="取消"
-        okButtonProps={{ disabled: uploadItems.length === 0 }}
+        okButtonProps={{ disabled: uploadItems.length === 0 || uploadDropProcessing || uploadPicking !== null }}
         width="min(520px, calc(100vw - 24px))"
         destroyOnHidden
       >

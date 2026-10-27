@@ -6,7 +6,7 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
-import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, normalizeError } from './constants.js'
+import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, normalizeError } from './constants.js'
 
 /**
  * @typedef {Object} SshConnectionConfig
@@ -259,6 +259,9 @@ class SftpManager {
   /**
    * 调用远程 Tauri 命令，并在必要时执行连接健康检查。
    *
+   * Rust 端返回带有结构化错误码时，断线状态已经由原生层分类并通过事件同步；
+   * 只有兼容旧协议或无法解析错误码的异常才需要额外执行保活探测。
+   *
    * @param {string} connectionId - 命令关联的连接 ID。
    * @param {string} command - 要调用的 Tauri 命令名称。
    * @param {Record<string, unknown>} args - 传递给 Tauri 命令的参数。
@@ -272,8 +275,8 @@ class SftpManager {
     } catch (error) {
       if (this.isConnectionLossError(error)) {
         this.markConnectionLost(connectionId, error)
-      } else if (!options.suppressHealthCheck?.()) {
-        // 某些 SFTP 失效只返回通用 failure，先用保活探测区分断线和权限/路径错误。
+      } else if (!getErrorCode(error) && !options.suppressHealthCheck?.()) {
+        // 旧版或非结构化错误无法由原生层分类时，再用保活探测区分断线和业务错误。
         try {
           const alive = await this.checkConnection(connectionId)
           if (!alive) this.markConnectionLost(connectionId, '服务器无响应或网络已断开')

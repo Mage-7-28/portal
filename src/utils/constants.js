@@ -133,7 +133,7 @@ export const normalizeError = (error) => {
  * @param {unknown} error - 原始异常或 IPC 错误负载。
  * @returns {string} 错误码；不存在或无法解析时返回空字符串。
  */
-const getErrorCode = (error) => {
+export const getErrorCode = (error) => {
   if (!error) return ''
   if (typeof error === 'string') {
     try {
