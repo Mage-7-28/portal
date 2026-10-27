@@ -4,10 +4,10 @@ export const PROGRESS_EVENT_END = 'end'
 export const DEFAULT_ENDED_ID_LIMIT = 32
 
 /**
- * Create a stable key for a progress task and its rendered mask.
+ * 为进度任务及其状态栏生成稳定键。
  *
- * @param {{taskId?: string, maskId?: string}|null|undefined} ids - Task identifiers.
- * @returns {string|null} Composite key or null when no identifier is available.
+ * @param {{taskId?: string, maskId?: string}|null|undefined} ids - 任务标识。
+ * @returns {string|null} 组合键；没有可用标识时返回 null。
  */
 export const getProgressKey = (ids) => {
   const taskId = ids?.taskId || ''
@@ -17,10 +17,10 @@ export const getProgressKey = (ids) => {
 }
 
 /**
- * Create the initial immutable progress state.
+ * 创建不可变的初始进度状态。
  *
- * @param {number} [endedIdLimit=DEFAULT_ENDED_ID_LIMIT] - Maximum retained ended task keys.
- * @returns {{tasks: Object, order: string[], endedIds: string[], endedIdLimit: number}} Initial state.
+ * @param {number} [endedIdLimit=DEFAULT_ENDED_ID_LIMIT] - 最多保留的已结束任务键数量。
+ * @returns {{tasks: Object, order: string[], endedIds: string[], endedIdLimit: number}} 初始状态。
  */
 export const createInitialProgressState = (endedIdLimit = DEFAULT_ENDED_ID_LIMIT) => ({
   tasks: {},
@@ -40,11 +40,11 @@ const rememberEnded = (state, key) => {
 }
 
 /**
- * Apply one progress event without allowing a task to clear another task.
+ * 应用单条进度事件，避免一个任务清除另一个任务。
  *
- * @param {Object} state - Current progress state.
- * @param {{type: string, payload?: Object, taskId?: string, maskId?: string}} action - Progress action.
- * @returns {Object} Next progress state.
+ * @param {Object} state - 当前进度状态。
+ * @param {{type: string, payload?: Object, taskId?: string, maskId?: string}} action - 进度操作。
+ * @returns {Object} 下一状态。
  */
 export const progressReducer = (state, action) => {
   if (!state || !action) return state
@@ -89,10 +89,10 @@ export const progressReducer = (state, action) => {
 }
 
 /**
- * Return the most recently updated active progress task.
+ * 返回最近更新的活动进度任务。
  *
- * @param {Object} state - Current progress state.
- * @returns {Object|null} Current task or null when no task is active.
+ * @param {Object} state - 当前进度状态。
+ * @returns {Object|null} 当前任务；没有活动任务时返回 null。
  */
 export const getCurrentProgress = (state) => {
   if (!state) return null
@@ -106,10 +106,10 @@ export const getCurrentProgress = (state) => {
 let progressSequence = 0
 
 /**
- * Create unique identifiers for a progress producer.
+ * 为进度生产者生成唯一标识。
  *
- * @param {string} [scope='progress'] - Human-readable producer scope.
- * @returns {{taskId: string, maskId: string}} New task and mask identifiers.
+ * @param {string} [scope='progress'] - 便于阅读的生产者作用域。
+ * @returns {{taskId: string, maskId: string}} 新的任务和状态栏标识。
  */
 export const createProgressIds = (scope = 'progress') => {
   const taskId = `${ scope }-${ Date.now() }-${ ++progressSequence }`

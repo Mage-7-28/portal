@@ -14,7 +14,7 @@ import AppIcon from './AppIcon'
  * @param {{currentVersion: string, latestVersion: string, releaseUrl: string}|null} props.update - 新版本信息。
  * @param {boolean} [props.canSkipVersion=true] - 是否显示并允许使用“跳过此版本”。
  * @param {(options: {skipVersion: boolean, version: string}) => void} props.onCancel - 关闭弹窗回调。
- * @param {(options: {skipVersion: boolean, version: string, releaseUrl: string}) => Promise<void>} props.onDownload - 打开发行版页面回调。
+ * @param {(options: {skipVersion: boolean, version: string, releaseUrl: string}) => Promise<void>} props.onDownload - 打开 Release 页面回调。
  * @returns {JSX.Element|null} 更新弹窗；没有更新数据时返回 null。
  */
 const UpdateAvailableModal = ({ open, update, canSkipVersion = true, onCancel, onDownload }) => {
@@ -47,7 +47,7 @@ const UpdateAvailableModal = ({ open, update, canSkipVersion = true, onCancel, o
   }
 
   /**
-   * 打开发行版页面，并在启动检查场景下保存跳过版本设置。
+   * 打开 Release 页面，并在启动检查场景下保存跳过版本设置。
    *
    * @returns {Promise<void>} 页面打开和父组件回调完成后的 Promise。
    */
