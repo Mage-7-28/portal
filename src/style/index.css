@@ -30,309 +30,6 @@
   overflow: hidden;
 }
 
-/* 主窗口工作区：连接首页固定保留，文件和终端标签共享同一内容区域。 */
-.workspace-tabbar {
-  position: relative;
-  display: flex;
-  flex: 0 0 43px;
-  min-width: 0;
-  height: 43px;
-  align-items: stretch;
-  gap: 3px;
-  padding: 4px 8px 0;
-  box-sizing: border-box;
-  overflow: hidden;
-  border-bottom: 1px solid #3c3f41;
-  background: transparent;
-}
-
-.workspace-tab-list {
-  display: flex;
-  flex: 1 1 auto;
-  width: 0;
-  min-width: 0;
-  height: 100%;
-  align-items: stretch;
-  gap: 3px;
-  padding: 0;
-  box-sizing: border-box;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: none;
-}
-
-.workspace-tab-list::-webkit-scrollbar {
-  display: none;
-  width: 0;
-  height: 0;
-}
-
-.workspace-tab {
-  display: flex;
-  position: relative;
-  flex: 0 0 210px;
-  width: 210px;
-  min-width: 210px;
-  max-width: 210px;
-  align-items: center;
-  isolation: isolate;
-  box-sizing: border-box;
-  border: 1px solid rgba(91, 94, 102, 0.56);
-  border-bottom: 0;
-  border-radius: 7px 7px 0 0;
-  color: #aaa9a5;
-  background:
-    linear-gradient(135deg, rgba(127, 166, 164, 0.075), transparent 48%),
-    linear-gradient(180deg, #2b2d31, #25272a);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 -3px 10px rgba(0, 0, 0, 0.13);
-  animation: workspace-tab-enter 180ms cubic-bezier(0.2, 0.75, 0.25, 1);
-  transition:
-    color 140ms ease,
-    background-color 140ms ease,
-    border-color 140ms ease,
-    box-shadow 140ms ease;
-}
-
-/* 连接首页位于固定轨道，会话标签只在右侧剩余空间内横向滚动。 */
-.workspace-tab.is-home {
-  flex: 0 0 116px;
-  width: 116px;
-  min-width: 116px;
-  max-width: 116px;
-}
-
-.workspace-tab::before,
-.workspace-tab::after {
-  position: absolute;
-  content: '';
-  pointer-events: none;
-}
-
-.workspace-tab::before {
-  top: -1px;
-  right: 10px;
-  left: 10px;
-  z-index: 1;
-  height: 2px;
-  border-radius: 0 0 2px 2px;
-  background: linear-gradient(90deg, transparent, #eb9070 34%, #7fa6a4 72%, transparent);
-  box-shadow: 0 0 9px rgba(235, 144, 112, 0.22);
-  opacity: 0.32;
-  transition:
-    opacity 140ms ease,
-    box-shadow 140ms ease;
-}
-
-.workspace-tab::after {
-  right: -1px;
-  bottom: -1px;
-  left: -1px;
-  height: 1px;
-  background: transparent;
-}
-
-.workspace-tab:not(.is-active):hover {
-  border-color: #62666d;
-  color: #d5d2cb;
-  background:
-    linear-gradient(135deg, rgba(235, 144, 112, 0.105), transparent 44%),
-    linear-gradient(225deg, rgba(127, 166, 164, 0.11), transparent 58%),
-    #303236;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.075),
-    0 -3px 13px rgba(0, 0, 0, 0.2);
-}
-
-.workspace-tab:not(.is-active):hover::before {
-  opacity: 0.66;
-}
-
-.workspace-tab.is-active {
-  z-index: 1;
-  border-color: #686b72;
-  color: #ebe8e1;
-  background:
-    linear-gradient(135deg, rgba(235, 144, 112, 0.13), transparent 37%),
-    linear-gradient(225deg, rgba(127, 166, 164, 0.1), transparent 48%),
-    #1f1f1f;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 -4px 14px rgba(0, 0, 0, 0.2);
-}
-
-.workspace-tab.is-active::before {
-  box-shadow:
-    0 0 8px rgba(235, 144, 112, 0.32),
-    0 0 13px rgba(127, 166, 164, 0.14);
-  opacity: 1;
-}
-
-.workspace-tab.is-active::after {
-  background: #1f1f1f;
-}
-
-.workspace-tab-select,
-.workspace-tab-close {
-  border: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-}
-
-.workspace-tab-select {
-  display: flex;
-  flex: 1 1 auto;
-  min-width: 0;
-  height: 100%;
-  align-items: center;
-  gap: 7px;
-  padding: 0 8px 0 11px;
-  box-sizing: border-box;
-  cursor: pointer;
-  line-height: 16px;
-  text-align: left;
-}
-
-.workspace-tab-select .app-icon {
-  flex: 0 0 15px;
-  width: 15px;
-  height: 15px;
-  color: #9d9a93;
-  transition:
-    color 140ms ease,
-    filter 140ms ease;
-}
-
-.workspace-tab.is-active .workspace-tab-select .app-icon {
-  color: #eb9070;
-}
-
-.workspace-tab:not(.is-active):hover .workspace-tab-select .app-icon {
-  color: #c5a188;
-  filter: drop-shadow(0 0 4px rgba(197, 161, 136, 0.26));
-}
-
-.workspace-tab-select span {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 16px;
-  letter-spacing: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.workspace-tab-select:focus-visible,
-.workspace-tab-close:focus-visible {
-  outline: 1px solid #b18c68;
-  outline-offset: -2px;
-}
-
-.workspace-tab-close {
-  display: inline-flex;
-  flex: 0 0 24px;
-  width: 24px;
-  height: 24px;
-  align-items: center;
-  justify-content: center;
-  margin-right: 6px;
-  padding: 0;
-  border-radius: 4px;
-  cursor: pointer;
-  opacity: 0.45;
-  transition:
-    color 120ms ease,
-    background-color 120ms ease,
-    opacity 120ms ease,
-    transform 120ms ease;
-}
-
-.workspace-tab:hover .workspace-tab-close,
-.workspace-tab.is-active .workspace-tab-close {
-  opacity: 0.78;
-}
-
-.workspace-tab-close:hover {
-  background: rgba(255, 255, 255, 0.09);
-  color: #ebe8e1;
-  opacity: 1;
-  transform: scale(1.06);
-}
-
-.workspace-tab-close .app-icon {
-  width: 13px;
-  height: 13px;
-}
-
-@keyframes workspace-tab-enter {
-  from {
-    opacity: 0;
-    filter: brightness(1.22);
-  }
-
-  to {
-    opacity: 1;
-    filter: brightness(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .workspace-tab {
-    animation: none;
-    transition: none;
-  }
-
-  .workspace-tab-select .app-icon,
-  .workspace-tab-close {
-    transition: none;
-  }
-}
-
-.workspace-panels {
-  position: relative;
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.workspace-panel[hidden] {
-  display: none !important;
-}
-
-.workspace-terminal-panel {
-  padding: 9px 11px 7px;
-  box-sizing: border-box;
-  background: #1f1f1f;
-}
-
-.workspace-terminal-panel .terminal-view {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-}
-
-.workspace-terminal-panel .terminal-emulator {
-  flex: 1 1 auto;
-  height: auto;
-  min-height: 0;
-}
-
 /* 终端模块按需加载期间保持工作区尺寸稳定，避免异步加载造成空白或布局跳动。 */
 .terminal-loading {
   display: flex;
@@ -2524,4 +2221,221 @@ html,
   .ant-space-compact > .ant-form-item {
     min-width: 100%;
   }
+}
+
+/* 服务器工作窗口以可收缩的 Ant Design 分栏承载文件、终端和资源面板。 */
+.server-workspace-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: #1f1f1f;
+  color: #e8e5de;
+}
+
+.server-workspace-header {
+  display: flex;
+  flex: 0 0 48px;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 12px;
+  border-bottom: 1px solid #3c3f41;
+}
+
+.server-workspace-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.server-workspace-name,
+.server-workspace-endpoint {
+  max-width: min(34vw, 360px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-workspace-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+}
+
+.server-workspace-horizontal,
+.server-workspace-vertical {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.server-workspace-horizontal > .ant-splitter-panel,
+.server-workspace-vertical > .ant-splitter-panel {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.server-workspace-horizontal > .ant-splitter-panel:first-child,
+.server-workspace-horizontal > .ant-splitter-panel:last-child {
+  display: flex;
+  flex-direction: column;
+}
+
+.server-workspace-horizontal > .ant-splitter-panel:first-child .file-browser {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.server-workspace-shell .server-terminal-card,
+.server-workspace-shell .server-monitor-card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.server-workspace-shell .server-terminal-card > .ant-card-head,
+.server-workspace-shell .server-monitor-card > .ant-card-head {
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.server-workspace-shell .server-terminal-card > .ant-card-body,
+.server-workspace-shell .server-monitor-card > .ant-card-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.server-workspace-shell .terminal-view {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.server-workspace-shell .terminal-connection-meta {
+  flex: 0 0 auto;
+}
+
+.server-workspace-shell .terminal-emulator {
+  flex: 1 1 0;
+  width: 100%;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
+.server-terminal-placeholder {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+}
+
+.server-monitor-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.server-monitor-alert,
+.server-monitor-metrics,
+.server-process-heading {
+  flex: 0 0 auto;
+}
+
+.server-monitor-loading {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  align-items: center;
+  justify-content: center;
+}
+
+.server-process-heading {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 0 6px;
+}
+
+.server-process-table-wrap {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.server-process-table-wrap .ant-table-wrapper,
+.server-process-table-wrap .ant-spin-nested-loading,
+.server-process-table-wrap .ant-spin-container {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.server-process-table-wrap .ant-table,
+.server-process-table-wrap .ant-table-container {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.server-process-table-wrap .ant-table-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: calc(100% - 36px) !important;
+  overflow: auto !important;
+}
+
+.server-monitor-alert .ant-alert-description {
+  max-height: 36px;
+  overflow: auto;
+}
+
+.server-process-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-workspace-footer {
+  flex: 0 0 auto;
 }

@@ -90,19 +90,6 @@ body {
   background-size: 100% 100%;
 }
 
-/* 标签栏只承担一级导航，窗口两侧留白由固定首页与会话滚动区共同遵守。 */
-.workspace-tabbar {
-  border-bottom-color: var(--portal-geek-line-soft);
-  background: linear-gradient(180deg, #25272a, #222326);
-}
-
-.workspace-terminal-panel {
-  padding: 10px 12px 7px;
-  background:
-    linear-gradient(180deg, rgba(127, 166, 164, 0.025), transparent 120px),
-    var(--portal-geek-canvas);
-}
-
 .download-status {
   min-height: 30px;
   padding-inline: 11px;

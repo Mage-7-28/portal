@@ -265,7 +265,7 @@ class SftpManager {
    * @param {string} connectionId - 命令关联的连接 ID。
    * @param {string} command - 要调用的 Tauri 命令名称。
    * @param {Record<string, unknown>} args - 传递给 Tauri 命令的参数。
-   * @param {{suppressHealthCheck?: () => boolean}} [options={}] - 取消任务等场景使用的保活检查抑制策略。
+   * @param {{suppressHealthCheck?: () => boolean, suppressConnectionLoss?: boolean}} [options={}] - 远程任务错误的连接状态处理策略。
    * @returns {Promise<unknown>} Rust 命令返回的原始结果。
    * @throws {unknown} 当远程命令失败时原样抛出；连接异常会先同步本地状态。
    */
@@ -273,7 +273,7 @@ class SftpManager {
     try {
       return await invoke(command, args)
     } catch (error) {
-      if (this.isConnectionLossError(error)) {
+      if (this.isConnectionLossError(error) && !options.suppressConnectionLoss) {
         this.markConnectionLost(connectionId, error)
       } else if (!getErrorCode(error) && !options.suppressHealthCheck?.()) {
         // 旧版或非结构化错误无法由原生层分类时，再用保活探测区分断线和业务错误。
@@ -348,6 +348,14 @@ class SftpManager {
 
     const previous = this.connections.get(id)
     if (previous?.status === SftpConnectionStatus.CONNECTED) {
+      const previousConfig = previous.config
+      const sameConfiguration = previousConfig.host === normalized.host
+        && previousConfig.port === normalized.port
+        && previousConfig.username === normalized.username
+        && previousConfig.authMethod === normalized.authMethod
+        && previousConfig.hostKeyFingerprint === normalized.hostKeyFingerprint
+        && previousConfig.password === normalized.password
+      if (sameConfiguration) return id
       await this.disconnect(id).catch(() => undefined)
     }
 
@@ -422,6 +430,24 @@ class SftpManager {
   }
 
   /**
+   * 获取一次经 Rust 后端采集的 CPU、内存与进程快照。
+   *
+   * @param {string} connectionId - 已连接的配置 ID。
+   * @returns {Promise<Object>} 统一结构的服务器资源快照。
+   */
+  async getServerMonitorSnapshot(connectionId) {
+    const info = this.requireConnected(connectionId)
+    const snapshot = await this.invokeRemote(
+      connectionId,
+      'get_server_monitor_snapshot',
+      { id: connectionId },
+      { suppressConnectionLoss: true, suppressHealthCheck: () => true }
+    )
+    info.lastActivity = Date.now()
+    return snapshot
+  }
+
+  /**
    * 断开连接并清理相关终端、目录统计缓存和排队任务。
    *
    * @param {string} connectionId - 要断开的连接 ID。
@@ -433,14 +459,15 @@ class SftpManager {
     if (pendingDisconnect) return pendingDisconnect
 
     const info = this.connections.get(connectionId)
-    if (!info) return true
 
     const operation = (async () => {
       try {
         await invoke('disconnect_ssh', { id: connectionId })
       } finally {
-        info.status = SftpConnectionStatus.DISCONNECTED
-        info.lastError = null
+        if (info) {
+          info.status = SftpConnectionStatus.DISCONNECTED
+          info.lastError = null
+        }
         this.cancelDirectorySizeRequests(connectionId, '连接已断开')
         this.invalidateDirectorySizeCache(connectionId)
         this.pumpDirectorySizeQueue()

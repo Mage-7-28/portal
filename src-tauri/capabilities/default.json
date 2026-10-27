@@ -1,17 +1,21 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window and standalone terminal window",
+  "description": "Capability for the main window and managed child windows",
   "windows": [
     "Portal",
     "PortalTerminal",
-    "PortalTerminal-*"
+    "PortalTerminal-*",
+    "PortalWorkspace-*"
   ],
   "permissions": [
     "core:default",
     "core:webview:allow-create-webview-window",
+    "core:window:allow-close",
     "core:window:allow-destroy",
+    "core:window:allow-get-all-windows",
     "core:window:allow-set-focus",
+    "core:window:allow-set-title",
     "core:window:allow-show",
     "core:window:allow-unminimize",
     "opener:default",

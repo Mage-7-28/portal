@@ -105,6 +105,7 @@ const decorateTerminalOutput = data => {
  * @param {boolean} [props.showFooter=true] - 是否显示独立终端宿主使用的底部关闭区域。
  * @param {() => void|Promise<void>} [props.onRequestClose] - 请求外层宿主关闭终端的回调。
  * @param {(closeHandler: () => Promise<unknown>) => void} [props.onCloseReady] - 接收可幂等释放后端 PTY 的回调。
+ * @param {number} [props.focusRequest=0] - 变化时将键盘焦点交给已运行终端。
  * @returns {JSX.Element} 包含连接状态和 xterm 容器，并可按宿主配置显示底部关闭区域的终端视图。
  */
 export const TerminalView = ({
@@ -113,7 +114,8 @@ export const TerminalView = ({
   active = true,
   showFooter = true,
   onRequestClose,
-  onCloseReady
+  onCloseReady,
+  focusRequest = 0
 }) => {
   // xterm 容器和实例引用；实例存于 ref 以便按钮和清理回调读取最新对象。
   const containerRef = useRef(null)
@@ -330,13 +332,13 @@ export const TerminalView = ({
 
   // 隐藏标签重新显示后，按新的可用区域校正 PTY 行列并把输入焦点交还终端。
   useEffect(() => {
-    if (!active) return undefined
+    if (!active && focusRequest === 0) return undefined
     const frame = window.requestAnimationFrame(() => {
       fitTerminalRef.current()
       terminalRef.current?.focus()
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [active])
+  }, [ active, focusRequest ])
 
   /**
    * 请求宿主关闭终端；没有宿主回调时直接释放当前 PTY。

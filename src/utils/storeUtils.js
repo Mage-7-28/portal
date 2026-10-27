@@ -20,6 +20,7 @@ export class ReactiveStore {
     this.loaded = false
     this.store = null
     this.initPromise = null
+    this.changeListenerPromise = null
     this.writeQueue = Promise.resolve()
   }
 
@@ -33,8 +34,16 @@ export class ReactiveStore {
     if (this.store) return this.store
     if (!this.initPromise) {
       this.initPromise = load(this.storePath, { autoSave: false })
-        .then(store => {
+        .then(async store => {
           this.store = store
+          this.changeListenerPromise ||= store.onChange((key, value) => {
+            if (value === undefined) delete this.state[key]
+            else this.state[key] = value
+          }).catch(error => {
+            console.warn('跨窗口同步本地数据失败', error)
+            return null
+          })
+          await this.changeListenerPromise
           return store
         })
         .finally(() => {

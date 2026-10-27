@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use crate::local_transfer::{LocalDownload, LocalTransferRoot};
 use crate::remote_policy::{parse_remote_uid, RemoteMutationPolicy};
 use crate::scan_budget::ScanBudget;
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Serialize;
 use serde_json::json;
 use ssh2::{Channel, ErrorCode, ExtendedData, HashType, RenameFlags, Session, Sftp};
@@ -36,6 +37,11 @@ const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
 const DIRECTORY_SIZE_WORKER_BATCH_SIZE: usize = 8;
 // GNU/Linux 的远端 `du` 只返回一行汇总结果；限制输出大小，避免异常远端命令占满内存。
 const MAX_DIRECTORY_SIZE_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
+// 监控命令只返回有限数量的进程和有界输出，避免远端输出占用过多本地内存。
+const MAX_SERVER_MONITOR_OUTPUT_BYTES: usize = 256 * 1024;
+const MAX_SERVER_MONITOR_PROCESSES: usize = 100;
+const SERVER_MONITOR_COMMAND_TIMEOUT_MS: u32 = 10_000;
+const SERVER_MONITOR_MIN_INTERVAL: Duration = Duration::from_secs(3);
 // 目录命令轮询、预览大小和终端输入/控制/尺寸的安全边界。
 const DIRECTORY_SIZE_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(20);
 const MAX_PREVIEW_BYTES: u64 = 5 * 1024 * 1024;
@@ -151,6 +157,9 @@ pub enum SshError {
     /// 请求预览的远程文件超过内存安全上限。
     #[error("预览文件超过大小限制")]
     PreviewTooLarge,
+    /// 远端系统未提供可用的监控命令，或监控输出不符合预期。
+    #[error("服务器监控不可用: {0}")]
+    MonitorUnavailable(String),
     /// 请求的远程 PTY 会话已不存在。
     #[error("终端会话不存在")]
     TerminalNotFound,
@@ -182,8 +191,16 @@ impl From<ssh2::Error> for SshError {
 pub struct SshState {
     /// 已保存的连接配置及其连接标记。
     pub connections: Arc<RwLock<HashMap<String, SshConnection>>>,
+    /// 同一连接配置的连接、断开和配置更新锁，避免多个窗口并发替换会话。
+    connection_operation_locks: Arc<Mutex<HashMap<String, Arc<Mutex<()>>>>>,
     /// 已认证的 SSH 会话池，按连接 ID 复用。
     pub connection_pool: Arc<RwLock<HashMap<String, Arc<Mutex<Session>>>>>,
+    /// 独立于 SFTP/PTY 主会话的远程监控会话池。
+    monitor_sessions: Arc<Mutex<HashMap<String, Arc<Mutex<Session>>>>>,
+    /// 每个连接最新的监控快照和采集时间，合并窗口间重复采样请求。
+    monitor_snapshot_cache: Arc<Mutex<HashMap<String, (Instant, ServerMonitorSnapshot)>>>,
+    /// Linux CPU 计数器的上一次采样值，用于计算采样间隔内的占用率。
+    monitor_cpu_samples: Arc<Mutex<HashMap<String, (u64, u64)>>>,
     /// 用于向前端发送 Tauri 事件的应用句柄。
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
     /// 已请求取消的文件传输 ID 集合。
@@ -249,6 +266,140 @@ pub struct ConnectResult {
     /// 本次握手取得的主机密钥信息。
     pub host_key: HostKeyInfo,
 }
+
+/// 服务器进程列表中的单条进程数据。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerProcess {
+    /// 进程标识。
+    pub pid: u64,
+    /// 不包含命令行参数的进程名称。
+    pub name: String,
+    /// 进程 CPU 占用百分比。
+    pub cpu_percent: f64,
+    /// 进程常驻内存字节数。
+    pub memory_bytes: u64,
+}
+
+/// 单次远端资源监控采样结果。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerMonitorSnapshot {
+    /// 远端操作系统标识。
+    pub platform: String,
+    /// 整机 CPU 占用率；首次 Linux 采样建立基线时为空。
+    pub cpu_percent: Option<f64>,
+    /// 物理内存总量，单位为字节。
+    pub memory_total_bytes: u64,
+    /// 已使用物理内存，单位为字节。
+    pub memory_used_bytes: u64,
+    /// 按 CPU 占用降序排列的进程列表。
+    pub processes: Vec<ServerProcess>,
+    /// 采集完成时间的 Unix 毫秒时间戳。
+    pub collected_at: u128,
+}
+
+/// 尚未计算 Linux 整机 CPU 占用率的远端原始采样数据。
+struct RemoteMonitorSample {
+    platform: String,
+    cpu_percent: Option<f64>,
+    cpu_ticks: Option<(u64, u64)>,
+    memory_total_bytes: u64,
+    memory_used_bytes: u64,
+    processes: Vec<ServerProcess>,
+}
+
+struct RemoteCommandOutput {
+    bytes: Vec<u8>,
+    exit_status: i32,
+}
+
+const LINUX_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\tlinux\n'
+awk '
+  /^cpu / { total=0; for (i=2; i<=NF; i++) total+=$i; printf "CPUSTAT\t%.0f\t%.0f\n", total, $5+$6 }
+  $1 == "MemTotal:" { total_mem=$2*1024 }
+  $1 == "MemAvailable:" { available=$2*1024; has_available=1 }
+  $1 == "MemFree:" { free_mem=$2*1024 }
+  $1 == "Buffers:" { buffers=$2*1024 }
+  $1 == "Cached:" { cached=$2*1024 }
+  END { if (!has_available) available=free_mem+buffers+cached; printf "MEM\t%.0f\t%.0f\n", total_mem, total_mem-available }
+' /proc/stat /proc/meminfo
+(ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null | sort -k2,2nr | head -n 50; ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const MACOS_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\tdarwin\n'
+memory_total=$(sysctl -n hw.memsize)
+memory_available=$(vm_stat | awk '
+  NR == 1 { line=$0; sub(/^.*page size of /, "", line); sub(/ bytes.*$/, "", line); page=line+0 }
+  $1 == "Pages" && $2 == "free:" { free_pages=$3+0 }
+  $1 == "Pages" && $2 == "inactive:" { inactive_pages=$3+0 }
+  $1 == "Pages" && $2 == "speculative:" { speculative_pages=$3+0 }
+  $1 == "Pages" && $2 == "purgeable:" { purgeable_pages=$3+0 }
+  END { printf "%.0f", (free_pages+inactive_pages+speculative_pages+purgeable_pages)*page }
+')
+printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
+top -l 1 -n 0 | awk -F'[ ,%]+' '/CPU usage:/ { printf "CPU\t%.2f\n", $3+$5; exit }'
+(ps -Ao pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -Ao pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const FREEBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\tfreebsd\n'
+memory_total=$(sysctl -n hw.physmem)
+page_size=$(sysctl -n hw.pagesize)
+free_pages=$(sysctl -n vm.stats.vm.v_free_count)
+inactive_pages=$(sysctl -n vm.stats.vm.v_inactive_count)
+cache_pages=$(sysctl -n vm.stats.vm.v_cache_count 2>/dev/null || echo 0)
+memory_available=$(((free_pages+inactive_pages+cache_pages)*page_size))
+printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
+vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
+(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const DRAGONFLY_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\tdragonfly\n'
+memory_total=$(sysctl -n hw.physmem)
+page_size=$(sysctl -n hw.pagesize)
+free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
+test -n "$free_pages"
+memory_available=$((free_pages*page_size))
+printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
+vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
+(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const OPENBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\topenbsd\n'
+memory_total=$(sysctl -n hw.physmem)
+page_size=$(sysctl -n hw.pagesize)
+free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
+test -n "$free_pages"
+memory_available=$((free_pages*page_size))
+printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
+vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
+(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const NETBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
+export LC_ALL
+printf 'OS\tnetbsd\n'
+memory_total=$(sysctl -n hw.physmem64)
+page_size=$(sysctl -n hw.pagesize)
+free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
+test -n "$free_pages"
+memory_available=$((free_pages*page_size))
+printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
+vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
+(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+"#;
+
+const WINDOWS_MONITOR_SCRIPT: &str = r#"$ErrorActionPreference='Stop';$os=Get-CimInstance Win32_OperatingSystem;$total=[uint64]$os.TotalVisibleMemorySize*1024;$used=($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)*1024;$cpu=(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor|Where-Object Name -eq '_Total').PercentProcessorTime;$logical=[math]::Max([double](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors,1);$all=@(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process|Where-Object {$_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle'});$selected=@(($all|Sort-Object PercentProcessorTime -Descending|Select-Object -First 50)+($all|Sort-Object WorkingSet -Descending|Select-Object -First 50)|Group-Object IDProcess|ForEach-Object {$_.Group[0]});$processes=@($selected|ForEach-Object {[pscustomobject]@{pid=[uint64]$_.IDProcess;name=[string]$_.Name;cpuPercent=[math]::Round(([double]$_.PercentProcessorTime/$logical),2);memoryBytes=[uint64]$_.WorkingSet}});[pscustomobject]@{platform='windows';cpuPercent=[double]$cpu;memoryTotalBytes=$total;memoryUsedBytes=[uint64]$used;processes=$processes}|ConvertTo-Json -Compress -Depth 4"#;
 
 /// 连接测试命令的结果，不会写入连接池。
 #[derive(Debug, Clone, Serialize)]
@@ -551,6 +702,484 @@ fn percentage_with_empty_value(current: u64, total: u64, empty_value: u64) -> u6
         .min(100)
 }
 
+/// 计算两次累计 CPU 计数器之间的使用率；计数器回退或没有进展时返回空值。
+fn calculate_cpu_percent(previous: (u64, u64), current: (u64, u64)) -> Option<f64> {
+    let total_delta = current.0.checked_sub(previous.0)?;
+    let idle_delta = current.1.checked_sub(previous.1)?;
+    if total_delta == 0 || idle_delta > total_delta {
+        return None;
+    }
+    let used_delta = total_delta - idle_delta;
+    Some((used_delta as f64 / total_delta as f64 * 100.0).clamp(0.0, 100.0))
+}
+
+/// 按远端 `uname` 结果选择监控采集脚本。
+fn monitor_command_for_platform(platform: &str) -> Option<&'static str> {
+    match platform {
+        "linux" | "gnu/linux" => Some(LINUX_MONITOR_COMMAND),
+        "darwin" => Some(MACOS_MONITOR_COMMAND),
+        "freebsd" => Some(FREEBSD_MONITOR_COMMAND),
+        "dragonfly" => Some(DRAGONFLY_MONITOR_COMMAND),
+        "openbsd" => Some(OPENBSD_MONITOR_COMMAND),
+        "netbsd" => Some(NETBSD_MONITOR_COMMAND),
+        _ => None,
+    }
+}
+
+/// 解析由受限远端采集命令生成的制表符记录。
+fn parse_remote_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, SshError> {
+    if output.len() > MAX_SERVER_MONITOR_OUTPUT_BYTES {
+        return Err(SshError::MonitorUnavailable(
+            "监控结果超过大小限制".to_string(),
+        ));
+    }
+
+    if output
+        .iter()
+        .copied()
+        .find(|byte| !byte.is_ascii_whitespace())
+        == Some(b'{')
+    {
+        return parse_windows_monitor_output(output);
+    }
+
+    let text = String::from_utf8_lossy(output);
+    let mut platform = None;
+    let mut cpu_percent = None;
+    let mut cpu_ticks = None;
+    let mut memory = None;
+    let mut processes = Vec::new();
+
+    for line in text.lines() {
+        let mut fields = line.splitn(5, '\t');
+        match fields.next() {
+            Some("OS") => {
+                platform = fields
+                    .next()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            }
+            Some("CPU") => {
+                cpu_percent = fields.next().and_then(|value| value.parse::<f64>().ok());
+            }
+            Some("CPUSTAT") => {
+                let total = fields.next().and_then(|value| value.parse::<u64>().ok());
+                let idle = fields.next().and_then(|value| value.parse::<u64>().ok());
+                cpu_ticks = total.zip(idle);
+            }
+            Some("MEM") => {
+                let total = fields.next().and_then(|value| value.parse::<u64>().ok());
+                let used = fields.next().and_then(|value| value.parse::<u64>().ok());
+                memory = total.zip(used);
+            }
+            Some("PROC") => {
+                let pid = fields.next().and_then(|value| value.parse::<u64>().ok());
+                let cpu = fields.next().and_then(|value| value.parse::<f64>().ok());
+                let memory_bytes = fields.next().and_then(|value| value.parse::<u64>().ok());
+                let name = fields
+                    .next()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty());
+                let (pid, cpu_percent, memory_bytes, name) = (pid, cpu, memory_bytes, name);
+                if pid.is_none()
+                    || cpu_percent.is_none()
+                    || memory_bytes.is_none()
+                    || name.is_none()
+                {
+                    return Err(SshError::MonitorUnavailable(
+                        "远端返回格式无效的进程记录".to_string(),
+                    ));
+                }
+                let process = ServerProcess {
+                    pid: pid.unwrap(),
+                    name: name.unwrap().chars().take(256).collect(),
+                    cpu_percent: cpu_percent.unwrap(),
+                    memory_bytes: memory_bytes.unwrap(),
+                };
+                if process.pid == 0
+                    || !process.cpu_percent.is_finite()
+                    || !(0.0..=10_000.0).contains(&process.cpu_percent)
+                    || process.name.is_empty()
+                {
+                    return Err(SshError::MonitorUnavailable(
+                        "远端返回超出范围的进程数据".to_string(),
+                    ));
+                }
+                processes.push(process);
+            }
+            _ => {}
+        }
+    }
+
+    let platform =
+        platform.ok_or_else(|| SshError::MonitorUnavailable("无法识别远端操作系统".to_string()))?;
+    let (memory_total_bytes, memory_used_bytes) =
+        memory.ok_or_else(|| SshError::MonitorUnavailable("远端未返回有效内存数据".to_string()))?;
+    let mut sample = RemoteMonitorSample {
+        platform,
+        cpu_percent,
+        cpu_ticks,
+        memory_total_bytes,
+        memory_used_bytes,
+        processes,
+    };
+    validate_remote_monitor_sample(&mut sample)?;
+    Ok(sample)
+}
+
+/// 解析 Windows PowerShell 输出的 JSON 监控结果。
+fn parse_windows_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, SshError> {
+    let value: serde_json::Value = serde_json::from_slice(output)
+        .map_err(|_| SshError::MonitorUnavailable("Windows 监控结果格式无效".to_string()))?;
+    let cpu_percent = value.get("cpuPercent").and_then(serde_json::Value::as_f64);
+    let memory_total_bytes = value
+        .get("memoryTotalBytes")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| SshError::MonitorUnavailable("Windows 内存总量无效".to_string()))?;
+    let memory_used_bytes = value
+        .get("memoryUsedBytes")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| SshError::MonitorUnavailable("Windows 内存使用量无效".to_string()))?;
+    let processes = value
+        .get("processes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| SshError::MonitorUnavailable("Windows 进程列表无效".to_string()))?
+        .iter()
+        .map(|process| {
+            Ok(ServerProcess {
+                pid: process
+                    .get("pid")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        SshError::MonitorUnavailable("Windows 进程 PID 无效".to_string())
+                    })?,
+                name: process
+                    .get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        SshError::MonitorUnavailable("Windows 进程名称无效".to_string())
+                    })?
+                    .chars()
+                    .take(256)
+                    .collect(),
+                cpu_percent: process
+                    .get("cpuPercent")
+                    .and_then(serde_json::Value::as_f64)
+                    .ok_or_else(|| {
+                        SshError::MonitorUnavailable("Windows 进程 CPU 数据无效".to_string())
+                    })?,
+                memory_bytes: process
+                    .get("memoryBytes")
+                    .and_then(serde_json::Value::as_u64)
+                    .ok_or_else(|| {
+                        SshError::MonitorUnavailable("Windows 进程内存数据无效".to_string())
+                    })?,
+            })
+        })
+        .collect::<Result<Vec<_>, SshError>>()?;
+
+    let mut sample = RemoteMonitorSample {
+        platform: "windows".to_string(),
+        cpu_percent,
+        cpu_ticks: None,
+        memory_total_bytes,
+        memory_used_bytes,
+        processes,
+    };
+    validate_remote_monitor_sample(&mut sample)?;
+    Ok(sample)
+}
+
+/// 校验不同系统采集器输出的通用资源范围，并按 CPU 占用排序。
+fn validate_remote_monitor_sample(sample: &mut RemoteMonitorSample) -> Result<(), SshError> {
+    if sample.memory_total_bytes == 0 || sample.memory_used_bytes > sample.memory_total_bytes {
+        return Err(SshError::MonitorUnavailable("远端内存数据无效".to_string()));
+    }
+    if sample
+        .cpu_percent
+        .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+    {
+        return Err(SshError::MonitorUnavailable(
+            "远端 CPU 数据无效".to_string(),
+        ));
+    }
+    sample.processes.retain(|process| {
+        process.pid > 0
+            && process.cpu_percent.is_finite()
+            && (0.0..=10_000.0).contains(&process.cpu_percent)
+            && !process.name.is_empty()
+    });
+    let mut processes_by_pid = HashMap::<u64, ServerProcess>::new();
+    for process in sample.processes.drain(..) {
+        processes_by_pid
+            .entry(process.pid)
+            .and_modify(|existing| {
+                if process.cpu_percent > existing.cpu_percent {
+                    existing.cpu_percent = process.cpu_percent;
+                    existing.name.clone_from(&process.name);
+                }
+                existing.memory_bytes = existing.memory_bytes.max(process.memory_bytes);
+            })
+            .or_insert(process);
+    }
+    sample.processes = processes_by_pid.into_values().collect();
+    sample.processes.sort_by(|left, right| {
+        right
+            .cpu_percent
+            .total_cmp(&left.cpu_percent)
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    sample.processes.truncate(MAX_SERVER_MONITOR_PROCESSES);
+    Ok(())
+}
+
+/// 比较两个连接配置是否可安全复用已认证会话。
+fn same_connection_configuration(left: &SshConnection, right: &SshConnection) -> bool {
+    left.host == right.host
+        && left.port == right.port
+        && left.username == right.username
+        && left.auth_method == right.auth_method
+        && left.host_key_fingerprint == right.host_key_fingerprint
+        && left.password == right.password
+}
+
+/// 在不破坏活动会话的情况下保存连接；只有认证参数实质变化时才释放旧资源。
+fn save_ssh_connection(state: &SshState, connection: SshConnection) -> Result<String, SshError> {
+    validate_connection(&connection)?;
+    let id = connection.id.clone();
+    let previous = state.connections.read().unwrap().get(&id).cloned();
+    if previous
+        .as_ref()
+        .is_some_and(|previous| same_connection_configuration(previous, &connection))
+    {
+        return Ok(id);
+    }
+
+    close_terminals_for_connection(state, &id);
+    remove_cached_session(state, &id);
+    remove_monitor_session(state, &id);
+    clear_monitor_cache(state, &id);
+    state
+        .directory_size_fast_path_support
+        .lock()
+        .unwrap()
+        .remove(&id);
+    state
+        .connections
+        .write()
+        .unwrap()
+        .insert(id.clone(), connection);
+    Ok(id)
+}
+
+/// 通过新建 SSH 认证会话执行固定只读采集脚本，不影响文件和终端主会话。
+fn execute_monitor_command(
+    _state: &SshState,
+    _connection_id: &str,
+    session: &Session,
+    command: &str,
+) -> Result<RemoteCommandOutput, SshError> {
+    session.set_timeout(SERVER_MONITOR_COMMAND_TIMEOUT_MS);
+    let result = (|| {
+        let mut channel = session
+            .channel_session()
+            .map_err(|error| SshError::MonitorUnavailable(format!("无法打开监控通道：{error}")))?;
+        channel
+            .handle_extended_data(ExtendedData::Merge)
+            .map_err(|error| SshError::MonitorUnavailable(format!("无法读取监控通道：{error}")))?;
+        channel.exec(command).map_err(|error| {
+            SshError::MonitorUnavailable(format!("远端拒绝执行监控命令：{error}"))
+        })?;
+
+        let mut output = Vec::new();
+        let mut buffer = [0_u8; 8192];
+        loop {
+            match channel.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    if output.len().saturating_add(read) > MAX_SERVER_MONITOR_OUTPUT_BYTES {
+                        let _ = channel.close();
+                        return Err(SshError::MonitorUnavailable(
+                            "监控结果超过大小限制".to_string(),
+                        ));
+                    }
+                    output.extend_from_slice(&buffer[..read]);
+                }
+                Err(error) => {
+                    let _ = channel.close();
+                    return Err(SshError::MonitorUnavailable(format!(
+                        "读取远端监控结果失败：{error}"
+                    )));
+                }
+            }
+        }
+        channel.wait_close().map_err(|error| {
+            SshError::MonitorUnavailable(format!("等待远端监控命令结束失败：{error}"))
+        })?;
+        let exit_status = channel.exit_status().map_err(|error| {
+            SshError::MonitorUnavailable(format!("读取远端监控命令状态失败：{error}"))
+        })?;
+        Ok(RemoteCommandOutput {
+            bytes: output,
+            exit_status,
+        })
+    })();
+    session.set_timeout(DEFAULT_TIMEOUT_MS as u32);
+    result
+}
+
+/// 为当前配置创建或复用独立的只读监控 SSH 会话。
+fn monitor_session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshError> {
+    let connection = connection_info(state, id, true)?;
+    if let Some(session) = state.monitor_sessions.lock().unwrap().get(id).cloned() {
+        let healthy = session
+            .lock()
+            .map(|session| match session.keepalive_send() {
+                Ok(_) => true,
+                Err(error) => matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN)),
+            })
+            .unwrap_or(false);
+        if healthy {
+            return Ok(session);
+        }
+        remove_monitor_session(state, id);
+    }
+    let session = open_authenticated_session(&connection)
+        .map_err(|error| SshError::MonitorUnavailable(format!("无法建立监控会话：{error}")))?;
+    let session = Arc::new(Mutex::new(session));
+    state
+        .monitor_sessions
+        .lock()
+        .unwrap()
+        .insert(id.to_string(), Arc::clone(&session));
+    Ok(session)
+}
+
+/// 读取远端服务器 CPU、内存和前 50 个进程的资源快照。
+#[tauri::command]
+pub async fn get_server_monitor_snapshot(
+    state: State<'_, SshState>,
+    id: String,
+) -> Result<ServerMonitorSnapshot, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || {
+        let operation_lock = connection_operation_lock(&state, &id);
+        let _operation = operation_lock.lock().unwrap();
+        if let Some((collected_at, snapshot)) = state
+            .monitor_snapshot_cache
+            .lock()
+            .unwrap()
+            .get(&id)
+            .cloned()
+        {
+            if collected_at.elapsed() < SERVER_MONITOR_MIN_INTERVAL {
+                return Ok(snapshot);
+            }
+        }
+        let sample = collect_remote_monitor_sample(&state, &id)?;
+        let snapshot = ServerMonitorSnapshot {
+            platform: sample.platform,
+            cpu_percent: sample.cpu_percent,
+            memory_total_bytes: sample.memory_total_bytes,
+            memory_used_bytes: sample.memory_used_bytes,
+            processes: sample.processes,
+            collected_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis(),
+        };
+        state
+            .monitor_snapshot_cache
+            .lock()
+            .unwrap()
+            .insert(id, (Instant::now(), snapshot.clone()));
+        Ok(snapshot)
+    })
+    .await
+}
+
+/// 按当前操作系统选择有界的远端只读资源采集器。
+fn collect_remote_monitor_sample(
+    state: &SshState,
+    connection_id: &str,
+) -> Result<RemoteMonitorSample, SshError> {
+    let session = monitor_session_for(state, connection_id)?;
+    let session = session
+        .lock()
+        .map_err(|_| SshError::MonitorUnavailable("SSH 会话锁已损坏".to_string()))?;
+    let platform = execute_monitor_command(state, connection_id, &session, "uname -s")
+        .ok()
+        .filter(|output| output.exit_status == 0)
+        .map(|output| {
+            String::from_utf8_lossy(&output.bytes)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default();
+
+    let output = if platform.is_empty()
+        || platform.starts_with("mingw")
+        || platform.starts_with("msys")
+        || platform.starts_with("cygwin")
+        || platform.starts_with("windows")
+    {
+        let encoded_script: Vec<u8> = WINDOWS_MONITOR_SCRIPT
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let encoded = BASE64_STANDARD.encode(encoded_script);
+        let command =
+            format!("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand {encoded}");
+        let output = execute_monitor_command(state, connection_id, &session, &command)?;
+        if output.exit_status != 0 {
+            let message = String::from_utf8_lossy(&output.bytes);
+            let details = message.trim();
+            return Err(SshError::MonitorUnavailable(if details.is_empty() {
+                "远端未提供系统识别命令或 PowerShell，无法采集监控数据".to_string()
+            } else {
+                format!(
+                    "Windows 监控命令执行失败：{}",
+                    details.chars().take(240).collect::<String>()
+                )
+            }));
+        }
+        if String::from_utf8_lossy(&output.bytes).trim().is_empty() {
+            return Err(SshError::MonitorUnavailable(
+                "远端监控命令未返回数据".to_string(),
+            ));
+        }
+        output
+    } else {
+        let command = match monitor_command_for_platform(&platform) {
+            Some(command) => command,
+            None => {
+                return Err(SshError::MonitorUnavailable(if platform.is_empty() {
+                    "远端未提供系统识别命令或 PowerShell".to_string()
+                } else {
+                    format!("暂不支持远端操作系统：{platform}")
+                }));
+            }
+        };
+        execute_monitor_command(state, connection_id, &session, command)?
+    };
+
+    if output.exit_status != 0 {
+        return Err(SshError::MonitorUnavailable(
+            "远端监控命令执行失败".to_string(),
+        ));
+    }
+    let mut sample = parse_remote_monitor_output(&output.bytes)?;
+    if let Some(current) = sample.cpu_ticks {
+        let previous = state
+            .monitor_cpu_samples
+            .lock()
+            .unwrap()
+            .insert(connection_id.to_string(), current);
+        sample.cpu_percent = previous.and_then(|previous| calculate_cpu_percent(previous, current));
+    }
+    Ok(sample)
+}
+
 impl DirectorySizeScan {
     /// 创建包含根目录的初始扫描任务。
     fn new(remote_path: &str, cancellation: Arc<AtomicBool>, wake: Arc<Condvar>) -> Self {
@@ -651,6 +1280,34 @@ fn connection_info(
         .filter(|connection| !require_connected || connection.connected)
         .cloned()
         .ok_or(SshError::ConnectionNotFound)
+}
+
+/// 获取单连接生命周期锁，锁对象在连接并发期间保持稳定。
+fn connection_operation_lock(state: &SshState, id: &str) -> Arc<Mutex<()>> {
+    Arc::clone(
+        state
+            .connection_operation_locks
+            .lock()
+            .unwrap()
+            .entry(id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(()))),
+    )
+}
+
+/// 移除独立监控 SSH 会话，不触碰终端与 SFTP 的主连接。
+fn remove_monitor_session(state: &SshState, id: &str) {
+    let session = state.monitor_sessions.lock().unwrap().remove(id);
+    if let Some(session) = session {
+        if let Ok(session) = session.lock() {
+            let _ = session.disconnect(None, "客户端关闭监控会话", None);
+        }
+    }
+}
+
+/// 清理连接对应的 CPU 基线和采样缓存。
+fn clear_monitor_cache(state: &SshState, id: &str) {
+    state.monitor_cpu_samples.lock().unwrap().remove(id);
+    state.monitor_snapshot_cache.lock().unwrap().remove(id);
 }
 
 /// 对主机指纹执行不带尾部填充的 Base64 编码。
@@ -1219,6 +1876,7 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     remove_directory_size_worker_pool(state, id);
     close_terminals_for_connection(state, id);
     if was_connected {
+        clear_monitor_cache(state, id);
         emit_event(
             &state.app_handle,
             "ssh-disconnected",
@@ -2546,7 +3204,7 @@ fn test_sftp_connection_blocking(
     })
 }
 
-/// 保存或覆盖一条连接配置，并清理同 ID 的旧会话。
+/// 保存或覆盖一条连接配置；配置未变化时保留同 ID 的活动会话。
 ///
 /// # Arguments
 ///
@@ -2579,6 +3237,8 @@ pub fn add_ssh_connection(
     auth_method: Option<String>,
     host_key_fingerprint: Option<String>,
 ) -> Result<String, SshError> {
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let connection = SshConnection {
         id: id.clone(),
         host,
@@ -2590,20 +3250,7 @@ pub fn add_ssh_connection(
         connected: false,
     };
 
-    validate_connection(&connection)?;
-    close_terminals_for_connection(&state, &id);
-    remove_cached_session(&state, &id);
-    state
-        .directory_size_fast_path_support
-        .lock()
-        .unwrap()
-        .remove(&id);
-    state
-        .connections
-        .write()
-        .unwrap()
-        .insert(id.clone(), connection);
-    Ok(id)
+    save_ssh_connection(&state, connection)
 }
 
 /// 更新连接配置中的已确认主机指纹。
@@ -2686,12 +3333,34 @@ pub async fn connect_ssh(
 }
 
 fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, SshError> {
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let connection = connection_info(&state, &id, false)?;
     validate_connection(&connection)?;
-    close_terminals_for_connection(&state, &id);
-    remove_cached_session(&state, &id);
-    if let Some(item) = state.connections.write().unwrap().get_mut(&id) {
-        item.connected = false;
+    if let Some(session) = state.connection_pool.read().unwrap().get(&id).cloned() {
+        let healthy = session
+            .lock()
+            .map(|session| session.keepalive_send().is_ok())
+            .unwrap_or(false);
+        if healthy
+            && state
+                .connections
+                .read()
+                .unwrap()
+                .get(&id)
+                .is_some_and(|item| item.connected)
+        {
+            let host_key = session
+                .lock()
+                .map_err(|_| SshError::ConnectionFailed("会话锁已损坏".to_string()))
+                .and_then(|session| host_key_info(&session))?;
+            return Ok(ConnectResult {
+                connected: true,
+                requires_host_key_confirmation: false,
+                host_key,
+            });
+        }
+        remove_cached_session(&state, &id);
     }
     let opened = open_session(&connection)?;
     if connection.host_key_fingerprint.is_none() {
@@ -2712,6 +3381,7 @@ fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, Ss
     if let Some(item) = state.connections.write().unwrap().get_mut(&id) {
         item.connected = true;
     }
+    clear_monitor_cache(&state, &id);
 
     Ok(ConnectResult {
         connected: true,
@@ -2753,12 +3423,16 @@ pub async fn disconnect_ssh(state: State<'_, SshState>, id: String) -> Result<bo
 }
 
 fn disconnect_ssh_blocking(state: SshState, id: String) -> Result<bool, SshError> {
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let _ = connection_info(&state, &id, false)?;
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
+    remove_monitor_session(&state, &id);
     if let Some(connection) = state.connections.write().unwrap().get_mut(&id) {
         connection.connected = false;
     }
+    clear_monitor_cache(&state, &id);
     Ok(true)
 }
 
@@ -2831,13 +3505,17 @@ pub async fn remove_ssh_connection(
 }
 
 fn remove_ssh_connection_blocking(state: SshState, id: String) -> Result<bool, SshError> {
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     close_terminals_for_connection(&state, &id);
     remove_cached_session(&state, &id);
+    remove_monitor_session(&state, &id);
     state
         .directory_size_fast_path_support
         .lock()
         .unwrap()
         .remove(&id);
+    clear_monitor_cache(&state, &id);
     Ok(state.connections.write().unwrap().remove(&id).is_some())
 }
 
@@ -4585,6 +5263,119 @@ fn uuid_fallback() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_bounded_server_monitor_output() {
+        let output = concat!(
+            "OS\tlinux\n",
+            "CPUSTAT\t1000\t250\n",
+            "MEM\t8192\t4096\n",
+            "PROC\t42\t12.5\t2048\tworker\n",
+            "PROC\t7\t0.5\t1024\tinit\n"
+        );
+
+        let sample = parse_remote_monitor_output(output.as_bytes()).expect("采集结果应可解析");
+
+        assert_eq!(sample.platform, "linux");
+        assert_eq!(sample.cpu_ticks, Some((1000, 250)));
+        assert_eq!(sample.cpu_percent, None);
+        assert_eq!(sample.memory_total_bytes, 8192);
+        assert_eq!(sample.memory_used_bytes, 4096);
+        assert_eq!(sample.processes.len(), 2);
+        assert_eq!(sample.processes[0].pid, 42);
+        assert_eq!(sample.processes[0].name, "worker");
+        assert_eq!(sample.processes[0].memory_bytes, 2048);
+    }
+
+    #[test]
+    fn deduplicates_monitor_processes_by_pid_using_highest_cpu_sample() {
+        let output = concat!(
+            "OS\tlinux\n",
+            "CPU\t12.0\n",
+            "MEM\t8192\t4096\n",
+            "PROC\t42\t2.0\t8192\tworker\n",
+            "PROC\t42\t8.0\t4096\tworker\n",
+            "PROC\t7\t1.0\t1024\tinit\n"
+        );
+
+        let sample = parse_remote_monitor_output(output.as_bytes()).expect("采集结果应可解析");
+
+        assert_eq!(sample.processes.len(), 2);
+        assert_eq!(sample.processes[0].pid, 42);
+        assert_eq!(sample.processes[0].cpu_percent, 8.0);
+        assert_eq!(sample.processes[0].memory_bytes, 8192);
+    }
+
+    #[test]
+    fn selects_a_platform_specific_monitor_for_each_bsd_family() {
+        let freebsd = monitor_command_for_platform("freebsd").expect("FreeBSD 应受支持");
+        let dragonfly = monitor_command_for_platform("dragonfly").expect("DragonFly 应受支持");
+        let openbsd = monitor_command_for_platform("openbsd").expect("OpenBSD 应受支持");
+        let netbsd = monitor_command_for_platform("netbsd").expect("NetBSD 应受支持");
+
+        assert!(freebsd.contains("vm.stats.vm.v_inactive_count"));
+        assert!(dragonfly.contains("vmstat | awk"));
+        assert!(openbsd.contains("sysctl -n hw.physmem)"));
+        assert!(netbsd.contains("hw.physmem64"));
+        assert_ne!(freebsd, dragonfly);
+        assert_ne!(openbsd, netbsd);
+        assert!(monitor_command_for_platform("unknown").is_none());
+    }
+
+    #[test]
+    fn identifies_unchanged_connection_configuration_for_session_reuse() {
+        let connection = SshConnection {
+            id: "server-1".to_string(),
+            host: "example.test".to_string(),
+            port: 22,
+            username: "operator".to_string(),
+            auth_method: "password".to_string(),
+            host_key_fingerprint: Some("SHA256:fingerprint".to_string()),
+            password: "secret".to_string(),
+            connected: true,
+        };
+        let mut same_connection = connection.clone();
+        same_connection.connected = false;
+
+        assert!(same_connection_configuration(&connection, &same_connection));
+
+        same_connection.password = "changed".to_string();
+        assert!(!same_connection_configuration(
+            &connection,
+            &same_connection
+        ));
+    }
+
+    #[test]
+    fn rejects_incomplete_or_out_of_range_server_monitor_output() {
+        let missing_memory = b"OS\tlinux\nCPU\t15.0\n";
+        assert!(parse_remote_monitor_output(missing_memory).is_err());
+
+        let invalid_memory = b"OS\tlinux\nCPU\t15.0\nMEM\t100\t101\n";
+        assert!(parse_remote_monitor_output(invalid_memory).is_err());
+
+        let invalid_process = b"OS\tlinux\nCPU\t15.0\nMEM\t100\t50\nPROC\tbad\t2\t3\tworker\n";
+        assert!(parse_remote_monitor_output(invalid_process).is_err());
+    }
+
+    #[test]
+    fn calculates_cpu_usage_from_monotonic_counter_deltas() {
+        assert_eq!(calculate_cpu_percent((100, 30), (200, 80)), Some(50.0));
+        assert_eq!(calculate_cpu_percent((100, 30), (100, 30)), None);
+        assert_eq!(calculate_cpu_percent((200, 80), (100, 30)), None);
+    }
+
+    #[test]
+    fn parses_windows_json_monitor_output_and_sorts_processes_by_cpu() {
+        let output = br#"{"platform":"windows","cpuPercent":22.5,"memoryTotalBytes":8000,"memoryUsedBytes":3000,"processes":[{"pid":9,"name":"idle-worker","cpuPercent":1.5,"memoryBytes":600},{"pid":4,"name":"busy-worker","cpuPercent":8.25,"memoryBytes":1200}]}"#;
+
+        let sample = parse_remote_monitor_output(output).expect("Windows 监控结果应可解析");
+
+        assert_eq!(sample.platform, "windows");
+        assert_eq!(sample.cpu_percent, Some(22.5));
+        assert_eq!(sample.processes[0].pid, 4);
+        assert_eq!(sample.processes[0].name, "busy-worker");
+    }
 
     #[test]
     fn encodes_sha256_fingerprint_bytes_as_base64() {

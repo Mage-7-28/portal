@@ -189,6 +189,8 @@ const waitForNextPaint = () => new Promise(resolve => {
  * @param {(connection: ConnectionProfile) => void|Promise<void>} [props.onOpenTerminal] - 文件页请求打开终端标签的回调。
  * @param {(connection: ConnectionProfile) => void} [props.onSessionConnected] - 文件会话连接成功后的回调。
  * @param {(connectionId: string) => void} [props.onSessionClose] - 文件会话主动关闭后的回调。
+ * @param {(connectionId: string) => void} [props.onWorkspaceClose] - 未连接时关闭服务器工作窗口的回调。
+ * @param {string} [props.sessionCloseLabel='关闭标签'] - 未连接状态下的关闭操作文案。
  * @param {(connectionId: string) => void} [props.onConnectionDeleted] - 首页删除连接配置后的回调。
  * @param {(connection: ConnectionProfile) => void} [props.onConnectionSaved] - 首页保存连接配置后的回调。
  * @returns {JSX.Element} 连接列表、密码弹窗或已连接的文件浏览器视图。
@@ -202,6 +204,8 @@ function FileBrowserPanel({
   onOpenTerminal,
   onSessionConnected,
   onSessionClose,
+  onWorkspaceClose,
+  sessionCloseLabel = '关闭标签',
   onConnectionDeleted,
   onConnectionSaved
 }) {
@@ -1524,9 +1528,9 @@ function FileBrowserPanel({
                 <Button
                   type="text"
                   icon={<AppIcon name="close" />}
-                  onClick={() => onSessionClose?.(connection?.id || '')}
+                  onClick={() => (onWorkspaceClose || onSessionClose)?.(connection?.id || '')}
                 >
-                  关闭标签
+                  {sessionCloseLabel}
                 </Button>
               </div>
             </>

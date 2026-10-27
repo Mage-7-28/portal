@@ -25,9 +25,14 @@ export const AntdThemeConfig = {
     fontFamily: GlobalFontFamily,
     fontSize: 14,
     fontSizeSM: 13,
+    lineHeight: 1.4,
     controlHeight: 32,
     controlHeightSM: 28,
-    lineHeight: 1.4
+    padding: 12,
+    paddingSM: 8,
+    margin: 14,
+    marginSM: 8,
+    wireframe: false
   },
   algorithm: [ theme.darkAlgorithm, theme.compactAlgorithm ],
   components: {
@@ -36,10 +41,31 @@ export const AntdThemeConfig = {
     },
     Card: {
       headerBg: THEME_BG_SECONDARY,
-      actionsBg: THEME_BG_SECONDARY
+      actionsBg: THEME_BG_SECONDARY,
+      paddingLG: 14,
+      paddingSM: 10
     },
     Modal: {
       titleFontSize: 15
+    },
+    Table: {
+      headerBg: THEME_BG_SECONDARY,
+      rowHoverBg: 'rgba(255, 255, 255, 0.045)',
+      cellPaddingBlockSM: 6,
+      cellPaddingInlineSM: 8
+    },
+    Splitter: {
+      splitBarSize: 3,
+      splitBarDraggableSize: 12,
+      splitTriggerSize: 12
+    },
+    Statistic: {
+      titleFontSize: 12,
+      contentFontSize: 21
+    },
+    Progress: {
+      defaultColor: THEME_PRIMARY_COLOR_FALLBACK,
+      remainingColor: 'rgba(255, 255, 255, 0.08)'
     }
   }
 }

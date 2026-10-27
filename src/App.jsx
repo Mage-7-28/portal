@@ -21,15 +21,18 @@ import FileBrowserPanel from './components/FileBrowserPanel'
 import ProgressMask from './components/ProgressMask'
 import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
-import WorkspaceTabBar, { CONNECTIONS_WORKSPACE_ID } from './components/WorkspaceTabBar.jsx'
-import { closeTerminalWindows } from './utils/terminalWindow.js'
+import {
+  closeServerWorkspaceWindow,
+  closeServerWorkspaceWindows,
+  openServerWorkspaceWindow,
+  updateServerWorkspaceWindow
+} from './utils/terminalWindow.js'
+import ServerWorkspaceWindow from './components/ServerWorkspaceWindow.jsx'
+import { getServerWorkspaceParams } from './utils/serverWorkspace.js'
 import packageInfo from '../package.json'
 
 // 终端依赖体积较大，只有用户打开终端标签或独立终端窗口时才加载。
 const LazyTerminalWindow = lazy(() => import('./components/TerminalWindow.jsx'))
-const LazyTerminalView = lazy(() => import('./components/TerminalModal.jsx').then(module => ({
-  default: module.TerminalView
-})))
 
 /**
  * 终端异步模块加载期间的轻量占位，避免首屏同步引入 xterm。
@@ -70,45 +73,6 @@ const getTerminalWindowParams = () => {
 }
 
 /**
- * 创建工作区标签的唯一 ID。
- *
- * @param {string} prefix - 标签类型前缀。
- * @returns {string} 当前前端进程内唯一的标签 ID。
- */
-const createWorkspaceTabId = (prefix) => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${ prefix }-${ crypto.randomUUID() }`
-  }
-  return `${ prefix }-${ Date.now() }-${ Math.random().toString(16).slice(2) }`
-}
-
-/**
- * 返回适合工作区标签展示的连接名称。
- *
- * @param {Object} connection - SSH 连接配置。
- * @returns {string} 用户名称、端点或通用占位名称。
- */
-const getWorkspaceConnectionName = connection => connection?.name
-  || (connection?.username && connection?.host ? `${ connection.username }@${ connection.host }` : '')
-  || connection?.host
-  || '服务器'
-
-/**
- * 提取终端标签展示所需的连接字段。
- * 终端后端只使用连接 ID，标签状态不需要持有密文凭据或其他持久化字段。
- *
- * @param {Object} connection - 已连接服务器的配置。
- * @returns {{id: string, name: string, host: string, port: number, username: string}} 终端标签展示信息。
- */
-const getTerminalConnectionSummary = connection => ({
-  id: connection?.id || '',
-  name: connection?.name || '',
-  host: connection?.host || '',
-  port: Number(connection?.port) || 22,
-  username: connection?.username || ''
-})
-
-/**
  * 主窗口应用壳，集中管理菜单事件和当前连接页面。
  * 文件操作细节由 FileBrowserPanel 负责，本组件只协调应用级状态。
  *
@@ -131,13 +95,6 @@ function MainApp() {
   const [ checkingUpdate, setCheckingUpdate ] = useState(false)
   // 防止重复打开项目仓库时连续触发多个外部窗口。
   const [ openingRepository, setOpeningRepository ] = useState(false)
-  // 文件与终端工作区统一保存在主窗口，切换标签时保持各自组件和远程会话挂载。
-  const [ workspace, setWorkspace ] = useState({
-    tabs: [],
-    activeTabId: CONNECTIONS_WORKSPACE_ID
-  })
-  // 每个服务器的终端序号独立递增，让同一连接的多个终端名称易于区分。
-  const terminalSequenceRef = useRef(new Map())
   // 防止退出确认框重复打开；useRef 不触发渲染，适合处理竞态事件。
   const exitConfirmingRef = useRef(false)
   // 标记退出命令是否已经提交，避免关闭事件再次进入退出流程。
@@ -146,7 +103,7 @@ function MainApp() {
   const updateCheckStartedRef = useRef(false)
 
   /**
-   * 防止重复弹出确认框，并在退出前释放所有独立终端窗口。
+   * 防止重复弹出确认框，并在退出前释放所有服务器工作窗口。
    *
    * @returns {Promise<void>} 用户确认后退出应用，取消或失败时完成清理。
    */
@@ -164,7 +121,7 @@ function MainApp() {
       if (!confirmed) return
 
       exitRequestedRef.current = true
-      await closeTerminalWindows().catch(() => undefined)
+      await closeServerWorkspaceWindows().catch(() => undefined)
       await invoke('exit_application')
     } catch (error) {
       exitRequestedRef.current = false
@@ -276,154 +233,31 @@ function MainApp() {
   }, [openingRepository])
 
   /**
-   * 打开或聚焦指定服务器的文件工作区。
+   * 打开或聚焦指定连接配置对应的服务器工作窗口。
    *
-   * 同一连接配置只保留一个文件标签；再次双击会触发断线标签重连，已经连接时
-   * 只切换到现有标签，不会覆盖当前目录状态。
+   * 同一连接配置复用现有窗口，不同配置分别创建窗口。
    *
    * @param {Object} connection - 用户从连接列表选择的配置。
-   * @returns {void}
+   * @returns {Promise<void>} 窗口创建或聚焦完成后的 Promise。
    */
-  const openConnectionWorkspace = useCallback(connection => {
-    if (!connection?.id) return
-    const tabId = `workspace-files-${ connection.id }`
-    setWorkspace(current => {
-      const existing = current.tabs.find(tab => tab.id === tabId)
-      let nextTabs
-      if (existing) {
-        nextTabs = current.tabs.map(tab => tab.id === tabId
-          ? {
-            ...tab,
-            connection: { ...tab.connection, ...connection },
-            title: `文件 · ${ getWorkspaceConnectionName(connection) }`,
-            tooltip: `${ connection.username }@${ connection.host }:${ connection.port }`,
-            connectRequestId: tab.connectRequestId + 1
-          }
-          : tab)
-      } else {
-        nextTabs = [
-          ...current.tabs,
-          {
-            id: tabId,
-            type: 'files',
-            icon: 'folderOpen',
-            closable: true,
-            connectionId: connection.id,
-            connection: { ...connection },
-            title: `文件 · ${ getWorkspaceConnectionName(connection) }`,
-            tooltip: `${ connection.username }@${ connection.host }:${ connection.port }`,
-            connectRequestId: 1
-          }
-        ]
-      }
-      return { tabs: nextTabs, activeTabId: tabId }
-    })
-  }, [])
-
-  /**
-   * 为当前服务器创建一个新的终端工作区。
-   *
-   * @param {Object} connection - 已连接服务器的非敏感展示配置和连接 ID。
-   * @returns {void}
-   */
-  const openTerminalWorkspace = useCallback(connection => {
-    if (!connection?.id) return
-    const previousSequence = terminalSequenceRef.current.get(connection.id) || 0
-    const sequence = previousSequence + 1
-    terminalSequenceRef.current.set(connection.id, sequence)
-    const tabId = createWorkspaceTabId(`workspace-terminal-${ connection.id }`)
-    const connectionName = getWorkspaceConnectionName(connection)
-    const terminalConnection = getTerminalConnectionSummary(connection)
-    setWorkspace(current => ({
-      tabs: [
-        ...current.tabs,
-        {
-          id: tabId,
-          type: 'terminal',
-          icon: 'terminal',
-          closable: true,
-          connectionId: connection.id,
-          connection: terminalConnection,
-          sequence,
-          title: `终端 ${ sequence } · ${ connectionName }`,
-          tooltip: `终端 ${ sequence } · ${ connection.username }@${ connection.host }:${ connection.port }`
-        }
-      ],
-      activeTabId: tabId
-    }))
-  }, [])
-
-  /**
-   * 从工作区移除一个标签；关闭文件标签时一并释放该连接的终端标签。
-   *
-   * @param {string} tabId - 要关闭的工作区标签 ID。
-   * @returns {void}
-   */
-  const closeWorkspaceTab = useCallback(tabId => {
-    setWorkspace(current => {
-      const closingTab = current.tabs.find(tab => tab.id === tabId)
-      if (!closingTab) return current
-      const removedIds = new Set([tabId])
-      if (closingTab.type === 'files') {
-        current.tabs.forEach(tab => {
-          if (tab.connectionId === closingTab.connectionId) removedIds.add(tab.id)
-        })
-      }
-      const nextTabs = current.tabs.filter(tab => !removedIds.has(tab.id))
-      let activeTabId = current.activeTabId
-      if (removedIds.has(current.activeTabId)) {
-        const relatedFileTab = closingTab.type === 'terminal'
-          ? nextTabs.find(tab => tab.type === 'files' && tab.connectionId === closingTab.connectionId)
-          : null
-        activeTabId = relatedFileTab?.id || CONNECTIONS_WORKSPACE_ID
-      }
-      return { tabs: nextTabs, activeTabId }
-    })
-  }, [])
-
-  /**
-   * 处理标签关闭操作；文件标签关闭前提示其会断开对应服务器。
-   *
-   * @param {string} tabId - 用户点击关闭的标签 ID。
-   * @returns {Promise<void>} 用户确认或取消后的完成状态。
-   */
-  const requestCloseWorkspaceTab = useCallback(async tabId => {
-    const tab = workspace.tabs.find(item => item.id === tabId)
-    if (!tab) return
-    if (tab.type === 'files') {
-      const accepted = await confirm(
-        `关闭“${ tab.title }”将断开该服务器及其终端，是否继续？`,
-        {
-          title: '关闭服务器工作区',
-          kind: 'warning',
-          okLabel: '关闭',
-          cancelLabel: '取消'
-        }
-      )
-      if (!accepted) return
+  const openConnectionWorkspace = useCallback(async connection => {
+    try {
+      await openServerWorkspaceWindow(connection)
+    } catch (error) {
+      void notification.error('打开服务器工作窗口失败：' + normalizeError(error))
     }
-    closeWorkspaceTab(tabId)
-  }, [ closeWorkspaceTab, workspace.tabs ])
+  }, [])
 
   /**
-   * 移除指定连接的文件与终端标签，用于主动断开和删除配置后的统一收尾。
+   * 关闭已删除连接对应的服务器工作窗口。
    *
    * @param {string} connectionId - 已断开或删除的连接 ID。
-   * @returns {void}
+   * @returns {void} 异步开始窗口关闭流程。
    */
   const closeConnectionWorkspace = useCallback(connectionId => {
     if (!connectionId) return
-    setWorkspace(current => {
-      const removedIds = new Set(
-        current.tabs.filter(tab => tab.connectionId === connectionId).map(tab => tab.id)
-      )
-      if (removedIds.size === 0) return current
-      return {
-        tabs: current.tabs.filter(tab => !removedIds.has(tab.id)),
-        activeTabId: removedIds.has(current.activeTabId)
-          ? CONNECTIONS_WORKSPACE_ID
-          : current.activeTabId
-      }
+    void closeServerWorkspaceWindow(connectionId).catch(error => {
+      void notification.error('关闭服务器工作窗口失败：' + normalizeError(error))
     })
   }, [])
 
@@ -434,28 +268,9 @@ function MainApp() {
    * @returns {void}
    */
   const updateWorkspaceConnection = useCallback(connection => {
-    if (!connection?.id) return
-    const connectionName = getWorkspaceConnectionName(connection)
-    setWorkspace(current => ({
-      ...current,
-      tabs: current.tabs.map(tab => {
-        if (tab.connectionId !== connection.id) return tab
-        const title = tab.type === 'files'
-          ? `文件 · ${ connectionName }`
-          : `终端 ${ tab.sequence } · ${ connectionName }`
-        const endpoint = `${ connection.username }@${ connection.host }:${ connection.port }`
-        return {
-          ...tab,
-          connection: tab.type === 'files'
-            ? { ...tab.connection, ...connection }
-            : { ...tab.connection, ...getTerminalConnectionSummary(connection) },
-          title,
-          tooltip: tab.type === 'files'
-            ? endpoint
-            : `终端 ${ tab.sequence } · ${ endpoint }`
-        }
-      })
-    }))
+    void updateServerWorkspaceWindow(connection).catch(error => {
+      console.warn('更新服务器工作窗口标题失败：', normalizeError(error))
+    })
   }, [])
 
   // 注册“设置下载路径”菜单事件；异步注册完成前若组件卸载则立即释放监听器。
@@ -616,59 +431,13 @@ function MainApp() {
       <div className="app-shell">
         <div className="app-frame">
           <div className="app-content">
-            <WorkspaceTabBar
-              tabs={workspace.tabs}
-              activeTabId={workspace.activeTabId}
-              onSelect={tabId => setWorkspace(current => ({ ...current, activeTabId: tabId }))}
-              onClose={requestCloseWorkspaceTab}
+            <FileBrowserPanel
+              workspaceMode="launcher"
+              showHiddenFiles={showHiddenFiles}
+              onOpenConnection={openConnectionWorkspace}
+              onConnectionDeleted={closeConnectionWorkspace}
+              onConnectionSaved={updateWorkspaceConnection}
             />
-            <div className="workspace-panels">
-              <section
-                className="workspace-panel"
-                role="tabpanel"
-                aria-label="SSH 连接列表"
-                hidden={workspace.activeTabId !== CONNECTIONS_WORKSPACE_ID}
-              >
-                <FileBrowserPanel
-                  workspaceMode="launcher"
-                  showHiddenFiles={showHiddenFiles}
-                  onOpenConnection={openConnectionWorkspace}
-                  onConnectionDeleted={closeConnectionWorkspace}
-                  onConnectionSaved={updateWorkspaceConnection}
-                />
-              </section>
-              {workspace.tabs.map(tab => (
-                <section
-                  key={tab.id}
-                  className={`workspace-panel${ tab.type === 'terminal' ? ' workspace-terminal-panel' : '' }`}
-                  role="tabpanel"
-                  aria-label={tab.title}
-                  hidden={workspace.activeTabId !== tab.id}
-                >
-                  {tab.type === 'files' ? (
-                    <FileBrowserPanel
-                      workspaceMode="session"
-                      showHiddenFiles={showHiddenFiles}
-                      initialConnection={tab.connection}
-                      connectRequestId={tab.connectRequestId}
-                      onOpenTerminal={openTerminalWorkspace}
-                      onSessionConnected={updateWorkspaceConnection}
-                      onSessionClose={closeConnectionWorkspace}
-                    />
-                  ) : (
-                    <Suspense fallback={<TerminalLoading />}>
-                      <LazyTerminalView
-                        connectionId={tab.connectionId}
-                        connection={tab.connection}
-                        active={workspace.activeTabId === tab.id}
-                        showFooter={false}
-                        onRequestClose={() => closeWorkspaceTab(tab.id)}
-                      />
-                    </Suspense>
-                  )}
-                </section>
-              ))}
-            </div>
           </div>
           <div
             className="download-status"
@@ -764,6 +533,10 @@ function MainApp() {
  * @returns {JSX.Element} 主窗口或独立终端窗口的 React 根组件。
  */
 function App() {
+  const serverWorkspaceParams = getServerWorkspaceParams()
+  if (serverWorkspaceParams) {
+    return <ServerWorkspaceWindow {...serverWorkspaceParams} />
+  }
   const terminalWindowParams = getTerminalWindowParams()
   if (terminalWindowParams) {
     return (
