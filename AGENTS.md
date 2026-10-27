@@ -42,7 +42,7 @@ Portal 是基于 React 19、Tauri 2 和 Rust 的 SSH/SFTP 桌面客户端。
 
 - JavaScript/React：遵循 `eslint.config.js`，使用两个空格缩进、单引号，不写语句末尾分号或尾随逗号；组件文件使用 PascalCase，工具函数使用 camelCase，并遵守 React Hooks 规则。
 - Rust：函数和模块使用 snake_case，类型使用 PascalCase，常量使用 SCREAMING_SNAKE_CASE；通过 `cargo fmt --manifest-path src-tauri/Cargo.toml` 格式化。
-- 注释：JavaScript 使用规范的 JSDoc，Rust 文档注释使用 Rustdoc。公共接口和复杂逻辑应按需说明用途、参数、返回值、错误条件及安全约束；行内注释解释原因，避免复述代码。修改行为时同步更新注释，删除过期或误导性说明。
+- 注释：代码注释统一使用简体中文；JSDoc、Rustdoc 的标签、代码符号、协议名和专有名词按工具及行业约定保留原文。JavaScript 使用规范的 JSDoc，Rust 文档注释使用 Rustdoc。公共接口和复杂逻辑应按需说明用途、参数、返回值、错误条件及安全约束；行内注释解释原因，避免复述代码。修改行为时同步更新注释，删除过期或误导性说明。
 - 生成文件：修改主题源文件或生成脚本，不直接编辑生成的 `antd-theme.css`、`react-hot-toast.css`。
 
 ## 测试规范
