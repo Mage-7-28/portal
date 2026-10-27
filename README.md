@@ -1,7 +1,7 @@
 # Portal
 
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" width="96" alt="Portal 标志">
+  <img src="public/portal-logo.svg" width="96" alt="Portal 标志">
 </p>
 
 <p align="center"><strong>跨平台 SSH / SFTP 桌面客户端</strong></p>

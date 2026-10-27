@@ -23,7 +23,6 @@ import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
 import WorkspaceTabBar, { CONNECTIONS_WORKSPACE_ID } from './components/WorkspaceTabBar.jsx'
 import { closeTerminalWindows } from './utils/terminalWindow.js'
-import portalLogo from '../src-tauri/icons/128x128.png'
 import packageInfo from '../package.json'
 
 // 终端依赖体积较大，只有用户打开终端标签或独立终端窗口时才加载。
@@ -717,7 +716,7 @@ function MainApp() {
       >
         <section className="about-content" aria-label="关于 Portal">
           <div className="about-brand">
-            <img className="about-logo" src={portalLogo} alt="Portal 标志" />
+            <img className="about-logo" src="/portal-logo.svg" alt="Portal 标志" />
             <div className="about-brand-copy">
               <h1 className="about-title">Portal</h1>
               <p className="about-description">SSH / SFTP 文件管理工具</p>
