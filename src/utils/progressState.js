@@ -4,7 +4,7 @@ export const PROGRESS_EVENT_END = 'end'
 export const DEFAULT_ENDED_ID_LIMIT = 32
 
 /**
- * 为进度任务及其状态栏生成稳定键。
+ * 为进度任务及其展示生成稳定键。
  *
  * @param {{taskId?: string, maskId?: string}|null|undefined} ids - 任务标识。
  * @returns {string|null} 组合键；没有可用标识时返回 null。
@@ -67,7 +67,8 @@ export const progressReducer = (state, action) => {
         ...state.tasks,
         [key]: task
       },
-      order: [ ...state.order.filter(orderKey => orderKey !== key), key ]
+      // 按启动顺序保留任务，避免并发传输的高频更新让窗口标题来回跳动。
+      order: previous ? state.order : [ ...state.order, key ]
     }
   }
 
@@ -89,14 +90,14 @@ export const progressReducer = (state, action) => {
 }
 
 /**
- * 返回最近更新的活动进度任务。
+ * 返回最早启动且尚未结束的进度任务，其他任务更新时不抢占展示。
  *
  * @param {Object} state - 当前进度状态。
  * @returns {Object|null} 当前任务；没有活动任务时返回 null。
  */
 export const getCurrentProgress = (state) => {
   if (!state) return null
-  for (let index = state.order.length - 1; index >= 0; index -= 1) {
+  for (let index = 0; index < state.order.length; index += 1) {
     const task = state.tasks[state.order[index]]
     if (task) return task
   }
@@ -109,7 +110,7 @@ let progressSequence = 0
  * 为进度生产者生成唯一标识。
  *
  * @param {string} [scope='progress'] - 便于阅读的生产者作用域。
- * @returns {{taskId: string, maskId: string}} 新的任务和状态栏标识。
+ * @returns {{taskId: string, maskId: string}} 新的任务和进度展示标识。
  */
 export const createProgressIds = (scope = 'progress') => {
   const taskId = `${ scope }-${ Date.now() }-${ ++progressSequence }`

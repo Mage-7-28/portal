@@ -103,7 +103,7 @@
   margin-top: 16px;
 }
 
-/* 底部下载地址与传输状态栏；宽度不足时由后面的断点逐级隐藏次要文本。 */
+/* 主窗口仅保留下载地址提示，传输状态由原生标题栏承载。 */
 .download-status {
   display: flex;
   align-items: center;
@@ -145,248 +145,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.download-status-transfer {
-  display: none;
-  min-width: 0;
-}
-
-.download-status-transfer:not(:empty) {
-  display: flex;
-  flex: 0 1 auto;
-  max-width: min(560px, 58%);
-  min-width: 0;
-  min-height: 24px;
-  align-items: center;
-  margin-left: auto;
-}
-
-/* 状态组按内容占宽并贴右，文字只在空间不足时收缩，避免短内容留下固定占位。 */
-.transfer-inline-status {
-  display: flex;
-  flex: 0 1 auto;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-  max-width: 100%;
-  gap: 6px;
-  height: 24px;
-  margin-left: 0;
-  overflow: hidden;
-  color: #d8d3c9;
-  line-height: 1;
-}
-
-.transfer-inline-operation,
-.transfer-inline-percent {
-  flex: 0 0 auto;
-  white-space: nowrap;
-}
-
-.transfer-inline-operation {
-  color: #e8e5de;
-  font-weight: 600;
-}
-
-.transfer-inline-position {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 180px;
-  overflow: hidden;
-  color: #aaa69d;
-  font-variant-numeric: tabular-nums;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.transfer-inline-file {
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 170px;
-  overflow: hidden;
-  text-align: right;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* 右侧进度、百分比和取消入口作为一个不可压缩的整体，动态描述在其左侧伸缩。 */
-.transfer-inline-controls {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 6px;
-}
-
-.transfer-inline-progress {
-  flex: 0 0 76px;
-  min-width: 76px;
-  width: 76px;
-  line-height: 1;
-}
-
-.transfer-inline-progress .ant-progress-rail {
-  box-sizing: border-box;
-  height: 6px;
-  overflow: hidden;
-  border: 1px solid #4a443b;
-  border-radius: 999px;
-  background: #35322d;
-}
-
-.transfer-inline-progress .ant-progress-track {
-  height: 100% !important;
-  border-radius: 999px;
-  background: #eb9070 !important;
-  background: lab(68.9646% 33.16 32.3692) !important;
-  box-shadow: none;
-}
-
-.transfer-inline-percent {
-  /* 仅为 100% 预留空间，避免数字位数变化推动进度条。 */
-  width: calc(3ch + 1em);
-  color: #e0b59b;
-  font-variant-numeric: tabular-nums;
-  text-align: right;
-}
-
-.transfer-inline-pending {
-  display: inline-flex;
-  flex: 0 1 auto;
-  min-width: 0;
-  max-width: 240px;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 3px;
-  overflow: hidden;
-  color: #aaa69d;
-  white-space: nowrap;
-}
-
-.transfer-inline-pending-detail {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: #aaa69d;
-  text-overflow: ellipsis;
-}
-
-.transfer-inline-pending-kind {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  color: #c0bcb4;
-  text-overflow: ellipsis;
-}
-
-.transfer-inline-pending-count {
-  flex: 0 0 auto;
-  color: #e8e5de;
-  font-variant-numeric: tabular-nums;
-}
-
-.transfer-inline-message {
-  display: block;
-  max-width: 180px;
-  text-align: right;
-  text-overflow: ellipsis;
-}
-
-.transfer-inline-cancel.ant-btn {
-  display: inline-flex;
-  flex: 0 0 18px !important;
-  width: 18px !important;
-  min-width: 18px !important;
-  height: 18px !important;
-  min-height: 18px !important;
-  align-items: center;
-  justify-content: center;
-  padding: 0 !important;
-  box-sizing: border-box;
-  border-radius: 4px;
-  line-height: 1;
-}
-
-.transfer-inline-cancel.ant-btn .app-icon {
-  width: 12px;
-  height: 12px;
-}
-
-.transfer-inline-cancel.ant-btn .ant-btn-loading-icon {
-  display: inline-flex;
-  align-items: center;
-  font-size: 12px;
-}
-
-/* 中等宽度优先隐藏进度详情；宽度上限保持连续，不切换为按比例撑满。 */
-@media (max-width: 1040px) {
-  .transfer-inline-pending-detail {
-    display: none;
-  }
-}
-
-/* 较窄窗口隐藏项目序号和文件名，保留操作、队列提示与右侧进度入口。 */
-@media (max-width: 760px) {
-  .download-status {
-    column-gap: 6px;
-    padding-inline: 6px;
-  }
-
-  .download-status-location {
-    gap: 5px;
-  }
-
-  .download-status-transfer:not(:empty) {
-    max-width: 75%;
-  }
-
-  .transfer-inline-position,
-  .transfer-inline-file {
-    display: none;
-  }
-
-  .transfer-inline-progress {
-    flex-basis: 64px;
-    min-width: 64px;
-    width: 64px;
-  }
-}
-
-/* 窄屏优先保留传输状态，下载地址继续在剩余空间内省略。 */
-@media (max-width: 520px) {
-  .download-status-label {
-    max-width: 42px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .download-status-location {
-    max-width: 30%;
-  }
-}
-
-/* 极窄窗口隐藏下载地址，为传输状态保留全部宽度。 */
-@media (max-width: 420px) {
-  .download-status-location {
-    display: none;
-  }
-
-  .download-status-transfer:not(:empty) {
-    max-width: 100%;
-  }
-
-  .transfer-inline-operation {
-    max-width: 48px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .transfer-inline-progress {
-    flex-basis: 56px;
-    width: 56px;
-    min-width: 56px;
-  }
 }
 
 /* 通用文本辅助类：让最后一行也参与两端对齐，适合窄列说明文字。 */
@@ -714,10 +472,16 @@ html,
 }
 
 .file-action-toolbar .file-terminal-action,
-.file-action-toolbar .file-disconnect-action {
+.file-action-toolbar .file-disconnect-action,
+.file-action-toolbar .transfer-cancel-action {
   width: 32px;
   min-width: 32px;
   padding: 0;
+}
+
+.transfer-cancel-menu {
+  display: inline-flex;
+  flex: 0 0 auto;
 }
 
 @container file-browser (width < 720px) {
@@ -1963,17 +1727,6 @@ html,
   border-radius: 6px;
 }
 
-/* 旧版全屏操作遮罩保留为兼容样式，实际传输优先使用底部内联状态栏。 */
-.mask {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
-  height: 100%;
-  background-color: rgba(0, 0, 0, 0); /* 半透明黑色背景 */
-  z-index: 9999; /* 设置一个较高的层级，确保遮罩在最上层 */
-}
-
 /* 隐藏滚动条但仍保持滚动功能；用于预览等需要保留滚动手势的区域。 */
 .hide-scrollbar {
   /*overflow-y: scroll; !* 启用垂直滚动 *!*/
@@ -2037,6 +1790,8 @@ html,
 
 /* 服务器工作窗口以可收缩的 Ant Design 分栏承载文件、终端和资源面板。 */
 .server-workspace-shell {
+  --workspace-panel-gap: 8px;
+  --workspace-panel-radius: 8px;
   display: flex;
   position: relative;
   flex-direction: column;
@@ -2054,7 +1809,7 @@ html,
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
-  padding: 8px 10px;
+  padding: var(--workspace-panel-gap);
   overflow: hidden;
 }
 
@@ -2074,10 +1829,6 @@ html,
 .server-workspace-loading.is-leaving {
   opacity: 0;
   pointer-events: none;
-}
-
-.server-workspace-footer[hidden] {
-  display: none;
 }
 
 .server-workspace-horizontal,
@@ -2118,7 +1869,25 @@ html,
 .server-workspace-vertical > .ant-splitter-panel {
   min-width: 0;
   min-height: 0;
+  padding: 0;
   overflow: hidden;
+}
+
+/* 两侧各让出半个间距，保留分割条在中线的命中区域和原有比例计算。 */
+.server-workspace-horizontal > .ant-splitter-panel:first-child {
+  padding-inline-end: calc(var(--workspace-panel-gap) / 2);
+}
+
+.server-workspace-horizontal > .ant-splitter-panel:last-child {
+  padding-inline-start: calc(var(--workspace-panel-gap) / 2);
+}
+
+.server-workspace-vertical > .ant-splitter-panel:first-child {
+  padding-block-end: calc(var(--workspace-panel-gap) / 2);
+}
+
+.server-workspace-vertical > .ant-splitter-panel:last-child {
+  padding-block-start: calc(var(--workspace-panel-gap) / 2);
 }
 
 .server-workspace-horizontal > .ant-splitter-panel:first-child,
@@ -2132,6 +1901,18 @@ html,
   width: 100%;
   min-width: 0;
   min-height: 0;
+  padding: 0;
+  background: transparent;
+}
+
+/* 文件区不再套一层内缩画布，工具栏和列表与右侧面板共用外边缘和间距。 */
+.server-workspace-shell .file-workspace-header {
+  margin-bottom: var(--workspace-panel-gap);
+  border-radius: var(--workspace-panel-radius);
+}
+
+.server-workspace-shell .file-list-shell {
+  border-radius: var(--workspace-panel-radius);
 }
 
 .server-workspace-shell .server-terminal-card,
@@ -2143,6 +1924,7 @@ html,
   height: 100%;
   min-width: 0;
   min-height: 0;
+  border-radius: var(--workspace-panel-radius);
   overflow: hidden;
 }
 
@@ -2464,8 +2246,4 @@ html,
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.server-workspace-footer {
-  flex: 0 0 auto;
 }

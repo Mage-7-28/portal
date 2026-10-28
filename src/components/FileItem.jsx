@@ -201,7 +201,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
     let transferId = null
     const progressIds = createProgressIds('download')
     /**
-     * 将单项下载回调转换为状态栏进度，并关联可取消的传输 ID。
+     * 将单项下载回调转换为窗口进度，并关联可取消的传输 ID。
      *
      * @param {number} progress - 当前下载进度百分比。
      * @param {Object} [payload={}] - 目录下载返回的文件级和总进度信息。
@@ -220,7 +220,11 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
         overallProgress: Number.isFinite(Number(payload.overallProgress))
           ? Number(payload.overallProgress)
           : undefined,
-        onCancel: () => transferId && sftpManager.cancelTransfer(transferId)
+        current: payload.current,
+        total: payload.total,
+        completedBytes: payload.completedBytes,
+        totalBytes: payload.totalBytes,
+        onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
       })
     }
     /**

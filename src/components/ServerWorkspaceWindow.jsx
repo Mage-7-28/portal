@@ -11,11 +11,11 @@ import { confirm } from '@tauri-apps/plugin-dialog'
 import { AntdThemeConfig } from '../theme/antdTheme.js'
 import { useStoreValue } from '../utils/storeUtils.js'
 import { normalizeError, StoreKeys } from '../utils/common.js'
-import { formatServerWorkspaceTitle, SERVER_WORKSPACE_CLOSE_EVENT } from '../utils/serverWorkspace.js'
+import { formatServerWorkspaceTitle, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_PROFILE_EVENT } from '../utils/serverWorkspace.js'
 import { normalizeTerminalFontSize, normalizeWorkspaceLayout, shouldRevealWorkspace } from '../utils/workspacePreferences.js'
 import ConnectionBootScreen from './ConnectionBootScreen.jsx'
 import FileBrowserPanel from './FileBrowserPanel.jsx'
-import ProgressMask from './ProgressMask.jsx'
+import TransferProgressProvider from './TransferProgressProvider.jsx'
 import ServerMonitorPanel from './ServerMonitorPanel.jsx'
 import sftpManager from '../utils/sftpUtils.js'
 
@@ -179,7 +179,6 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
     const profile = storedConnections.find(item => item?.id === connectionId)
     if (!profile) return
     setConnectionProfile(current => ({ ...current, ...profile }))
-    void currentWindow.current?.setTitle(formatServerWorkspaceTitle(profile))
   }, [ connectionId, storedConnections ])
 
   const registerSessionDisconnect = useCallback(disconnectHandler => {
@@ -267,8 +266,23 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
   const updateWindowTitle = useCallback(profile => {
     if (!profile?.id || profile.id !== connectionId) return
     setConnectionProfile(current => ({ ...current, ...profile }))
-    void currentWindow.current?.setTitle(formatServerWorkspaceTitle(profile))
   }, [connectionId])
+
+  useEffect(() => {
+    let disposed = false
+    let unlisten
+    // 其他窗口只更新连接展示信息，标题由本窗口统一合成，避免覆盖正在显示的传输进度。
+    void currentWindow.current.listen(SERVER_WORKSPACE_PROFILE_EVENT, event => updateWindowTitle(event.payload))
+      .then(dispose => {
+        if (disposed) dispose()
+        else unlisten = dispose
+      })
+      .catch(error => console.warn('监听工作窗口展示信息失败：', normalizeError(error)))
+    return () => {
+      disposed = true
+      unlisten?.()
+    }
+  }, [updateWindowTitle])
 
   useEffect(() => {
     const container = workspaceMainRef.current
@@ -330,141 +344,142 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
 
   return (
     <ConfigProvider theme={AntdThemeConfig} locale={zhCN} componentSize="small">
-      <main className={`server-workspace-shell${ focusMode ? ' is-terminal-focus' : '' }`} aria-busy={!workspaceReady && waitingForConnection}>
-        <div
-          ref={workspaceMainRef}
-          className={`server-workspace-main${ workspaceReady ? '' : ' is-initializing' }`}
-          aria-hidden={!workspaceReady}
-          inert={!workspaceReady}
-        >
-          <Splitter
-            className="server-workspace-horizontal"
-            orientation="horizontal"
-            onResize={sizes => {
-              if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, fileRatio: sizes[0] / (sizes[0] + sizes[1]) }))
-            }}
-            onResizeEnd={persistWorkspaceLayout}
+      <TransferProgressProvider baseTitle={formatServerWorkspaceTitle(connectionProfile)}>
+        <main className={`server-workspace-shell${ focusMode ? ' is-terminal-focus' : '' }`} aria-busy={!workspaceReady && waitingForConnection}>
+          <div
+            ref={workspaceMainRef}
+            className={`server-workspace-main${ workspaceReady ? '' : ' is-initializing' }`}
+            aria-hidden={!workspaceReady}
+            inert={!workspaceReady}
           >
-            <Splitter.Panel size={`${ fileRatio * 100 }%`} min="30%" max="62%">
-              <div className="server-workspace-pane" inert={focusMode} aria-hidden={focusMode}>
-                <FileBrowserPanel
-                  workspaceMode="session"
-                  showHiddenFiles={showHiddenFiles}
-                  initialConnection={connectionProfile}
-                  connectRequestId={connectRequestId}
-                  onSessionDisconnectReady={registerSessionDisconnect}
-                  onConnectionDeleted={handleConnectionDeleted}
-                  onConnectionSaved={updateWindowTitle}
-                  onSessionConnected={handleSessionConnected}
-                  onSessionStateChange={handleSessionStateChange}
-                />
-              </div>
-            </Splitter.Panel>
-            <Splitter.Panel size={`${ (1 - fileRatio) * 100 }%`} min="38%">
-              <Splitter
-                className="server-workspace-vertical"
-                orientation="vertical"
-                onResize={sizes => {
-                  if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, rightTerminalRatio: sizes[0] / (sizes[0] + sizes[1]) }))
-                }}
-                onResizeEnd={persistWorkspaceLayout}
-              >
-                <Splitter.Panel size={`${ terminalRatio * 100 }%`} min="32%" max="70%">
-                  <Card
-                    className="server-terminal-card"
-                    size="small"
-                    title="远程终端"
-                    extra={connectedProfile ? (
-                      <Space size={4} className="server-terminal-controls">
-                        <Tag
-                          className="server-terminal-status"
-                          color={{ connected: 'success', connecting: 'processing', error: 'error' }[terminalStatus.status] || 'default'}
-                        >
-                          {terminalStatus.message || (terminalStatus.status === 'connected'
-                            ? '已连接'
-                            : terminalStatus.status === 'connecting' ? '连接中' : '未连接')}
-                        </Tag>
-                        <Button size="small" type="text" onClick={() => terminalControls?.openSearch()} disabled={!terminalControls} aria-label="查找终端内容">查找</Button>
-                        <Button size="small" type="text" onClick={() => terminalControls?.adjustFontSize(-1)} disabled={!terminalControls || terminalFontSize <= 10} aria-label="缩小终端字体">A−</Button>
-                        <span className="terminal-font-size-label">{terminalFontSize}px</span>
-                        <Button size="small" type="text" onClick={() => terminalControls?.adjustFontSize(1)} disabled={!terminalControls || terminalFontSize >= 22} aria-label="放大终端字体">A+</Button>
-                        <Button
-                          size="small"
-                          type="text"
-                          onClick={() => terminalControls?.resetFontSize()}
-                          disabled={!terminalControls}
-                          title="恢复默认字号（13px）"
-                          aria-label="恢复默认终端字号（13px）"
-                        >
-                          重置字号
-                        </Button>
-                        <Button
-                          size="small"
-                          type="text"
-                          aria-pressed={focusMode}
-                          onClick={() => {
-                            setFocusMode(mode => !mode)
-                            setTerminalFocusRequest(request => request + 1)
-                          }}
-                        >
-                          {focusMode ? '退出专注' : '专注'}
-                        </Button>
-                      </Space>
-                    ) : null}
-                    styles={{ body: { minHeight: 0 }}}
-                  >
-                    {connectedProfile ? (
-                      <TerminalErrorBoundary onError={handleTerminalLoadError}>
-                        <Suspense fallback={<div className="server-terminal-placeholder">正在加载终端...</div>}>
-                          <LazyTerminalView
-                            key={connectionId}
-                            connectionId={connectionId}
-                            connection={connectedProfile}
-                            active={workspaceReady}
-                            showFooter={false}
-                            showConnectionMeta={false}
-                            onStatusChange={handleTerminalStatusChange}
-                            onCloseReady={registerTerminalClose}
-                            onControlsReady={handleTerminalControlsReady}
-                            focusRequest={terminalFocusRequest}
-                          />
-                        </Suspense>
-                      </TerminalErrorBoundary>
-                    ) : (
-                      <div className="server-terminal-placeholder">
-                        <span>正在准备远程终端...</span>
-                      </div>
-                    )}
-                  </Card>
-                </Splitter.Panel>
-                <Splitter.Panel size={`${ (1 - terminalRatio) * 100 }%`} min={220}>
-                  <div className="server-workspace-pane" inert={focusMode} aria-hidden={focusMode}>
-                    {connectedProfile ? (
-                      <ServerMonitorPanel connectionId={connectionId} onInitialStateChange={handleMonitorStateChange} />
-                    ) : (
-                      <Card className="server-monitor-card" size="small" title="服务器状态">
-                        <div className="server-terminal-placeholder">正在准备服务器状态...</div>
-                      </Card>
-                    )}
-                  </div>
-                </Splitter.Panel>
-              </Splitter>
-            </Splitter.Panel>
-          </Splitter>
-        </div>
-        {(!workspaceReady || bootVisible) && (
-          <div className={`server-workspace-loading${ workspaceReady ? ' is-leaving' : '' }`} aria-hidden={workspaceReady}>
-            <ConnectionBootScreen
-              connection={connectionProfile}
-              sessionState={sessionState}
-              terminalStatus={terminalStatus}
-              monitorState={monitorState}
-              onRetry={() => setConnectRequestId(request => request + 1)}
-            />
+            <Splitter
+              className="server-workspace-horizontal"
+              orientation="horizontal"
+              onResize={sizes => {
+                if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, fileRatio: sizes[0] / (sizes[0] + sizes[1]) }))
+              }}
+              onResizeEnd={persistWorkspaceLayout}
+            >
+              <Splitter.Panel size={`${ fileRatio * 100 }%`} min="30%" max="62%">
+                <div className="server-workspace-pane" inert={focusMode} aria-hidden={focusMode}>
+                  <FileBrowserPanel
+                    workspaceMode="session"
+                    showHiddenFiles={showHiddenFiles}
+                    initialConnection={connectionProfile}
+                    connectRequestId={connectRequestId}
+                    onSessionDisconnectReady={registerSessionDisconnect}
+                    onConnectionDeleted={handleConnectionDeleted}
+                    onConnectionSaved={updateWindowTitle}
+                    onSessionConnected={handleSessionConnected}
+                    onSessionStateChange={handleSessionStateChange}
+                  />
+                </div>
+              </Splitter.Panel>
+              <Splitter.Panel size={`${ (1 - fileRatio) * 100 }%`} min="38%">
+                <Splitter
+                  className="server-workspace-vertical"
+                  orientation="vertical"
+                  onResize={sizes => {
+                    if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, rightTerminalRatio: sizes[0] / (sizes[0] + sizes[1]) }))
+                  }}
+                  onResizeEnd={persistWorkspaceLayout}
+                >
+                  <Splitter.Panel size={`${ terminalRatio * 100 }%`} min="32%" max="70%">
+                    <Card
+                      className="server-terminal-card"
+                      size="small"
+                      title="远程终端"
+                      extra={connectedProfile ? (
+                        <Space size={4} className="server-terminal-controls">
+                          <Tag
+                            className="server-terminal-status"
+                            color={{ connected: 'success', connecting: 'processing', error: 'error' }[terminalStatus.status] || 'default'}
+                          >
+                            {terminalStatus.message || (terminalStatus.status === 'connected'
+                              ? '已连接'
+                              : terminalStatus.status === 'connecting' ? '连接中' : '未连接')}
+                          </Tag>
+                          <Button size="small" type="text" onClick={() => terminalControls?.openSearch()} disabled={!terminalControls} aria-label="查找终端内容">查找</Button>
+                          <Button size="small" type="text" onClick={() => terminalControls?.adjustFontSize(-1)} disabled={!terminalControls || terminalFontSize <= 10} aria-label="缩小终端字体">A−</Button>
+                          <span className="terminal-font-size-label">{terminalFontSize}px</span>
+                          <Button size="small" type="text" onClick={() => terminalControls?.adjustFontSize(1)} disabled={!terminalControls || terminalFontSize >= 22} aria-label="放大终端字体">A+</Button>
+                          <Button
+                            size="small"
+                            type="text"
+                            onClick={() => terminalControls?.resetFontSize()}
+                            disabled={!terminalControls}
+                            title="恢复默认字号（13px）"
+                            aria-label="恢复默认终端字号（13px）"
+                          >
+                            重置字号
+                          </Button>
+                          <Button
+                            size="small"
+                            type="text"
+                            aria-pressed={focusMode}
+                            onClick={() => {
+                              setFocusMode(mode => !mode)
+                              setTerminalFocusRequest(request => request + 1)
+                            }}
+                          >
+                            {focusMode ? '退出专注' : '专注'}
+                          </Button>
+                        </Space>
+                      ) : null}
+                      styles={{ body: { minHeight: 0 }}}
+                    >
+                      {connectedProfile ? (
+                        <TerminalErrorBoundary onError={handleTerminalLoadError}>
+                          <Suspense fallback={<div className="server-terminal-placeholder">正在加载终端...</div>}>
+                            <LazyTerminalView
+                              key={connectionId}
+                              connectionId={connectionId}
+                              connection={connectedProfile}
+                              active={workspaceReady}
+                              showFooter={false}
+                              showConnectionMeta={false}
+                              onStatusChange={handleTerminalStatusChange}
+                              onCloseReady={registerTerminalClose}
+                              onControlsReady={handleTerminalControlsReady}
+                              focusRequest={terminalFocusRequest}
+                            />
+                          </Suspense>
+                        </TerminalErrorBoundary>
+                      ) : (
+                        <div className="server-terminal-placeholder">
+                          <span>正在准备远程终端...</span>
+                        </div>
+                      )}
+                    </Card>
+                  </Splitter.Panel>
+                  <Splitter.Panel size={`${ (1 - terminalRatio) * 100 }%`} min={220}>
+                    <div className="server-workspace-pane" inert={focusMode} aria-hidden={focusMode}>
+                      {connectedProfile ? (
+                        <ServerMonitorPanel connectionId={connectionId} onInitialStateChange={handleMonitorStateChange} />
+                      ) : (
+                        <Card className="server-monitor-card" size="small" title="服务器状态">
+                          <div className="server-terminal-placeholder">正在准备服务器状态...</div>
+                        </Card>
+                      )}
+                    </div>
+                  </Splitter.Panel>
+                </Splitter>
+              </Splitter.Panel>
+            </Splitter>
           </div>
-        )}
-        <footer className="server-workspace-footer" hidden={!workspaceReady}><ProgressMask /></footer>
-      </main>
+          {(!workspaceReady || bootVisible) && (
+            <div className={`server-workspace-loading${ workspaceReady ? ' is-leaving' : '' }`} aria-hidden={workspaceReady}>
+              <ConnectionBootScreen
+                connection={connectionProfile}
+                sessionState={sessionState}
+                terminalStatus={terminalStatus}
+                monitorState={monitorState}
+                onRetry={() => setConnectRequestId(request => request + 1)}
+              />
+            </div>
+          )}
+        </main>
+      </TransferProgressProvider>
     </ConfigProvider>
   )
 }

@@ -4,7 +4,7 @@
  * 窗口标签、连接展示信息和关闭清理逻辑由本模块统一维护。
  */
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { formatServerWorkspaceTitle, getServerWorkspaceWindowLabel, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_WINDOW_PREFIX } from './serverWorkspace.js'
+import { formatServerWorkspaceTitle, getServerWorkspaceWindowLabel, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_PROFILE_EVENT, SERVER_WORKSPACE_WINDOW_PREFIX } from './serverWorkspace.js'
 
 export const TERMINAL_WINDOW_PREFIX = 'PortalTerminal-'
 const LEGACY_TERMINAL_WINDOW_LABEL = 'PortalTerminal'
@@ -15,13 +15,10 @@ const pendingWorkspaceWindows = new Map()
  * 将已有工作窗口恢复显示并聚焦。
  *
  * @param {Object} targetWindow - 已创建的 Tauri WebView 窗口。
- * @param {Object} connection - 最新连接展示配置。
  * @returns {Promise<Object>} 已聚焦的工作窗口。
  */
-const focusServerWorkspaceWindow = async (targetWindow, connection) => {
-  const title = formatServerWorkspaceTitle(connection)
+const focusServerWorkspaceWindow = async targetWindow => {
   await Promise.allSettled([
-    targetWindow.setTitle(title),
     targetWindow.unminimize(),
     targetWindow.show()
   ])
@@ -192,7 +189,7 @@ export const openServerWorkspaceWindow = async (connection) => {
   if (!connection?.id) throw new Error('当前连接不可用')
   const label = getServerWorkspaceWindowLabel(connection.id)
   const pending = pendingWorkspaceWindows.get(connection.id)
-  if (pending) return focusServerWorkspaceWindow(await pending, connection)
+  if (pending) return focusServerWorkspaceWindow(await pending)
 
   const creationPromise = (async () => {
     const existingWindow = await WebviewWindow.getByLabel(label)
@@ -215,7 +212,7 @@ export const openServerWorkspaceWindow = async (connection) => {
   })()
   pendingWorkspaceWindows.set(connection.id, creationPromise)
   try {
-    return focusServerWorkspaceWindow(await creationPromise, connection)
+    return focusServerWorkspaceWindow(await creationPromise)
   } finally {
     if (pendingWorkspaceWindows.get(connection.id) === creationPromise) {
       pendingWorkspaceWindows.delete(connection.id)
@@ -224,7 +221,7 @@ export const openServerWorkspaceWindow = async (connection) => {
 }
 
 /**
- * 更新已打开工作窗口的标题，不改变其焦点和连接状态。
+ * 更新已打开工作窗口的展示信息，不覆盖其传输标题、焦点和连接状态。
  *
  * @param {Object} connection - 最新连接配置。
  * @returns {Promise<boolean>} 找到并更新窗口时返回 true。
@@ -234,7 +231,14 @@ export const updateServerWorkspaceWindow = async connection => {
   const label = getServerWorkspaceWindowLabel(connection.id)
   const workspaceWindow = await WebviewWindow.getByLabel(label)
   if (!workspaceWindow) return false
-  await workspaceWindow.setTitle(formatServerWorkspaceTitle(connection))
+  // 不跨窗口传递密码或完整配置，目标窗口使用自身的最新进度统一管理标题。
+  await workspaceWindow.emitTo(label, SERVER_WORKSPACE_PROFILE_EVENT, {
+    id: connection.id,
+    name: connection.name,
+    host: connection.host,
+    username: connection.username,
+    port: connection.port
+  })
   return true
 }
 

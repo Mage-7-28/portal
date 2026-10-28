@@ -287,7 +287,7 @@ function FileBrowserPanel({
   })
 
   /**
-   * 创建带任务和遮罩 ID 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
+   * 创建带唯一标识的操作进度发布器，保证过期事件不能清理新任务。
    *
    * @param {'delete'|'rename'} operation - 当前远程变更操作类型。
    * @param {string} fileName - 进度区域展示的文件或目录名称。
@@ -296,10 +296,10 @@ function FileBrowserPanel({
   const createOperationStatus = (operation, fileName) => {
     const progressIds = createProgressIds(`file-operation-${ operation }`)
     /**
-     * 向共享状态栏发布当前操作的统一载荷。
+     * 向当前窗口发布操作进度的统一载荷。
      *
      * @param {number} progress - 0 到 100 的操作进度。
-     * @param {string} message - 状态栏主提示文本。
+     * @param {string} message - 操作阶段的主提示文本。
      * @param {Object} [details={}] - 队列位置、阶段等附加字段。
      * @returns {void}
      */
@@ -1155,7 +1155,7 @@ function FileBrowserPanel({
     let cancelled = false
     const progressIds = createProgressIds('download-batch')
     /**
-     * 把单项下载回调转换为批量队列状态栏可消费的进度载荷。
+     * 把单项下载回调转换为窗口标题和取消入口共用的批量进度载荷。
      *
      * @param {number} progress - 当前文件进度百分比。
      * @param {RemoteEntry} entry - 当前队列中的远程项目。
@@ -1180,6 +1180,10 @@ function FileBrowserPanel({
         overallProgress: Number.isFinite(Number(payload.overallProgress))
           ? Number(payload.overallProgress)
           : undefined,
+        current: payload.current,
+        total: payload.total,
+        completedBytes: payload.completedBytes,
+        totalBytes: payload.totalBytes,
         onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
       })
     }
@@ -1284,7 +1288,7 @@ function FileBrowserPanel({
   }
 
   /**
-   * 删除一个远程项目，并将递归删除进度映射到共享操作状态栏。
+   * 删除一个远程项目，并将递归删除进度发布到当前窗口标题。
    *
    * @param {RemoteEntry} entry - 要删除的远程文件或目录条目。
    * @param {OperationStatus} status - 发布删除进度的操作状态对象。

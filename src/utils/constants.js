@@ -85,12 +85,6 @@ export const THEME_SUCCESS = '#8fb996'
 export const THEME_WARNING = '#d0a965'
 export const THEME_DANGER = '#d86f6f'
 
-// 兼容旧进度组件的渐变配置，实际状态栏使用同一强调色的纯色轨道。
-export const PROGRESS_GRADIENT = {
-  '0%': THEME_PRIMARY_COLOR,
-  '100%': '#f0aa90'
-}
-
 // 主窗口初始/最小尺寸；平台原生标题栏和内容布局都会以此为下限。
 export const WINDOW_DEFAULT_WIDTH = 920
 export const WINDOW_DEFAULT_HEIGHT = 620

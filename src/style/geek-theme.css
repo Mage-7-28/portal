@@ -113,28 +113,6 @@ body {
   content: '';
 }
 
-.transfer-inline-status {
-  color: #d4d7dc;
-}
-
-.transfer-inline-operation,
-.transfer-inline-pending-count {
-  color: var(--portal-geek-text);
-}
-
-.transfer-inline-progress .ant-progress-rail {
-  border-color: #50535a;
-  background: #3a3c42;
-}
-
-.transfer-inline-progress .ant-progress-track {
-  background: var(--portal-geek-primary) !important;
-}
-
-.transfer-inline-percent {
-  color: #f0aa90;
-}
-
 /* 统一按钮、输入框与焦点的边界表现，保持柔和且明确的可访问性提示。 */
 .ant-btn {
   position: relative;

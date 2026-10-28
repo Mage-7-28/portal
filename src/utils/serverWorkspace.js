@@ -6,6 +6,8 @@
 export const SERVER_WORKSPACE_WINDOW_PREFIX = 'PortalWorkspace-'
 // 已经确认的应用退出和连接删除使用定向事件，避免重复触发窗口关闭确认。
 export const SERVER_WORKSPACE_CLOSE_EVENT = 'portal-workspace-close'
+// 配置更新只发送非敏感展示字段，由目标窗口合成包含传输进度的标题。
+export const SERVER_WORKSPACE_PROFILE_EVENT = 'portal-workspace-profile'
 
 /**
  * 按登录用户名和远端地址生成工作窗口标题。

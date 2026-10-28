@@ -7,9 +7,9 @@ import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Uplo
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
+import TransferCancelButton from './TransferCancelButton.jsx'
 import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
-import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
@@ -17,7 +17,10 @@ import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
-import { getDropTargetVerticalBounds, getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
+import { getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
+
+// 按 macOS 实际拖拽反馈校准 30 个 CSS 像素，只影响纵向命中位置。
+const MACOS_DROP_TARGET_Y_OFFSET = 30
 
 /**
  * 从本地路径中提取用于上传列表展示的最后一级名称。
@@ -65,14 +68,15 @@ const mergeUploadItems = (previous, items) => {
 const getEntryKey = (entry) => entry?.path || entry?.name || ''
 
 /**
- * 按原生拖放坐标和纵向视口偏移判断是否落在目标列表区域。
+ * 将原生拖放坐标归一到 CSS 视口后判断是否落在目标列表区域。
+ * 每次读取列表的实时边界，使分栏缩放和面板间距调整自动反映到拖放命中区。
+ * macOS 单独校准纵向偏差，不改变左右边界，也不混入窗口屏幕位置。
  *
  * @param {{x: number, y: number}|null|undefined} position - Tauri 原生拖放坐标。
  * @param {Element|null} element - 文件列表的目标 DOM 元素。
- * @param {number} [yOffset=0] - 原生坐标原点到 WebView 视口的纵向距离，单位为 CSS 像素。
  * @returns {boolean} 坐标位于目标元素矩形范围内时返回 true。
  */
-const isPositionInsideElement = (position, element, yOffset = 0) => {
+const isPositionInsideElement = (position, element) => {
   if (!position || !element || typeof window === 'undefined') return false
   const rect = element.getBoundingClientRect()
   const platform = window.navigator?.userAgentData?.platform
@@ -80,10 +84,10 @@ const isPositionInsideElement = (position, element, yOffset = 0) => {
     || window.navigator?.userAgent
     || ''
   const scale = /^win/i.test(platform) ? window.devicePixelRatio || 1 : 1
+  const yOffset = /^mac/i.test(platform) ? MACOS_DROP_TARGET_Y_OFFSET : 0
   const x = Number(position.x) / scale
-  const y = Number(position.y) / scale + yOffset
-  const { top, bottom } = getDropTargetVerticalBounds(rect.top, rect.bottom)
-  return x >= rect.left && x <= rect.right && y >= top && y <= bottom
+  const y = Number(position.y) / scale - yOffset
+  return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
 }
 
 /**
@@ -179,8 +183,6 @@ const FileBrowser = ({
   const terminalOpeningCountRef = React.useRef(0)
   // 原生拖放目标、上传队列回调和多选锚点均需跨渲染保持稳定引用。
   const fileListDropRef = React.useRef(null)
-  // macOS 原生拖放坐标需补回窗口外框到 WebView 视口的纵向距离。
-  const dropPositionYOffsetRef = React.useRef(0)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
   const selectionPathRef = React.useRef(currentPath)
@@ -265,7 +267,7 @@ const FileBrowser = ({
   }, [])
 
   /**
-   * 批量删除当前选中项目，具体进度通过共享状态栏展示。
+   * 批量删除当前选中项目，具体进度通过窗口标题展示。
    *
    * @returns {Promise<void>} 删除回调和选中状态清理完成后的 Promise。
    */
@@ -468,7 +470,6 @@ const FileBrowser = ({
   React.useEffect(() => {
     let disposed = false
     let unlisten
-    let unlistenScaleChanged
     /**
      * 注册当前 WebView 的原生拖放监听，并把文件路径交给上传队列处理。
      *
@@ -476,44 +477,6 @@ const FileBrowser = ({
      */
     const registerDragDrop = async () => {
       try {
-        const platform = window.navigator?.userAgentData?.platform
-          || window.navigator?.platform
-          || window.navigator?.userAgent
-          || ''
-        const isMacOS = /^mac/i.test(platform)
-        const currentWindow = getCurrentWindow()
-        const updateDropPositionYOffset = async () => {
-          if (!isMacOS) return
-          try {
-            const [ webviewPosition, windowOuterPosition, scaleFactor ] = await Promise.all([
-              getCurrentWebview().position(),
-              currentWindow.outerPosition(),
-              currentWindow.scaleFactor()
-            ])
-            if (!disposed && Number.isFinite(scaleFactor) && scaleFactor > 0) {
-              dropPositionYOffsetRef.current = (webviewPosition.y - windowOuterPosition.y) / scaleFactor
-            }
-          } catch {
-            dropPositionYOffsetRef.current = 0
-          }
-        }
-
-        await updateDropPositionYOffset()
-        if (isMacOS) {
-          try {
-            const disposeScaleListener = await currentWindow.onScaleChanged(() => {
-              void updateDropPositionYOffset()
-            })
-            if (disposed) {
-              disposeScaleListener()
-            } else {
-              unlistenScaleChanged = disposeScaleListener
-            }
-          } catch {
-            // 缩放监听不可用时继续使用初始计算的视口偏移。
-          }
-        }
-
         const dispose = await getCurrentWebview().onDragDropEvent(event => {
           if (disposed) return
           const payload = event.payload
@@ -523,22 +486,14 @@ const FileBrowser = ({
               setDirectoryDropActive(false)
             } else {
               setUploadDragActive(false)
-              setDirectoryDropActive(isPositionInsideElement(
-                payload.position,
-                fileListDropRef.current,
-                dropPositionYOffsetRef.current
-              ))
+              setDirectoryDropActive(isPositionInsideElement(payload.position, fileListDropRef.current))
             }
           } else if (payload.type === 'leave') {
             setUploadDragActive(false)
             setDirectoryDropActive(false)
           } else if (payload.type === 'drop') {
             setUploadDragActive(false)
-            const isDirectoryDrop = isPositionInsideElement(
-              payload.position,
-              fileListDropRef.current,
-              dropPositionYOffsetRef.current
-            )
+            const isDirectoryDrop = isPositionInsideElement(payload.position, fileListDropRef.current)
             setDirectoryDropActive(false)
             if (!uploadModalOpenRef.current && !isDirectoryDrop) return
             void handleDroppedPaths(payload.paths)
@@ -558,8 +513,6 @@ const FileBrowser = ({
     return () => {
       disposed = true
       unlisten?.()
-      unlistenScaleChanged?.()
-      dropPositionYOffsetRef.current = 0
       setUploadDragActive(false)
       setDirectoryDropActive(false)
     }
@@ -649,6 +602,10 @@ const FileBrowser = ({
             pendingCount: Math.max(uploadQueue.length - queueIndex - 1, 0),
             folderQueueIndex: kind === 'directory' ? fileIndex : undefined,
             folderQueueTotal: kind === 'directory' ? fileTotal : undefined,
+            current: payload.current,
+            total: payload.total,
+            completedBytes: payload.completedBytes,
+            totalBytes: payload.totalBytes,
             onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
           })
         }
@@ -672,7 +629,7 @@ const FileBrowser = ({
               currentConnectionId,
               localPath,
               remotePath,
-              progress => publishProgress(Math.round(progress)),
+              (progress, payload) => publishProgress(Math.round(progress), payload),
               overwrite,
               id => {
                 transferId = id
@@ -814,6 +771,7 @@ const FileBrowser = ({
             />
           </Tooltip>
           <div className="file-action-toolbar" role="toolbar" aria-label="远程文件操作">
+            <TransferCancelButton />
             <Button
               className="upload-action-button"
               type="primary"

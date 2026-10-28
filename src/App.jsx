@@ -18,7 +18,7 @@ import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
 import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.js'
 import FileBrowserPanel from './components/FileBrowserPanel'
-import ProgressMask from './components/ProgressMask'
+import TransferProgressProvider from './components/TransferProgressProvider.jsx'
 import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
 import {
@@ -449,9 +449,6 @@ function MainApp() {
                 {downloadPathHint}
               </span>
             </div>
-            <div className="download-status-transfer">
-              <ProgressMask />
-            </div>
           </div>
         </div>
       </div>
@@ -545,7 +542,7 @@ function App() {
       </Suspense>
     )
   }
-  return <MainApp />
+  return <TransferProgressProvider baseTitle="Portal"><MainApp /></TransferProgressProvider>
 }
 
 export default App
