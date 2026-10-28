@@ -16,6 +16,7 @@ The versions below are the versions resolved by the current lockfiles. The front
 | `@tauri-apps/plugin-opener` | 2.5.4 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `@tauri-apps/plugin-store` | 2.4.4 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `@xterm/addon-fit` | 0.11.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit) |
+| `@xterm/addon-search` | 0.16.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-search) |
 | `@xterm/xterm` | 6.0.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js) |
 | `antd` | 6.3.3 | MIT | [ant-design/ant-design](https://github.com/ant-design/ant-design) |
 | `prismjs` | 1.30.0 | MIT | [PrismJS/prism](https://github.com/PrismJS/prism) |
@@ -69,6 +70,12 @@ Copyright (c) 2012-2013, Christopher Jeffrey
 
 ```text
 Copyright (c) 2019, The xterm.js authors
+```
+
+`@xterm/addon-search` includes:
+
+```text
+Copyright (c) 2017, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 ```
 
 The complete upstream license files remain authoritative; this inventory is not a replacement for every upstream license text. When distributing a bundled application, retain the license and notice files for the exact dependency versions used by that bundle.

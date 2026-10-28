@@ -17,7 +17,7 @@ import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
-import { getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
+import { getDropTargetVerticalBounds, getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
 
 /**
  * 从本地路径中提取用于上传列表展示的最后一级名称。
@@ -64,10 +64,6 @@ const mergeUploadItems = (previous, items) => {
  */
 const getEntryKey = (entry) => entry?.path || entry?.name || ''
 
-// 按 CSS 像素分别微调上下边界，顶部上移幅度略大于底部。
-const DROP_TARGET_TOP_EXPANSION_PX = 85
-const DROP_TARGET_BOTTOM_INSET_PX = 85
-
 /**
  * 按原生拖放坐标和纵向视口偏移判断是否落在目标列表区域。
  *
@@ -86,8 +82,7 @@ const isPositionInsideElement = (position, element, yOffset = 0) => {
   const scale = /^win/i.test(platform) ? window.devicePixelRatio || 1 : 1
   const x = Number(position.x) / scale
   const y = Number(position.y) / scale + yOffset
-  const top = rect.top - DROP_TARGET_TOP_EXPANSION_PX
-  const bottom = rect.bottom - DROP_TARGET_BOTTOM_INSET_PX
+  const { top, bottom } = getDropTargetVerticalBounds(rect.top, rect.bottom)
   return x >= rect.left && x <= rect.right && y >= top && y <= bottom
 }
 
@@ -104,6 +99,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  * 渲染已连接服务器的远程文件浏览器和批量操作入口。
  *
  * @param {Object} props - 文件浏览器属性。
+ * @param {boolean} [props.showTerminalAction=true] - 是否显示独立终端快捷操作。
  * @param {string} props.currentPath - 当前显示的远程目录路径。
  * @param {string} props.pathInput - 尚未提交的路径输入，不参与远程操作目标计算。
  * @param {Array<Object>} props.files - 当前目录的远程条目。
@@ -111,6 +107,8 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  * @param {string|null} props.error - 目录读取错误信息。
  * @param {Object|null} props.currentConnection - 当前连接的非敏感配置。
  * @param {string|null} props.currentConnectionId - 当前 SSH 连接 ID。
+ * @param {boolean} [props.showConnectionSummary=true] - 是否展示当前服务器名称和地址。
+ * @param {boolean} [props.showDisconnectAction=true] - 是否展示主动断开连接按钮。
  * @param {boolean} props.showHiddenFiles - 是否显示隐藏项目。
  * @param {string} props.homeDir - 远程用户主目录。
  * @param {string[]} props.drives - 可切换的远程盘符列表。
@@ -137,11 +135,14 @@ const FileBrowser = ({
   error,
   currentConnection,
   currentConnectionId,
+  showConnectionSummary = true,
+  showDisconnectAction = true,
   showHiddenFiles,
   homeDir,
   drives,
   handleGoBack,
   handlePathChange,
+  handlePathCancel,
   handlePathSubmit,
   handleRefresh,
   handleItemClick,
@@ -152,7 +153,8 @@ const FileBrowser = ({
   handleRenameItem,
   handleDriveSelect,
   handleDisconnect,
-  onOpenTerminal
+  onOpenTerminal,
+  showTerminalAction = true
 }) => {
   // 新建目录弹窗及其表单提交状态。
   const [ directoryModalOpen, setDirectoryModalOpen ] = React.useState(false)
@@ -710,6 +712,11 @@ const FileBrowser = ({
   startUploadQueueRef.current = startUploadQueue
 
   const menuItems = [
+    ...(drives?.length ? [] : [{
+      key: 'root',
+      label: '根目录 /',
+      onClick: () => handleDriveSelect('/')
+    }]),
     {
       key: 'home',
       label: homeDir || '用户目录',
@@ -743,48 +750,20 @@ const FileBrowser = ({
   return (
     <div className="file-browser">
       <div className="file-workspace-header">
-        <div className="connection-toolbar">
-          <div
-            className="connection-summary"
-            title={`${ currentConnection?.name || '未知' } (${ currentConnection?.host || '未知' }:${ currentConnection?.port || '未知' })`}
-          >
-            <span className="connection-status-dot" aria-hidden="true" />
-            <span className="connection-name">{currentConnection?.name || '未知'}</span>
-            <span className="connection-endpoint">
-              {currentConnection?.host || '未知'}:{currentConnection?.port || '未知'}
-            </span>
+        {showConnectionSummary && (
+          <div className="connection-toolbar">
+            <div
+              className="connection-summary"
+              title={`${ currentConnection?.name || '未知' } (${ currentConnection?.host || '未知' }:${ currentConnection?.port || '未知' })`}
+            >
+              <span className="connection-status-dot" aria-hidden="true" />
+              <span className="connection-name">{currentConnection?.name || '未知'}</span>
+              <span className="connection-endpoint">
+                {currentConnection?.host || '未知'}:{currentConnection?.port || '未知'}
+              </span>
+            </div>
           </div>
-          <div className="connection-actions">
-            <Button
-              size="small"
-              icon={<AppIcon name="terminal" />}
-              loading={terminalOpening}
-              onClick={handleOpenTerminal}
-              aria-label="打开远程终端"
-            >
-              终端
-            </Button>
-            <Button size="small" icon={<AppIcon name="upload" />} loading={uploadSubmitting} onClick={handleUpload}>
-              上传
-            </Button>
-            <Button
-              size="small"
-              icon={<AppIcon name="folderAdd" />}
-              onClick={() => setDirectoryModalOpen(true)}
-              aria-label="新建文件夹"
-            >
-              新建文件夹
-            </Button>
-            <Button
-              size="small"
-              danger
-              icon={<AppIcon name="disconnect" />}
-              onClick={() => handleDisconnect()}
-            >
-              断开连接
-            </Button>
-          </div>
-        </div>
+        )}
 
         <div className="path-toolbar">
           <Tooltip title="返回上级目录">
@@ -805,6 +784,12 @@ const FileBrowser = ({
               value={pathInput}
               onChange={handlePathChange}
               onPressEnter={handlePathSubmit}
+              onKeyDown={event => {
+                if (event.key !== 'Escape') return
+                event.preventDefault()
+                handlePathCancel?.()
+                event.currentTarget.blur()
+              }}
               aria-label="远程路径"
             />
 
@@ -828,6 +813,54 @@ const FileBrowser = ({
               aria-label="刷新目录"
             />
           </Tooltip>
+          <div className="file-action-toolbar" role="toolbar" aria-label="远程文件操作">
+            <Button
+              className="upload-action-button"
+              type="primary"
+              size="small"
+              icon={<AppIcon name="upload" />}
+              loading={uploadSubmitting}
+              onClick={handleUpload}
+              aria-label="上传文件"
+              title="上传文件"
+            >
+              <span>上传</span>
+            </Button>
+            <Button
+              className="mkdir-action-button"
+              size="small"
+              icon={<AppIcon name="folderAdd" />}
+              onClick={() => setDirectoryModalOpen(true)}
+              aria-label="新建文件夹"
+              title="新建文件夹"
+            >
+              <span>新建目录</span>
+            </Button>
+            {showTerminalAction && (
+              <Tooltip title="打开远程终端">
+                <Button
+                  className="file-terminal-action"
+                  size="small"
+                  icon={<AppIcon name="terminal" />}
+                  loading={terminalOpening}
+                  onClick={handleOpenTerminal}
+                  aria-label="打开远程终端"
+                />
+              </Tooltip>
+            )}
+            {showDisconnectAction && (
+              <Tooltip title="断开连接">
+                <Button
+                  className="file-disconnect-action"
+                  size="small"
+                  danger
+                  icon={<AppIcon name="disconnect" />}
+                  onClick={() => handleDisconnect()}
+                  aria-label="断开连接"
+                />
+              </Tooltip>
+            )}
+          </div>
         </div>
       </div>
 
@@ -901,6 +934,7 @@ const FileBrowser = ({
         rootClassName="compact-modal upload-modal"
         title="选择上传内容"
         open={uploadModalOpen}
+        centered
         onCancel={() => {
           uploadSessionRef.current += 1
           uploadModalOpenRef.current = false
@@ -996,6 +1030,7 @@ const FileBrowser = ({
         rootClassName="compact-modal"
         title="新建远程文件夹"
         open={directoryModalOpen}
+        centered
         onCancel={() => setDirectoryModalOpen(false)}
         onOk={submitDirectory}
         okText="创建"

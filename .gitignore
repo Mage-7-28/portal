@@ -1,4 +1,4 @@
-# Logs
+# 日志
 logs
 *.log
 npm-debug.log*
@@ -7,24 +7,44 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
+# 依赖与包管理器缓存
+node_modules/
 .pnpm-store/
-dist
-dist-ssr
-*.local
+package-lock.json
 
-# Editor directories and files
-.vscode/extensions.json
+# 前端构建产物与本地缓存
+/dist/
+/dist-ssr/
+/out/
+.vite/
+.cache/
+
+# 本地环境配置；示例配置允许纳入版本管理
+*.local
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# 编辑器本地配置；保留可共享的扩展推荐
+.vscode/*
 !.vscode/extensions.json
-.idea
+.idea/
 .DS_Store
+._*
 *.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 
-package-lock.json
+# 临时布局验证页面、视觉草稿与测试输出
+/.portal-*-check.html
+/work/
+/coverage/
+/playwright-report/
+/test-results/
 
-# Temporary Python caches
+# Python 临时缓存
 __pycache__/
+*.py[cod]

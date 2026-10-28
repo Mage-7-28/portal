@@ -37,9 +37,9 @@ const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
 const DIRECTORY_SIZE_WORKER_BATCH_SIZE: usize = 8;
 // GNU/Linux 的远端 `du` 只返回一行汇总结果；限制输出大小，避免异常远端命令占满内存。
 const MAX_DIRECTORY_SIZE_COMMAND_OUTPUT_BYTES: usize = 64 * 1024;
-// 监控命令只返回有限数量的进程和有界输出，避免远端输出占用过多本地内存。
-const MAX_SERVER_MONITOR_OUTPUT_BYTES: usize = 256 * 1024;
-const MAX_SERVER_MONITOR_PROCESSES: usize = 100;
+// 监控命令采集可见进程并限制总数和输出大小，避免远端数据占用过多本地内存。
+const MAX_SERVER_MONITOR_OUTPUT_BYTES: usize = 512 * 1024;
+const MAX_SERVER_MONITOR_PROCESSES: usize = 500;
 const SERVER_MONITOR_COMMAND_TIMEOUT_MS: u32 = 10_000;
 const SERVER_MONITOR_MIN_INTERVAL: Duration = Duration::from_secs(3);
 // 目录命令轮询、预览大小和终端输入/控制/尺寸的安全边界。
@@ -287,6 +287,8 @@ pub struct ServerProcess {
 pub struct ServerMonitorSnapshot {
     /// 远端操作系统标识。
     pub platform: String,
+    /// 远端可用的逻辑 CPU 核心数。
+    pub cpu_count: usize,
     /// 整机 CPU 占用率；首次 Linux 采样建立基线时为空。
     pub cpu_percent: Option<f64>,
     /// 物理内存总量，单位为字节。
@@ -295,6 +297,11 @@ pub struct ServerMonitorSnapshot {
     pub memory_used_bytes: u64,
     /// 按 CPU 占用降序排列的进程列表。
     pub processes: Vec<ServerProcess>,
+    /// 去重后、截断前当前账户可见的进程总数。
+    pub process_count: usize,
+    /// 超出展示上限时另外保留内存排名，避免内存排序遗漏低 CPU 的大进程。
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub memory_processes: Vec<ServerProcess>,
     /// 采集完成时间的 Unix 毫秒时间戳。
     pub collected_at: u128,
 }
@@ -302,11 +309,14 @@ pub struct ServerMonitorSnapshot {
 /// 尚未计算 Linux 整机 CPU 占用率的远端原始采样数据。
 struct RemoteMonitorSample {
     platform: String,
+    cpu_count: usize,
     cpu_percent: Option<f64>,
     cpu_ticks: Option<(u64, u64)>,
     memory_total_bytes: u64,
     memory_used_bytes: u64,
     processes: Vec<ServerProcess>,
+    process_count: usize,
+    memory_processes: Vec<ServerProcess>,
 }
 
 struct RemoteCommandOutput {
@@ -317,6 +327,8 @@ struct RemoteCommandOutput {
 const LINUX_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\tlinux\n'
+cpu_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || grep -c '^processor[[:space:]]*:' /proc/cpuinfo 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 awk '
   /^cpu / { total=0; for (i=2; i<=NF; i++) total+=$i; printf "CPUSTAT\t%.0f\t%.0f\n", total, $5+$6 }
   $1 == "MemTotal:" { total_mem=$2*1024 }
@@ -326,12 +338,14 @@ awk '
   $1 == "Cached:" { cached=$2*1024 }
   END { if (!has_available) available=free_mem+buffers+cached; printf "MEM\t%.0f\t%.0f\n", total_mem, total_mem-available }
 ' /proc/stat /proc/meminfo
-(ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null | sort -k2,2nr | head -n 50; ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -eo pid=,pcpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
 const MACOS_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\tdarwin\n'
+cpu_count=$(sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 memory_total=$(sysctl -n hw.memsize)
 memory_available=$(vm_stat | awk '
   NR == 1 { line=$0; sub(/^.*page size of /, "", line); sub(/ bytes.*$/, "", line); page=line+0 }
@@ -343,12 +357,14 @@ memory_available=$(vm_stat | awk '
 ')
 printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
 top -l 1 -n 0 | awk -F'[ ,%]+' '/CPU usage:/ { printf "CPU\t%.2f\n", $3+$5; exit }'
-(ps -Ao pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -Ao pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -Ao pid=,%cpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
 const FREEBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\tfreebsd\n'
+cpu_count=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 memory_total=$(sysctl -n hw.physmem)
 page_size=$(sysctl -n hw.pagesize)
 free_pages=$(sysctl -n vm.stats.vm.v_free_count)
@@ -357,12 +373,14 @@ cache_pages=$(sysctl -n vm.stats.vm.v_cache_count 2>/dev/null || echo 0)
 memory_available=$(((free_pages+inactive_pages+cache_pages)*page_size))
 printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
 vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
-(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -axo pid=,%cpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
 const DRAGONFLY_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\tdragonfly\n'
+cpu_count=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 memory_total=$(sysctl -n hw.physmem)
 page_size=$(sysctl -n hw.pagesize)
 free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
@@ -370,12 +388,14 @@ test -n "$free_pages"
 memory_available=$((free_pages*page_size))
 printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
 vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
-(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -axo pid=,%cpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
 const OPENBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\topenbsd\n'
+cpu_count=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 memory_total=$(sysctl -n hw.physmem)
 page_size=$(sysctl -n hw.pagesize)
 free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
@@ -383,12 +403,14 @@ test -n "$free_pages"
 memory_available=$((free_pages*page_size))
 printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
 vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
-(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -axo pid=,%cpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
 const NETBSD_MONITOR_COMMAND: &str = r#"LC_ALL=C
 export LC_ALL
 printf 'OS\tnetbsd\n'
+cpu_count=$(sysctl -n hw.ncpu 2>/dev/null || echo 1)
+printf 'CPUCOUNT\t%s\n' "$cpu_count"
 memory_total=$(sysctl -n hw.physmem64)
 page_size=$(sysctl -n hw.pagesize)
 free_pages=$(vmstat | awk '{ for (i=1; i<=NF; i++) if ($i == "fre") free_column=i; if (free_column && $1 ~ /^[0-9]+$/ && $free_column ~ /^[0-9]+$/) free_pages=$free_column } END { if (free_pages != "") print free_pages }')
@@ -396,10 +418,10 @@ test -n "$free_pages"
 memory_available=$((free_pages*page_size))
 printf 'MEM\t%s\t%s\n' "$memory_total" "$((memory_total-memory_available))"
 vmstat 1 2 | awk '{ for (i=1; i<=NF; i++) if ($i == "id") idle_column=i; if (idle_column && $1 ~ /^[0-9]+$/ && $idle_column ~ /^[0-9.]+$/) idle=$idle_column } END { if (idle != "") printf "CPU\t%.2f\n", 100-idle }'
-(ps -axo pid=,%cpu=,rss=,comm= | sort -k2,2nr | head -n 50; ps -axo pid=,%cpu=,rss=,comm= | sort -k3,3nr | head -n 50) | awk '!seen[$1]++ { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
+ps -axo pid=,%cpu=,rss=,comm= 2>/dev/null | awk 'NF >= 4 { pid=$1; cpu=$2+0; rss=$3+0; $1=$2=$3=""; sub(/^[ \t]+/, ""); gsub(/[\t\r]/, " ", $0); printf "PROC\t%s\t%.2f\t%.0f\t%s\n", pid, cpu, rss*1024, $0 }'
 "#;
 
-const WINDOWS_MONITOR_SCRIPT: &str = r#"$ErrorActionPreference='Stop';$os=Get-CimInstance Win32_OperatingSystem;$total=[uint64]$os.TotalVisibleMemorySize*1024;$used=($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)*1024;$cpu=(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor|Where-Object Name -eq '_Total').PercentProcessorTime;$logical=[math]::Max([double](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors,1);$all=@(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process|Where-Object {$_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle'});$selected=@(($all|Sort-Object PercentProcessorTime -Descending|Select-Object -First 50)+($all|Sort-Object WorkingSet -Descending|Select-Object -First 50)|Group-Object IDProcess|ForEach-Object {$_.Group[0]});$processes=@($selected|ForEach-Object {[pscustomobject]@{pid=[uint64]$_.IDProcess;name=[string]$_.Name;cpuPercent=[math]::Round(([double]$_.PercentProcessorTime/$logical),2);memoryBytes=[uint64]$_.WorkingSet}});[pscustomobject]@{platform='windows';cpuPercent=[double]$cpu;memoryTotalBytes=$total;memoryUsedBytes=[uint64]$used;processes=$processes}|ConvertTo-Json -Compress -Depth 4"#;
+const WINDOWS_MONITOR_SCRIPT: &str = r#"$ErrorActionPreference='Stop';$os=Get-CimInstance Win32_OperatingSystem;$total=[uint64]$os.TotalVisibleMemorySize*1024;$used=($os.TotalVisibleMemorySize-$os.FreePhysicalMemory)*1024;$cpu=(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor|Where-Object Name -eq '_Total').PercentProcessorTime;$cpuCount=[math]::Max([int](Get-CimInstance Win32_ComputerSystem).NumberOfLogicalProcessors,1);$logical=[double]$cpuCount;$all=@(Get-CimInstance Win32_PerfFormattedData_PerfProc_Process|Where-Object {$_.IDProcess -gt 0 -and $_.Name -ne '_Total' -and $_.Name -ne 'Idle'});$selected=@($all|Sort-Object PercentProcessorTime -Descending);$processes=@($selected|ForEach-Object {[pscustomobject]@{pid=[uint64]$_.IDProcess;name=[string]$_.Name;cpuPercent=[math]::Round(([double]$_.PercentProcessorTime/$logical),2);memoryBytes=[uint64]$_.WorkingSet}});[pscustomobject]@{platform='windows';cpuCount=[int]$cpuCount;cpuPercent=[double]$cpu;memoryTotalBytes=$total;memoryUsedBytes=[uint64]$used;processes=$processes}|ConvertTo-Json -Compress -Depth 4"#;
 
 /// 连接测试命令的结果，不会写入连接池。
 #[derive(Debug, Clone, Serialize)]
@@ -745,6 +767,7 @@ fn parse_remote_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ssh
 
     let text = String::from_utf8_lossy(output);
     let mut platform = None;
+    let mut cpu_count = None;
     let mut cpu_percent = None;
     let mut cpu_ticks = None;
     let mut memory = None;
@@ -758,6 +781,9 @@ fn parse_remote_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ssh
                     .next()
                     .filter(|value| !value.is_empty())
                     .map(str::to_string)
+            }
+            Some("CPUCOUNT") => {
+                cpu_count = fields.next().and_then(|value| value.parse::<usize>().ok());
             }
             Some("CPU") => {
                 cpu_percent = fields.next().and_then(|value| value.parse::<f64>().ok());
@@ -817,11 +843,15 @@ fn parse_remote_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ssh
         memory.ok_or_else(|| SshError::MonitorUnavailable("远端未返回有效内存数据".to_string()))?;
     let mut sample = RemoteMonitorSample {
         platform,
+        cpu_count: cpu_count
+            .ok_or_else(|| SshError::MonitorUnavailable("远端未返回有效 CPU 核心数".to_string()))?,
         cpu_percent,
         cpu_ticks,
         memory_total_bytes,
         memory_used_bytes,
         processes,
+        process_count: 0,
+        memory_processes: Vec::new(),
     };
     validate_remote_monitor_sample(&mut sample)?;
     Ok(sample)
@@ -831,6 +861,11 @@ fn parse_remote_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ssh
 fn parse_windows_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, SshError> {
     let value: serde_json::Value = serde_json::from_slice(output)
         .map_err(|_| SshError::MonitorUnavailable("Windows 监控结果格式无效".to_string()))?;
+    let cpu_count = value
+        .get("cpuCount")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| SshError::MonitorUnavailable("Windows CPU 核心数无效".to_string()))?;
     let cpu_percent = value.get("cpuPercent").and_then(serde_json::Value::as_f64);
     let memory_total_bytes = value
         .get("memoryTotalBytes")
@@ -880,11 +915,14 @@ fn parse_windows_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ss
 
     let mut sample = RemoteMonitorSample {
         platform: "windows".to_string(),
+        cpu_count,
         cpu_percent,
         cpu_ticks: None,
         memory_total_bytes,
         memory_used_bytes,
         processes,
+        process_count: 0,
+        memory_processes: Vec::new(),
     };
     validate_remote_monitor_sample(&mut sample)?;
     Ok(sample)
@@ -892,6 +930,11 @@ fn parse_windows_monitor_output(output: &[u8]) -> Result<RemoteMonitorSample, Ss
 
 /// 校验不同系统采集器输出的通用资源范围，并按 CPU 占用排序。
 fn validate_remote_monitor_sample(sample: &mut RemoteMonitorSample) -> Result<(), SshError> {
+    if sample.cpu_count == 0 {
+        return Err(SshError::MonitorUnavailable(
+            "远端 CPU 核心数无效".to_string(),
+        ));
+    }
     if sample.memory_total_bytes == 0 || sample.memory_used_bytes > sample.memory_total_bytes {
         return Err(SshError::MonitorUnavailable("远端内存数据无效".to_string()));
     }
@@ -923,6 +966,20 @@ fn validate_remote_monitor_sample(sample: &mut RemoteMonitorSample) -> Result<()
             .or_insert(process);
     }
     sample.processes = processes_by_pid.into_values().collect();
+    sample.process_count = sample.processes.len();
+    sample.memory_processes.clear();
+    if sample.process_count > MAX_SERVER_MONITOR_PROCESSES {
+        sample.memory_processes = sample.processes.clone();
+        sample.memory_processes.sort_by(|left, right| {
+            right
+                .memory_bytes
+                .cmp(&left.memory_bytes)
+                .then_with(|| left.pid.cmp(&right.pid))
+        });
+        sample
+            .memory_processes
+            .truncate(MAX_SERVER_MONITOR_PROCESSES);
+    }
     sample.processes.sort_by(|left, right| {
         right
             .cpu_percent
@@ -1055,7 +1112,7 @@ fn monitor_session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>
     Ok(session)
 }
 
-/// 读取远端服务器 CPU、内存和前 50 个进程的资源快照。
+/// 读取远端资源快照，报告可见进程总数并分别保留 CPU、内存排名的有限进程列表。
 #[tauri::command]
 pub async fn get_server_monitor_snapshot(
     state: State<'_, SshState>,
@@ -1079,10 +1136,13 @@ pub async fn get_server_monitor_snapshot(
         let sample = collect_remote_monitor_sample(&state, &id)?;
         let snapshot = ServerMonitorSnapshot {
             platform: sample.platform,
+            cpu_count: sample.cpu_count,
             cpu_percent: sample.cpu_percent,
             memory_total_bytes: sample.memory_total_bytes,
             memory_used_bytes: sample.memory_used_bytes,
             processes: sample.processes,
+            process_count: sample.process_count,
+            memory_processes: sample.memory_processes,
             collected_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -1872,11 +1932,12 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
     // 丢弃缓存会话即可关闭已损坏的传输连接；正在进行的传输任务可能仍会持有
     // 自己的 Arc，直到任务结束。
     state.connection_pool.write().unwrap().remove(id);
+    remove_monitor_session(state, id);
+    clear_monitor_cache(state, id);
     cancel_directory_size_tasks_for_connection(state, id);
     remove_directory_size_worker_pool(state, id);
     close_terminals_for_connection(state, id);
     if was_connected {
-        clear_monitor_cache(state, id);
         emit_event(
             &state.app_handle,
             "ssh-disconnected",
@@ -5265,9 +5326,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn removes_monitor_session_when_connection_is_marked_disconnected() {
+        let state = SshState::default();
+        let connection_id = "connection-a".to_string();
+        state.connections.write().unwrap().insert(
+            connection_id.clone(),
+            SshConnection {
+                id: connection_id.clone(),
+                host: "example.test".to_string(),
+                port: 22,
+                username: "operator".to_string(),
+                auth_method: "password".to_string(),
+                host_key_fingerprint: None,
+                password: String::new(),
+                connected: true,
+            },
+        );
+        let monitor_session = Arc::new(Mutex::new(Session::new().expect("应创建测试会话")));
+        state
+            .monitor_sessions
+            .lock()
+            .unwrap()
+            .insert(connection_id.clone(), monitor_session);
+
+        mark_connection_disconnected(&state, &connection_id, "测试断线".to_string());
+
+        assert!(!state
+            .monitor_sessions
+            .lock()
+            .unwrap()
+            .contains_key(&connection_id));
+        assert!(
+            !state
+                .connections
+                .read()
+                .unwrap()
+                .get(&connection_id)
+                .expect("连接配置应保留")
+                .connected
+        );
+    }
+
+    #[test]
+    fn monitor_commands_report_logical_cpu_count() {
+        for command in [
+            LINUX_MONITOR_COMMAND,
+            MACOS_MONITOR_COMMAND,
+            FREEBSD_MONITOR_COMMAND,
+            DRAGONFLY_MONITOR_COMMAND,
+            OPENBSD_MONITOR_COMMAND,
+            NETBSD_MONITOR_COMMAND,
+        ] {
+            assert!(command.contains("CPUCOUNT"));
+        }
+        assert!(WINDOWS_MONITOR_SCRIPT.contains("cpuCount="));
+    }
+
+    #[test]
     fn parses_bounded_server_monitor_output() {
         let output = concat!(
             "OS\tlinux\n",
+            "CPUCOUNT\t8\n",
             "CPUSTAT\t1000\t250\n",
             "MEM\t8192\t4096\n",
             "PROC\t42\t12.5\t2048\tworker\n",
@@ -5277,6 +5396,7 @@ mod tests {
         let sample = parse_remote_monitor_output(output.as_bytes()).expect("采集结果应可解析");
 
         assert_eq!(sample.platform, "linux");
+        assert_eq!(sample.cpu_count, 8);
         assert_eq!(sample.cpu_ticks, Some((1000, 250)));
         assert_eq!(sample.cpu_percent, None);
         assert_eq!(sample.memory_total_bytes, 8192);
@@ -5291,6 +5411,7 @@ mod tests {
     fn deduplicates_monitor_processes_by_pid_using_highest_cpu_sample() {
         let output = concat!(
             "OS\tlinux\n",
+            "CPUCOUNT\t4\n",
             "CPU\t12.0\n",
             "MEM\t8192\t4096\n",
             "PROC\t42\t2.0\t8192\tworker\n",
@@ -5304,6 +5425,73 @@ mod tests {
         assert_eq!(sample.processes[0].pid, 42);
         assert_eq!(sample.processes[0].cpu_percent, 8.0);
         assert_eq!(sample.processes[0].memory_bytes, 8192);
+    }
+
+    #[test]
+    fn keeps_up_to_five_hundred_processes_in_monitor_snapshot() {
+        let mut output = String::from("OS\tlinux\nCPUCOUNT\t4\nCPU\t12.0\nMEM\t8192\t4096\n");
+        for pid in 1..=505 {
+            output.push_str(&format!(
+                "PROC\t{pid}\t{}.0\t1024\tprocess-{pid}\n",
+                pid % 100
+            ));
+        }
+
+        let sample = parse_remote_monitor_output(output.as_bytes()).expect("监控结果应可解析");
+
+        assert_eq!(sample.processes.len(), 500);
+    }
+
+    #[test]
+    fn reports_visible_process_count_before_limiting_monitor_rows() {
+        let mut output = String::from("OS\tlinux\nCPUCOUNT\t4\nCPU\t12.0\nMEM\t8192\t4096\n");
+        for pid in 1..=505 {
+            output.push_str(&format!("PROC\t{pid}\t1.0\t1024\tworker-{pid}\n"));
+        }
+        // 同一 PID 的重复采样不应增加可见进程总数。
+        output.push_str("PROC\t1\t2.0\t2048\tworker-1\n");
+        let sample = parse_remote_monitor_output(output.as_bytes()).unwrap();
+        let snapshot = ServerMonitorSnapshot {
+            platform: sample.platform,
+            cpu_count: sample.cpu_count,
+            cpu_percent: sample.cpu_percent,
+            memory_total_bytes: sample.memory_total_bytes,
+            memory_used_bytes: sample.memory_used_bytes,
+            processes: sample.processes,
+            process_count: sample.process_count,
+            memory_processes: sample.memory_processes,
+            collected_at: 0,
+        };
+        let payload = serde_json::to_value(snapshot).unwrap();
+
+        assert_eq!(payload["processCount"], 505);
+        assert_eq!(payload["processes"].as_array().unwrap().len(), 500);
+        assert_eq!(payload["cpuCount"], 4);
+    }
+
+    #[test]
+    fn keeps_high_memory_processes_outside_the_cpu_ranked_limit() {
+        let mut output = String::from("OS\tlinux\nCPUCOUNT\t4\nCPU\t12.0\nMEM\t8192\t4096\n");
+        for pid in 1..=500 {
+            output.push_str(&format!("PROC\t{pid}\t1.0\t1024\tcpu-worker-{pid}\n"));
+        }
+        output.push_str("PROC\t900\t0.0\t4096\tmemory-worker\n");
+        let sample = parse_remote_monitor_output(output.as_bytes()).unwrap();
+        let snapshot = ServerMonitorSnapshot {
+            platform: sample.platform,
+            cpu_count: sample.cpu_count,
+            cpu_percent: sample.cpu_percent,
+            memory_total_bytes: sample.memory_total_bytes,
+            memory_used_bytes: sample.memory_used_bytes,
+            processes: sample.processes,
+            process_count: sample.process_count,
+            memory_processes: sample.memory_processes,
+            collected_at: 0,
+        };
+        let payload = serde_json::to_value(snapshot).unwrap();
+
+        assert_eq!(payload["memoryProcesses"][0]["pid"], 900);
+        assert_eq!(payload["processes"][0]["pid"], 1);
     }
 
     #[test]
@@ -5351,10 +5539,17 @@ mod tests {
         let missing_memory = b"OS\tlinux\nCPU\t15.0\n";
         assert!(parse_remote_monitor_output(missing_memory).is_err());
 
-        let invalid_memory = b"OS\tlinux\nCPU\t15.0\nMEM\t100\t101\n";
+        let missing_cpu_count = b"OS\tlinux\nCPU\t15.0\nMEM\t100\t50\n";
+        assert!(parse_remote_monitor_output(missing_cpu_count).is_err());
+
+        let invalid_cpu_count = b"OS\tlinux\nCPUCOUNT\t0\nCPU\t15.0\nMEM\t100\t50\n";
+        assert!(parse_remote_monitor_output(invalid_cpu_count).is_err());
+
+        let invalid_memory = b"OS\tlinux\nCPUCOUNT\t2\nCPU\t15.0\nMEM\t100\t101\n";
         assert!(parse_remote_monitor_output(invalid_memory).is_err());
 
-        let invalid_process = b"OS\tlinux\nCPU\t15.0\nMEM\t100\t50\nPROC\tbad\t2\t3\tworker\n";
+        let invalid_process =
+            b"OS\tlinux\nCPUCOUNT\t2\nCPU\t15.0\nMEM\t100\t50\nPROC\tbad\t2\t3\tworker\n";
         assert!(parse_remote_monitor_output(invalid_process).is_err());
     }
 
@@ -5367,11 +5562,12 @@ mod tests {
 
     #[test]
     fn parses_windows_json_monitor_output_and_sorts_processes_by_cpu() {
-        let output = br#"{"platform":"windows","cpuPercent":22.5,"memoryTotalBytes":8000,"memoryUsedBytes":3000,"processes":[{"pid":9,"name":"idle-worker","cpuPercent":1.5,"memoryBytes":600},{"pid":4,"name":"busy-worker","cpuPercent":8.25,"memoryBytes":1200}]}"#;
+        let output = br#"{"platform":"windows","cpuCount":8,"cpuPercent":22.5,"memoryTotalBytes":8000,"memoryUsedBytes":3000,"processes":[{"pid":9,"name":"idle-worker","cpuPercent":1.5,"memoryBytes":600},{"pid":4,"name":"busy-worker","cpuPercent":8.25,"memoryBytes":1200}]}"#;
 
         let sample = parse_remote_monitor_output(output).expect("Windows 监控结果应可解析");
 
         assert_eq!(sample.platform, "windows");
+        assert_eq!(sample.cpu_count, 8);
         assert_eq!(sample.cpu_percent, Some(22.5));
         assert_eq!(sample.processes[0].pid, 4);
         assert_eq!(sample.processes[0].name, "busy-worker");

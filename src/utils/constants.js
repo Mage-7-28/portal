@@ -13,7 +13,9 @@ export const StoreKeys = {
   SSH_CONNECTIONS: 'ssh_connections',
   STORE_VERSION: 'store_version',
   UPDATE_SKIPPED_VERSION: 'update_skipped_version',
-  SHOW_HIDDEN_FILES: 'show_hidden_files'
+  SHOW_HIDDEN_FILES: 'show_hidden_files',
+  TERMINAL_FONT_SIZE: 'terminal_font_size',
+  WORKSPACE_LAYOUTS: 'workspace_layouts'
 }
 
 // Store 数据结构版本，用于后续迁移持久化配置。
@@ -78,7 +80,7 @@ export const THEME_BG_INPUT = '#313438'
 export const THEME_BORDER_COLOR = '#45474d'
 export const THEME_TEXT_PRIMARY = '#e6e8eb'
 export const THEME_TEXT_SECONDARY = '#a9adb6'
-export const THEME_TEXT_LINK = '#7fa6a4'
+export const THEME_TEXT_LINK = '#67c7d1'
 export const THEME_SUCCESS = '#8fb996'
 export const THEME_WARNING = '#d0a965'
 export const THEME_DANGER = '#d86f6f'

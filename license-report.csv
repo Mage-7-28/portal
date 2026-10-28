@@ -8,6 +8,7 @@
 "frontend-runtime","@tauri-apps/plugin-opener@2.5.4","MIT OR Apache-2.0","https://github.com/tauri-apps/plugins-workspace"
 "frontend-runtime","@tauri-apps/plugin-store@2.4.4","MIT OR Apache-2.0","https://github.com/tauri-apps/plugins-workspace"
 "frontend-runtime","@xterm/addon-fit@0.11.0","MIT","https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit"
+"frontend-runtime","@xterm/addon-search@0.16.0","MIT","https://github.com/xtermjs/xterm.js/tree/master/addons/addon-search"
 "frontend-runtime","@xterm/xterm@6.0.0","MIT","https://github.com/xtermjs/xterm.js"
 "frontend-runtime","antd@6.3.3","MIT","https://github.com/ant-design/ant-design"
 "frontend-runtime","prismjs@1.30.0","MIT","https://github.com/PrismJS/prism"

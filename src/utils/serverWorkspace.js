@@ -4,6 +4,22 @@
  * @returns {Object|null} 连接 ID 和非敏感展示字段；普通窗口返回 null。
  */
 export const SERVER_WORKSPACE_WINDOW_PREFIX = 'PortalWorkspace-'
+// 已经确认的应用退出和连接删除使用定向事件，避免重复触发窗口关闭确认。
+export const SERVER_WORKSPACE_CLOSE_EVENT = 'portal-workspace-close'
+
+/**
+ * 按登录用户名和远端地址生成工作窗口标题。
+ *
+ * @param {{username?: string, host?: string, port?: number|string}} connection - 当前连接配置。
+ * @returns {string} 包含用户、主机和端口的原生窗口标题。
+ */
+export const formatServerWorkspaceTitle = connection => {
+  const username = String(connection?.username || '用户')
+  const rawHost = String(connection?.host || '服务器')
+  const host = rawHost.includes(':') && !rawHost.startsWith('[') ? `[${ rawHost }]` : rawHost
+  const port = Number(connection?.port) || 22
+  return `${ username }@${ host }:${ port } · Portal`
+}
 
 export const getServerWorkspaceParams = () => {
   const params = new window.URLSearchParams(window.location.search)

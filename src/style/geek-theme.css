@@ -15,7 +15,7 @@
   --portal-geek-line-strong: #5b5e66;
   --portal-geek-text: #e6e8eb;
   --portal-geek-text-muted: #a9adb6;
-  --portal-geek-teal: #7fa6a4;
+  --portal-geek-teal: #67c7d1;
   --portal-geek-success: #8fb996;
   --portal-geek-shadow: rgba(0, 0, 0, 0.36);
   color-scheme: dark;
@@ -39,18 +39,6 @@
   50% {
     opacity: 1;
     box-shadow: 0 0 0 4px rgba(143, 185, 150, 0.16);
-  }
-}
-
-/* 强调色呼吸动画只作用于静态标题标记，不改变布局尺寸。 */
-@keyframes portal-accent-breathe {
-  0%,
-  100% {
-    opacity: 0.68;
-  }
-
-  50% {
-    opacity: 1;
   }
 }
 
@@ -149,10 +137,30 @@ body {
 
 /* 统一按钮、输入框与焦点的边界表现，保持柔和且明确的可访问性提示。 */
 .ant-btn {
+  position: relative;
+  overflow: hidden;
   border-color: var(--portal-geek-line-soft);
   background: var(--portal-geek-surface-2);
   color: var(--portal-geek-text);
   transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease, transform 150ms ease;
+}
+
+.ant-btn::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(110deg, transparent 20%, rgba(255, 255, 255, 0.13), transparent 80%);
+  content: '';
+  transform: translateX(-120%);
+  pointer-events: none;
+}
+
+.ant-btn:not(:disabled):hover::after {
+  animation: portal-button-sweep 380ms ease-out;
+}
+
+@keyframes portal-button-sweep {
+  to { transform: translateX(120%); }
 }
 
 .ant-btn:not(:disabled):hover {
@@ -165,10 +173,20 @@ body {
   transform: translateY(1px);
 }
 
+.ant-btn-text:not(:disabled) {
+  border-color: transparent;
+  background: transparent;
+}
+
+.ant-btn-text:not(:disabled):hover {
+  border-color: rgba(103, 199, 209, 0.25);
+  background: rgba(103, 199, 209, 0.065);
+}
+
 .ant-btn-primary:not(:disabled) {
   border-color: #f0aa90 !important;
   background: var(--portal-geek-primary) !important;
-  color: #ffffff !important;
+  color: #251e1b !important;
 }
 
 .ant-btn-primary:not(:disabled):hover {
@@ -189,8 +207,8 @@ body {
 .ant-btn:focus-visible,
 .ant-input:focus,
 .ant-input-affix-wrapper-focused {
-  outline-color: rgba(235, 144, 112, 0.54);
-  box-shadow: 0 0 0 2px rgba(235, 144, 112, 0.12) !important;
+  outline-color: rgba(103, 199, 209, 0.65);
+  box-shadow: 0 0 0 2px rgba(103, 199, 209, 0.12) !important;
 }
 
 .ant-input,
@@ -228,6 +246,7 @@ body {
 .ant-popover .ant-popover-inner,
 .ant-tooltip .ant-tooltip-inner {
   border: 1px solid var(--portal-geek-line-strong);
+  border-top-color: rgba(103, 199, 209, 0.45);
   background: var(--portal-geek-surface-1);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
 }
@@ -267,193 +286,15 @@ body {
   color: var(--portal-geek-text);
 }
 
-/* 连接页按节点卡片排列，横向空间充足时使用双列，窄窗口恢复单列。 */
-.connection-page {
-  padding: 13px 14px 10px;
-  background:
-    linear-gradient(180deg, rgba(127, 166, 164, 0.035), transparent 150px),
-    transparent;
-}
-
-.connection-header {
-  min-height: 40px;
-  margin-bottom: 11px;
-  padding: 0 2px 10px;
-  border-bottom: 1px solid var(--portal-geek-line-soft);
-}
-
-.connection-header > div {
-  gap: 10px;
-}
-
-.connection-header h1 {
-  color: var(--portal-geek-text);
-  font-size: 15px;
-  letter-spacing: 0;
-}
-
-.connection-header h1::before {
-  flex: 0 0 auto;
-  display: inline-block;
-  width: 5px;
-  height: 16px;
-  margin: 0 8px 0 0;
-  border-radius: 3px;
-  background: var(--portal-geek-primary);
-  content: '';
-  animation: portal-accent-breathe 3.2s ease-in-out infinite;
-}
-
-.connection-header > div > span {
-  color: var(--portal-geek-text-muted);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11px;
-  letter-spacing: 0;
-}
-
-.connection-header > div > .connection-header-hint {
-  color: var(--portal-geek-teal);
-}
-
-.connection-list .ant-list-items {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 9px;
-}
-
-.connection-row.ant-list-item {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 68px;
-  align-items: center;
-  overflow: hidden;
-  padding: 10px 11px !important;
-  box-sizing: border-box;
-  border-color: var(--portal-geek-line-soft) !important;
-  border-radius: 7px;
-  background:
-    linear-gradient(90deg, rgba(127, 166, 164, 0.04), transparent 30%),
-    var(--portal-geek-surface-1);
-  box-shadow:
-    inset 2px 0 0 rgba(127, 166, 164, 0.42),
-    inset 0 1px 0 rgba(255, 255, 255, 0.022);
-}
-
-.connection-row.ant-list-item::before {
-  position: absolute;
-  top: 0;
-  right: 11px;
-  left: 11px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(235, 144, 112, 0.6),
-    rgba(127, 166, 164, 0.5),
-    transparent
-  );
-  content: '';
-  opacity: 0.58;
-  pointer-events: none;
-}
-
-.connection-row.ant-list-item:hover {
-  border-color: var(--portal-geek-line-strong) !important;
-  background:
-    linear-gradient(90deg, rgba(127, 166, 164, 0.075), transparent 35%),
-    #35373c;
-  box-shadow:
-    inset 2px 0 0 var(--portal-geek-primary),
-    inset 0 1px 0 rgba(255, 255, 255, 0.04);
-}
-
-.connection-row.ant-list-item:hover::before {
-  opacity: 1;
-}
-
-.connection-row.ant-list-item.is-connecting,
-.connection-row.ant-list-item.is-connecting:hover {
-  border-color: var(--portal-geek-primary) !important;
-  background: linear-gradient(90deg, rgba(235, 144, 112, 0.12), transparent 42%), #302c2e;
-}
-
-.connection-row-icon {
-  width: 18px;
-  height: 18px;
-  padding: 6px;
-  box-sizing: content-box;
-  border: 1px solid rgba(127, 166, 164, 0.24);
-  border-radius: 6px;
-  background: rgba(127, 166, 164, 0.075);
-  color: var(--portal-geek-primary);
-}
-
-.connection-row .ant-list-item-meta {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.connection-row .ant-list-item-meta-avatar {
-  height: 32px;
-  margin-inline-end: 10px;
-}
-
-.connection-row .ant-list-item-action {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  margin-inline-start: 8px;
-}
-
-.connection-row-name,
 .connection-name,
 .file-item-name {
   color: var(--portal-geek-text);
 }
 
-.connection-row-endpoint,
 .connection-endpoint {
   color: var(--portal-geek-text-muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11.5px;
-}
-
-.connection-empty {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: min(380px, calc(100% - 24px));
-  height: auto;
-  min-height: 180px;
-  padding: 20px;
-  transform: translate(-50%, -50%);
-  border: 1px dashed var(--portal-geek-line-soft);
-  border-radius: 8px;
-  background: rgba(36, 37, 41, 0.74);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.022);
-}
-
-.connection-empty .app-icon {
-  width: 22px;
-  height: 22px;
-  padding: 8px;
-  box-sizing: content-box;
-  border: 1px solid rgba(127, 166, 164, 0.24);
-  border-radius: 7px;
-  background: rgba(127, 166, 164, 0.065);
-  color: var(--portal-geek-teal);
-}
-
-.connection-loading {
-  border: 1px solid rgba(127, 166, 164, 0.3);
-  background: rgba(30, 31, 34, 0.78);
-  backdrop-filter: blur(2px);
-}
-
-.connection-loading .ant-spin-dot-item,
-.connection-row-loading .ant-spin-dot-item {
-  background-color: var(--portal-geek-primary);
 }
 
 /* 文件区将服务器状态、操作与路径导航收拢为同一控制台头部。 */
@@ -491,12 +332,7 @@ body {
 }
 
 .path-toolbar {
-  gap: 7px;
-  margin-bottom: 9px;
-}
-
-.file-workspace-header .path-toolbar {
-  margin-bottom: 0;
+  gap: 6px;
 }
 
 .toolbar-icon-button.ant-btn {
@@ -513,7 +349,6 @@ body {
 }
 
 .remote-path-bar {
-  height: 34px;
   border-color: var(--portal-geek-line-soft);
   border-radius: 6px;
   background:
@@ -531,7 +366,7 @@ body {
 }
 
 .remote-path-input.ant-input {
-  height: 32px;
+  height: 30px;
   background: transparent !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12.5px;
@@ -539,7 +374,7 @@ body {
 }
 
 .path-menu-button.ant-btn {
-  height: 32px;
+  height: 30px;
   border-left-color: var(--portal-geek-line-soft);
 }
 
@@ -554,12 +389,16 @@ body {
 
 .file-workspace-header .connection-toolbar {
   min-height: 31px;
-  margin: 0 0 8px;
+  margin: 0;
   padding: 0 1px 8px;
   border: 0;
   border-bottom: 1px solid rgba(91, 94, 102, 0.65);
   border-radius: 0;
   background: transparent;
+}
+
+.file-action-toolbar .ant-btn {
+  border-radius: 5px;
 }
 
 .connection-status-dot {
@@ -571,15 +410,11 @@ body {
   box-sizing: border-box;
   background: var(--portal-geek-success);
   box-shadow: 0 0 0 3px rgba(143, 185, 150, 0.09);
-  animation: portal-status-pulse 3.6s ease-in-out infinite;
+  animation: portal-status-pulse 3.2s ease-in-out infinite;
 }
 
 .connection-name {
   letter-spacing: 0;
-}
-
-.connection-actions .ant-btn {
-  border-radius: 5px;
 }
 
 .file-list-shell {
@@ -672,6 +507,13 @@ body {
 .compact-modal .ant-modal-title {
   color: var(--portal-geek-text);
   letter-spacing: 0;
+}
+
+.compact-modal .ant-modal-container {
+  border: 1px solid var(--portal-geek-line-soft);
+  border-top-color: rgba(103, 199, 209, 0.5);
+  border-radius: 8px;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, 0.4);
 }
 
 .compact-modal .ant-modal-close:hover {
@@ -953,28 +795,22 @@ body {
 
 /* 移动/窄窗口只收缩留白并隐藏次要端点信息，不改变核心操作顺序。 */
 @media (max-width: 680px) {
-  .connection-page,
   .file-browser {
     padding: 10px;
   }
 
-  .connection-header {
-    margin-bottom: 10px;
-  }
-
-  .connection-header > div > .connection-header-hint,
   .connection-endpoint {
     display: none;
   }
 }
 
-@media (max-width: 760px) {
-  .connection-list .ant-list-items {
-    grid-template-columns: minmax(0, 1fr);
-  }
+/* 尊重系统减少动效偏好，保留状态变化但取消过渡和循环动画。 */
+.portal-window-hidden *,
+.portal-window-hidden *::before,
+.portal-window-hidden *::after {
+  animation-play-state: paused !important;
 }
 
-/* 尊重系统减少动效偏好，保留状态变化但取消过渡和循环动画。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

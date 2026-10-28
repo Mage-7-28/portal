@@ -13,6 +13,8 @@ import './style/antd-theme.css'
 import './style/react-hot-toast.css'
 import './style/index.css'
 import './style/geek-theme.css'
+import './style/connection-boot.css'
+import './style/launcher.css'
 // xterm 官方要求在应用入口加载基础 CSS，终端组件只负责创建实例和写入 PTY 数据。
 import '@xterm/xterm/css/xterm.css'
 import { GlobalFontFamily } from './utils/common.js'
@@ -21,6 +23,13 @@ import { initNotification } from './utils/notificationUtils.js'
 
 // 在 React 挂载前设置全局字体令牌，确保首屏 loading 和正式页面使用同一字体链。
 document.documentElement.style.setProperty('--global-font-family', GlobalFontFamily)
+
+// 后台窗口停止纯装饰动画；连接、传输和监控采集不受影响。
+const syncAnimationVisibility = () => {
+  document.documentElement.classList.toggle('portal-window-hidden', document.hidden)
+}
+document.addEventListener('visibilitychange', syncAnimationVisibility)
+syncAnimationVisibility()
 
 // loading 层的离场时长必须与 index.html 中的 CSS transition 保持一致。
 const LOADING_EXIT_DURATION_MS = 180

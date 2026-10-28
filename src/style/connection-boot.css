@@ -1,0 +1,207 @@
+/* 连接阶段的强动效集中在独立遮罩，不覆盖实际终端或文件内容。 */
+.connection-boot-screen {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  padding: 28px;
+  box-sizing: border-box;
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(103, 199, 209, 0.075), transparent 58%),
+    linear-gradient(rgba(103, 199, 209, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103, 199, 209, 0.025) 1px, transparent 1px),
+    var(--portal-geek-canvas);
+  background-size: auto, 48px 48px, 48px 48px, auto;
+}
+
+.connection-boot-panel {
+  position: relative;
+  display: flex;
+  width: min(480px, 100%);
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 32px 24px;
+  border: 1px solid var(--portal-geek-line-soft);
+  border-top-color: rgba(103, 199, 209, 0.55);
+  border-radius: 8px;
+  background: linear-gradient(145deg, rgba(103, 199, 209, 0.035), transparent 55%), #242529;
+  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.035);
+  text-align: center;
+  box-sizing: border-box;
+}
+
+.connection-boot-mark {
+  position: relative;
+  display: grid;
+  width: 188px;
+  height: 168px;
+  place-items: center;
+  margin-bottom: 20px;
+}
+
+.connection-boot-grid {
+  position: absolute;
+  inset: 14px;
+  background:
+    linear-gradient(90deg, transparent calc(50% - .5px), rgba(103, 199, 209, 0.2) 50%, transparent calc(50% + .5px)),
+    linear-gradient(transparent calc(50% - .5px), rgba(103, 199, 209, 0.2) 50%, transparent calc(50% + .5px));
+}
+
+.connection-boot-ring {
+  position: relative;
+  display: grid;
+  width: 130px;
+  height: 130px;
+  place-items: center;
+}
+
+.connection-boot-ring::before,
+.connection-boot-ring::after {
+  position: absolute;
+  inset: 0;
+  border: 2px solid transparent;
+  border-top-color: #67c7d1;
+  border-right-color: rgba(103, 199, 209, 0.18);
+  border-bottom-color: #eb9070;
+  border-radius: 50%;
+  content: '';
+  animation: portal-boot-orbit 4.8s linear infinite;
+}
+
+.connection-boot-ring::after {
+  inset: 9px;
+  border-width: 1px;
+  border-top-color: rgba(235, 144, 112, 0.65);
+  border-right-color: transparent;
+  border-bottom-color: rgba(103, 199, 209, 0.65);
+  animation-duration: 7.2s;
+  animation-direction: reverse;
+}
+
+.connection-boot-ring-core {
+  position: relative;
+  display: grid;
+  width: 82px;
+  height: 82px;
+  border: 1px solid rgba(103, 199, 209, 0.22);
+  border-radius: 18px;
+  place-items: center;
+  background: var(--portal-geek-canvas);
+  box-shadow: 0 0 28px rgba(103, 199, 209, 0.08);
+}
+
+.connection-boot-ring-core img { object-fit: contain; }
+
+.connection-boot-corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border-color: rgba(103, 199, 209, 0.7);
+  border-style: solid;
+  border-width: 0;
+  animation: portal-boot-beacon 3.2s ease-in-out infinite;
+}
+
+.connection-boot-corner.is-top-left { top: 0; left: 0; border-width: 1px 0 0 1px; }
+.connection-boot-corner.is-top-right { top: 0; right: 0; border-width: 1px 1px 0 0; animation-delay: .8s; }
+.connection-boot-corner.is-bottom-left { bottom: 0; left: 0; border-width: 0 0 1px 1px; animation-delay: 1.6s; }
+.connection-boot-corner.is-bottom-right { bottom: 0; right: 0; border-width: 0 1px 1px 0; animation-delay: 2.4s; }
+
+.connection-boot-copy { width: 100%; min-width: 0; }
+
+.connection-boot-eyebrow {
+  display: block;
+  margin-bottom: 12px;
+  color: var(--portal-geek-teal);
+  font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  letter-spacing: .14em;
+}
+
+.connection-boot-copy h1 { margin: 0 0 10px; font-size: 22px; font-weight: 600; }
+
+.connection-boot-copy strong {
+  display: block;
+  overflow: hidden;
+  color: var(--portal-geek-primary);
+  font-size: 14px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-boot-copy p {
+  min-height: 36px;
+  margin: 12px 0 20px;
+  color: var(--portal-geek-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.connection-boot-stages {
+  display: grid;
+  width: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--portal-geek-line-soft);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.connection-boot-stage {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 12px 6px;
+  color: var(--portal-geek-text-muted);
+  font-size: 12px;
+}
+
+.connection-boot-stage + .connection-boot-stage { border-left: 1px solid var(--portal-geek-line-soft); }
+.connection-boot-stage-status { font-size: 11px; }
+
+.connection-boot-stage-indicator {
+  width: 6px;
+  height: 6px;
+  margin-bottom: 2px;
+  border-radius: 50%;
+  background: #858991;
+}
+
+.connection-boot-stage.is-ready .connection-boot-stage-indicator { background: var(--portal-geek-success); }
+.connection-boot-stage.is-error .connection-boot-stage-indicator { background: #d86f6f; }
+.connection-boot-stage.is-waiting .connection-boot-stage-indicator { background: #d0a965; }
+.connection-boot-stage.is-connecting .connection-boot-stage-indicator {
+  background: var(--portal-geek-teal);
+  animation: portal-boot-beacon 3.2s ease-in-out infinite;
+}
+
+.connection-boot-retry {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-top: 16px;
+  padding: 4px 16px;
+  border: 1px solid rgba(103, 199, 209, 0.5);
+  border-radius: 5px;
+  background: rgba(103, 199, 209, 0.06);
+  color: var(--portal-geek-text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.connection-boot-retry:focus-visible { outline: 2px solid var(--portal-geek-teal); outline-offset: 3px; }
+.connection-boot-retry:hover { background: rgba(103, 199, 209, 0.12); }
+
+@keyframes portal-boot-orbit { to { transform: rotate(360deg); } }
+@keyframes portal-boot-beacon { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-boot-ring::before,
+  .connection-boot-ring::after,
+  .connection-boot-corner,
+  .connection-boot-stage-indicator { animation: none; }
+}

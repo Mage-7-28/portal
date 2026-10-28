@@ -27,3 +27,15 @@ export const getUploadDropResultAction = ({ appendToQueue, sessionId }, { modalO
 export const isUploadSessionActive = (sessionId, { sessionId: currentSessionId, modalOpen, submitting }) => (
   sessionId === currentSessionId && modalOpen && !submitting
 )
+
+/**
+ * 将拖放命中区整体下移约 100px，覆盖原生窗口标题栏造成的坐标偏移。
+ *
+ * @param {number} top - 文件列表视口顶部坐标。
+ * @param {number} bottom - 文件列表视口底部坐标。
+ * @returns {{top: number, bottom: number}} 向下偏移后的纵向命中边界。
+ */
+export const getDropTargetVerticalBounds = (top, bottom) => ({
+  top: top + 100,
+  bottom: bottom + 100
+})

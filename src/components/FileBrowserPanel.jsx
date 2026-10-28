@@ -4,6 +4,7 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { confirm } from '@tauri-apps/plugin-dialog'
+import { invoke } from '@tauri-apps/api/core'
 import { Button, Modal, Progress, Spin } from 'antd'
 import { store, useStoreValue } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
@@ -187,10 +188,9 @@ const waitForNextPaint = () => new Promise(resolve => {
  * @param {number} [props.connectRequestId=0] - 首页再次请求打开同一连接时递增的重连序号。
  * @param {(connection: ConnectionProfile) => void} [props.onOpenConnection] - 首页请求打开文件标签的回调。
  * @param {(connection: ConnectionProfile) => void|Promise<void>} [props.onOpenTerminal] - 文件页请求打开终端标签的回调。
- * @param {(connection: ConnectionProfile) => void} [props.onSessionConnected] - 文件会话连接成功后的回调。
- * @param {(connectionId: string) => void} [props.onSessionClose] - 文件会话主动关闭后的回调。
- * @param {(connectionId: string) => void} [props.onWorkspaceClose] - 未连接时关闭服务器工作窗口的回调。
- * @param {string} [props.sessionCloseLabel='关闭标签'] - 未连接状态下的关闭操作文案。
+ * @param {(connection: ConnectionProfile, attemptId: number) => void} [props.onSessionConnected] - 文件会话就绪回调及本次尝试标识。
+ * @param {(state: {status: string, message: string, phase: string, attemptId: number}) => void} [props.onSessionStateChange] - 同步连接阶段及尝试标识，供工作窗口展示并过滤过期回调。
+ * @param {(disconnectHandler: (() => Promise<void>)|null) => void} [props.onSessionDisconnectReady] - 注册文件会话的统一断开清理流程。
  * @param {(connectionId: string) => void} [props.onConnectionDeleted] - 首页删除连接配置后的回调。
  * @param {(connection: ConnectionProfile) => void} [props.onConnectionSaved] - 首页保存连接配置后的回调。
  * @returns {JSX.Element} 连接列表、密码弹窗或已连接的文件浏览器视图。
@@ -203,9 +203,8 @@ function FileBrowserPanel({
   onOpenConnection,
   onOpenTerminal,
   onSessionConnected,
-  onSessionClose,
-  onWorkspaceClose,
-  sessionCloseLabel = '关闭标签',
+  onSessionStateChange,
+  onSessionDisconnectReady,
   onConnectionDeleted,
   onConnectionSaved
 }) {
@@ -237,6 +236,12 @@ function FileBrowserPanel({
   const [ passwordLoading, setPasswordLoading ] = useState(false)
   const [ connectingId, setConnectingId ] = useState(null)
   const [ connectionFailure, setConnectionFailure ] = useState('')
+  const [ sessionState, setSessionState ] = useState({
+    status: workspaceMode === 'session' ? 'connecting' : 'idle',
+    phase: 'credentials',
+    attemptId: 0,
+    message: '正在读取连接配置...'
+  })
   // 文件预览内容、阶段、目标名称和读取进度。
   const [ preview, setPreview ] = useState(null)
   const [ previewLoading, setPreviewLoading ] = useState(false)
@@ -251,6 +256,8 @@ function FileBrowserPanel({
   // 不触发渲染的连接标记，供断线监听和异步探测判断事件是否仍属于当前会话。
   const activeConnectionIdRef = useRef(null)
   const connectingIdRef = useRef(null)
+  const connectionAttemptRef = useRef(0)
+  const handledConnectRequestRef = useRef(0)
   // 连接配置的最新快照和初始化 Promise，避免异步保存使用旧闭包覆盖新数据。
   const connectionsRef = useRef([])
   const connectionsReadyRef = useRef(Promise.resolve())
@@ -258,9 +265,26 @@ function FileBrowserPanel({
   // 会话组件卸载和重连期间使用引用判断异步结果是否仍可写回当前标签。
   const componentMountedRef = useRef(false)
   const ownedConnectionIdRef = useRef(null)
+  const sessionDisconnectHandlerRef = useRef(null)
   const initialConnectionRef = useRef(initialConnection)
   const handleConnectRef = useRef(null)
   initialConnectionRef.current = initialConnection
+
+  useEffect(() => {
+    onSessionStateChange?.(sessionState)
+  }, [ onSessionStateChange, sessionState ])
+
+  /**
+   * 发布当前连接尝试的结构化阶段，避免父窗口根据文案猜测初始化进度。
+   *
+   * @param {{status: string, message: string, phase?: string}} nextState - 当前连接阶段。
+   * @returns {void}
+   */
+  const updateSessionState = nextState => setSessionState({
+    ...nextState,
+    phase: nextState.phase || 'connection',
+    attemptId: connectionAttemptRef.current
+  })
 
   /**
    * 创建带任务和遮罩 ID 的操作状态发布器，保证过期事件不能清理新操作的状态栏。
@@ -343,6 +367,7 @@ function FileBrowserPanel({
     setHomeDir('')
     setDrives([])
     setError(null)
+    updateSessionState({ status: 'idle', message: '尚未连接服务器' })
     closePreview()
     setLoading(false)
   }, [closePreview])
@@ -370,6 +395,7 @@ function FileBrowserPanel({
     void connectionsReadyRef.current.catch(loadError => {
       if (!componentMountedRef.current) return
       setConnectionFailure(`读取连接配置失败：${ normalizeError(loadError) }`)
+      updateSessionState({ status: 'error', message: `读取连接配置失败：${ normalizeError(loadError) }` })
     })
   }, [])
 
@@ -395,6 +421,7 @@ function FileBrowserPanel({
     resetRemoteView()
     const message = reason || '服务器无响应，请重新连接'
     setConnectionFailure(message)
+    updateSessionState({ status: 'error', message })
     void notification.error(`连接已断开：${ message }`)
   }), [resetRemoteView])
 
@@ -421,6 +448,7 @@ function FileBrowserPanel({
           resetRemoteView()
           const message = normalizeError(probeError)
           setConnectionFailure(message)
+          updateSessionState({ status: 'error', message })
           void notification.error(`连接已断开：${ message }`)
         }
       } finally {
@@ -540,6 +568,8 @@ function FileBrowserPanel({
     if (currentConnectionId === connectionId) await handleDisconnect({ skipConfirm: true })
     await sftpManager.removeConnection(connectionId).catch(() => undefined)
     await updateConnectionsTransaction(latest => latest.filter(connection => connection.id !== connectionId))
+    await invoke('update_workspace_layout', { connectionId, layout: null })
+      .catch(error => console.warn('清理已删除连接的工作区布局失败：', normalizeError(error)))
     setCredentials(previous => {
       const updated = new Map(previous)
       updated.delete(connectionId)
@@ -596,6 +626,8 @@ function FileBrowserPanel({
    */
   const connectWithPassword = async (connection, credentialsForProfile) => {
     if (connectingIdRef.current) return
+    connectionAttemptRef.current += 1
+    const attemptId = connectionAttemptRef.current
     connectingIdRef.current = connection.id
     // 提交凭据后立即关闭输入框，让连接列表的 loading 状态先呈现出来。
     setPasswordPrompt(null)
@@ -604,6 +636,7 @@ function FileBrowserPanel({
     setPasswordLoading(true)
     setLoading(true)
     setConnectionFailure('')
+    updateSessionState({ status: 'connecting', phase: 'ssh', message: '正在建立 SSH 连接...' })
     await waitForNextPaint()
     if (!componentMountedRef.current) return
     const credentialsValue = typeof credentialsForProfile === 'string'
@@ -627,6 +660,7 @@ function FileBrowserPanel({
       }
 
       if (result.requiresHostKeyConfirmation) {
+        updateSessionState({ status: 'waiting-user', phase: 'host-key', message: '请确认服务器身份指纹后继续' })
         const accepted = await confirm(
           `首次连接 ${ latestConnection.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
           { title: '确认 SSH 主机密钥', kind: 'warning', okLabel: '信任并继续', cancelLabel: '取消' }
@@ -656,6 +690,7 @@ function FileBrowserPanel({
         }
       }
 
+      updateSessionState({ status: 'connecting', phase: 'files', message: '正在准备远程文件目录...' })
       const home = await sftpManager.getRemoteUserHome(connectionId)
       if (!componentMountedRef.current) {
         await sftpManager.disconnect(connectionId).catch(() => undefined)
@@ -683,7 +718,8 @@ function FileBrowserPanel({
       }
       setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
       setConnectionFailure('')
-      onSessionConnected?.({ ...profile, id: connectionId })
+      onSessionConnected?.({ ...profile, id: connectionId }, attemptId)
+      updateSessionState({ status: 'connected', phase: 'files', message: '文件目录已就绪' })
       void notification.success('连接成功')
     } catch (error) {
       if (!componentMountedRef.current) {
@@ -708,7 +744,9 @@ function FileBrowserPanel({
         setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
       }
       retryMessage = credentialFailed ? readableError : ''
+      resetRemoteView()
       setConnectionFailure(readableError)
+      updateSessionState({ status: 'error', phase: 'ssh', message: readableError })
       void notification.error(readableError)
     } finally {
       if (componentMountedRef.current) {
@@ -721,6 +759,7 @@ function FileBrowserPanel({
         if (retryMessage) {
           setPasswordPrompt(connection)
           setPasswordPromptError(retryMessage)
+          updateSessionState({ status: 'password', phase: 'credentials', message: retryMessage })
         } else {
           setPasswordPrompt(null)
           setPasswordPromptError('')
@@ -737,11 +776,13 @@ function FileBrowserPanel({
    */
   const handleConnect = async (connection) => {
     if (connectingId || connectingIdRef.current) return
+    updateSessionState({ status: 'connecting', phase: 'credentials', message: '正在读取连接配置...' })
     try {
       await connectionsReadyRef.current
     } catch (loadError) {
       const message = `读取连接配置失败：${ normalizeError(loadError) }`
       setConnectionFailure(message)
+      updateSessionState({ status: 'error', phase: 'credentials', message })
       void notification.error(message)
       return
     }
@@ -753,7 +794,10 @@ function FileBrowserPanel({
     if (
       activeConnectionIdRef.current === latestConnection.id
       && sftpManager.getConnectionStatus(latestConnection.id) === SftpConnectionStatus.CONNECTED
-    ) return
+    ) {
+      updateSessionState({ status: 'connected', phase: 'files', message: '文件目录已就绪' })
+      return
+    }
     let credentialsValue = credentials.get(latestConnection.id)
     if (!credentialsValue?.password && latestConnection.encryptedPassword) {
       try {
@@ -769,6 +813,7 @@ function FileBrowserPanel({
       setPasswordLoading(false)
       setPasswordPromptError('')
       setPasswordPrompt(latestConnection)
+      updateSessionState({ status: 'password', phase: 'credentials', message: '请输入连接密码' })
       return
     }
     await connectWithPassword(latestConnection, credentialsValue)
@@ -778,9 +823,12 @@ function FileBrowserPanel({
   // 新文件标签创建或首页再次请求同一断线标签时启动连接；已连接标签只获得焦点。
   useEffect(() => {
     if (workspaceMode !== 'session' || !initialConnectionRef.current || connectRequestId <= 0) return undefined
+    // 初始化断线时旧请求仍可能在清理；保留新序号，等旧尝试结束后再消费重连请求。
+    if (handledConnectRequestRef.current === connectRequestId || connectingId || connectingIdRef.current) return undefined
     const timer = window.setTimeout(() => {
       const connection = initialConnectionRef.current
       if (!connection || !componentMountedRef.current) return
+      handledConnectRequestRef.current = connectRequestId
       if (
         activeConnectionIdRef.current === connection.id
         && sftpManager.getConnectionStatus(connection.id) === SftpConnectionStatus.CONNECTED
@@ -788,7 +836,7 @@ function FileBrowserPanel({
       void handleConnectRef.current?.(connection)
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [ connectRequestId, workspaceMode ])
+  }, [ connectRequestId, connectingId, workspaceMode ])
 
   /**
    * 关闭密码输入框并清理当前认证错误状态。
@@ -799,7 +847,10 @@ function FileBrowserPanel({
     setPasswordPrompt(null)
     setPasswordPromptError('')
     setPasswordLoading(false)
-    if (workspaceMode === 'session') setConnectionFailure('尚未连接服务器')
+    if (workspaceMode === 'session') {
+      setConnectionFailure('尚未连接服务器')
+      updateSessionState({ status: 'idle', phase: 'credentials', message: '已取消连接，可重新连接服务器' })
+    }
   }
 
   /**
@@ -844,8 +895,27 @@ function FileBrowserPanel({
     ownedConnectionIdRef.current = null
     resetRemoteView()
     setConnectionFailure('')
-    if (connectionId && workspaceMode === 'session') onSessionClose?.(connectionId)
   }
+
+  sessionDisconnectHandlerRef.current = async () => {
+    if (currentConnectionId) {
+      ownedConnectionIdRef.current = null
+      await handleDisconnect({ skipConfirm: true })
+      return
+    }
+    const connectionId = ownedConnectionIdRef.current
+    activeConnectionIdRef.current = null
+    ownedConnectionIdRef.current = null
+    if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
+    resetRemoteView()
+    setConnectionFailure('')
+  }
+
+  useEffect(() => {
+    if (workspaceMode !== 'session' || !onSessionDisconnectReady) return undefined
+    onSessionDisconnectReady(() => sessionDisconnectHandlerRef.current?.())
+    return () => onSessionDisconnectReady(null)
+  }, [ onSessionDisconnectReady, workspaceMode ])
 
   /**
    * 加载远程目录，并通过请求序号丢弃已经过期的响应。
@@ -882,6 +952,7 @@ function FileBrowserPanel({
             const message = normalizeError(requestError)
             resetRemoteView()
             setConnectionFailure(message)
+            updateSessionState({ status: 'error', phase: 'files', message })
             void notification.error(`连接已断开：${ message }`)
           }
         } else if (!connectionStillActive) {
@@ -1464,6 +1535,7 @@ function FileBrowserPanel({
           drives={drives}
           handleGoBack={handleGoBack}
           handlePathChange={event => setPathInput(event.target.value)}
+          handlePathCancel={() => setPathInput(currentPath)}
           handlePathSubmit={handlePathSubmit}
           handleRefresh={handleRefresh}
           handleItemClick={handleItemClick}
@@ -1474,6 +1546,9 @@ function FileBrowserPanel({
           handleRenameItem={handleRenameItem}
           handleDriveSelect={path => void loadRemoteDirectory(path)}
           handleDisconnect={handleDisconnect}
+          showConnectionSummary={workspaceMode !== 'session'}
+          showDisconnectAction={workspaceMode !== 'session'}
+          showTerminalAction={workspaceMode !== 'session'}
           onOpenTerminal={onOpenTerminal}
         />
         <Modal
@@ -1506,10 +1581,6 @@ function FileBrowserPanel({
       <>
         <div className="session-connection-state" role="status" aria-live="polite">
           <AppIcon name="server" />
-          <h2>{connection?.name || connection?.host || '服务器连接'}</h2>
-          <span className="session-connection-endpoint">
-            {connection?.username || '用户'}@{connection?.host || '服务器'}:{connection?.port || 22}
-          </span>
           {isConnecting ? (
             <div className="session-connection-progress">
               <Spin size="small" />
@@ -1524,13 +1595,6 @@ function FileBrowserPanel({
                   onClick={() => connection && void handleConnect(connection)}
                 >
                   重新连接
-                </Button>
-                <Button
-                  type="text"
-                  icon={<AppIcon name="close" />}
-                  onClick={() => (onWorkspaceClose || onSessionClose)?.(connection?.id || '')}
-                >
-                  {sessionCloseLabel}
                 </Button>
               </div>
             </>

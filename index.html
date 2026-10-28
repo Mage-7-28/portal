@@ -22,7 +22,7 @@
 
       body {
         overflow: hidden;
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        font-family: var(--global-font-family, 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', 'STSong', 'SimSun', Georgia, serif);
         color: #e6e8eb;
       }
 
@@ -42,10 +42,11 @@
         padding: 24px;
         overflow: hidden;
         background:
+          radial-gradient(ellipse at 50% 42%, rgba(103, 199, 209, 0.07), transparent 55%),
           linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
           linear-gradient(90deg, rgba(166, 173, 183, 0.018) 1px, transparent 1px),
           #1e1f22;
-        background-size: 32px 32px;
+        background-size: auto, 40px 40px, 40px 40px, auto;
         opacity: 1;
         transition: opacity 180ms ease-out;
       }
@@ -56,6 +57,7 @@
       }
 
       .loading-panel {
+        position: relative;
         display: grid;
         grid-template-columns: 48px minmax(0, 1fr);
         width: min(352px, 100%);
@@ -63,8 +65,9 @@
         column-gap: 12px;
         padding: 16px;
         border: 1px solid #5b5e66;
+        border-top-color: rgba(103, 199, 209, 0.55);
         border-radius: 8px;
-        background: #2b2d30;
+        background: linear-gradient(135deg, rgba(103, 199, 209, 0.04), transparent), #242529;
         box-shadow:
           inset 0 1px 0 rgba(255, 255, 255, 0.03),
           0 14px 34px rgba(0, 0, 0, 0.36);
@@ -72,14 +75,25 @@
       }
 
       .loading-logo-shell {
+        position: relative;
         display: grid;
         width: 48px;
         height: 48px;
         place-items: center;
-        overflow: hidden;
-        border: 1px solid #45474d;
-        border-radius: 7px;
+        border: 1px solid rgba(103, 199, 209, 0.22);
+        border-radius: 12px;
         background: #1e1f22;
+      }
+
+      .loading-logo-shell::after {
+        position: absolute;
+        inset: -6px;
+        border: 1px solid transparent;
+        border-top-color: #67c7d1;
+        border-bottom-color: #eb9070;
+        border-radius: 50%;
+        content: '';
+        animation: portal-loading-spin 4.8s linear infinite;
       }
 
       .loading-logo {
@@ -137,7 +151,7 @@
         width: 38%;
         height: 100%;
         border-radius: inherit;
-        background: #eb9070;
+        background: linear-gradient(90deg, #eb9070, #67c7d1);
         animation: portal-loading-progress 1.45s ease-in-out infinite;
       }
 
@@ -163,7 +177,8 @@
         }
 
         .loading-spinner,
-        .loading-progress-bar {
+        .loading-progress-bar,
+        .loading-logo-shell::after {
           animation: none;
         }
       }

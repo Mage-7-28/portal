@@ -4,7 +4,7 @@
  * 窗口标签、连接展示信息和关闭清理逻辑由本模块统一维护。
  */
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { getServerWorkspaceWindowLabel, SERVER_WORKSPACE_WINDOW_PREFIX } from './serverWorkspace.js'
+import { formatServerWorkspaceTitle, getServerWorkspaceWindowLabel, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_WINDOW_PREFIX } from './serverWorkspace.js'
 
 export const TERMINAL_WINDOW_PREFIX = 'PortalTerminal-'
 const LEGACY_TERMINAL_WINDOW_LABEL = 'PortalTerminal'
@@ -19,7 +19,7 @@ const pendingWorkspaceWindows = new Map()
  * @returns {Promise<Object>} 已聚焦的工作窗口。
  */
 const focusServerWorkspaceWindow = async (targetWindow, connection) => {
-  const title = `${ connection?.name || connection?.host || '服务器' } · Portal`
+  const title = formatServerWorkspaceTitle(connection)
   await Promise.allSettled([
     targetWindow.setTitle(title),
     targetWindow.unminimize(),
@@ -36,6 +36,7 @@ const focusServerWorkspaceWindow = async (targetWindow, connection) => {
  * @returns {Promise<void>} 窗口完成关闭后的 Promise。
  */
 const closeOwnedWindowGracefully = async (targetWindow) => {
+  const isWorkspace = targetWindow.label.startsWith(SERVER_WORKSPACE_WINDOW_PREFIX)
   let resolveDestroyed
   let unlistenDestroyed
   let timeoutId
@@ -54,8 +55,14 @@ const closeOwnedWindowGracefully = async (targetWindow) => {
     const timeout = new Promise(resolve => {
       timeoutId = window.setTimeout(() => resolve(false), 12_000)
     })
-    await targetWindow.close().catch(() => undefined)
-    if (destroyed) await Promise.race([ destroyed, timeout ])
+    if (isWorkspace) {
+      await targetWindow.emitTo(targetWindow.label, SERVER_WORKSPACE_CLOSE_EVENT).catch(() => undefined)
+    } else {
+      await targetWindow.close().catch(() => undefined)
+    }
+    const didDestroy = await Promise.race([ destroyed || timeout, timeout ])
+    // 初始化未完成或 WebView 无响应时也不能让已确认的退出/删除卡住。
+    if (!didDestroy && isWorkspace) await targetWindow.destroy().catch(() => undefined)
   } finally {
     if (timeoutId !== undefined) window.clearTimeout(timeoutId)
     unlistenDestroyed?.()
@@ -192,11 +199,12 @@ export const openServerWorkspaceWindow = async (connection) => {
     if (existingWindow) return existingWindow
     const workspaceWindow = new WebviewWindow(label, {
       url: buildServerWorkspaceUrl(connection),
-      title: `${ connection.name || connection.host || '服务器' } · Portal`,
+      title: formatServerWorkspaceTitle(connection),
       width: 1440,
       height: 900,
       minWidth: 1100,
       minHeight: 720,
+      maximized: true,
       resizable: true,
       center: true,
       focus: true,
@@ -226,7 +234,7 @@ export const updateServerWorkspaceWindow = async connection => {
   const label = getServerWorkspaceWindowLabel(connection.id)
   const workspaceWindow = await WebviewWindow.getByLabel(label)
   if (!workspaceWindow) return false
-  await workspaceWindow.setTitle(`${ connection.name || connection.host || '服务器' } · Portal`)
+  await workspaceWindow.setTitle(formatServerWorkspaceTitle(connection))
   return true
 }
 

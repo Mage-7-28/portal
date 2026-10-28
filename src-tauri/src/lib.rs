@@ -7,6 +7,7 @@ mod local_transfer;
 mod remote_policy;
 mod scan_budget;
 mod ssh;
+mod workspace_preferences;
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -311,6 +312,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())
         .invoke_handler(tauri::generate_handler![
+            workspace_preferences::update_workspace_layout,
             exit_application,
             set_show_hidden_files_menu_checked,
             get_home_dir,

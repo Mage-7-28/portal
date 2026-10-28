@@ -87,30 +87,11 @@
   color: #eb9070;
 }
 
-.session-connection-state h2 {
-  max-width: min(460px, 90%);
-  margin: 0 0 4px;
-  overflow: hidden;
-  color: #ebe8e1;
-  font-size: 15px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .session-connection-state p {
   max-width: min(520px, 92%);
   margin: 14px 0 0;
   color: #c0bcb4;
   font-size: 12px;
-}
-
-.session-connection-endpoint {
-  max-width: min(520px, 92%);
-  overflow: hidden;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .session-connection-progress,
@@ -455,7 +436,9 @@ html,
   padding: 12px;
   border: 1px solid #3c3f41;
   border-radius: 4px;
-  background: #1f1f1f;
+  background:
+    radial-gradient(circle at 78% 0%, rgba(127, 166, 164, 0.08), transparent 34%),
+    #1f1f1f;
   color: #e8e5de;
   font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -679,223 +662,6 @@ html,
   padding: 0;
 }
 
-/* 连接配置页：标题固定在顶部，列表区域独立滚动。 */
-.connection-page {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  padding: 9px;
-  box-sizing: border-box;
-  overflow: hidden;
-}
-
-.connection-header {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 32px;
-  margin-bottom: 9px;
-}
-
-.connection-header > div {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-  gap: 8px;
-}
-
-.connection-header h1 {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-  color: #ebe8e1;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 22px;
-}
-
-.connection-header > div > span {
-  color: #c0bcb4;
-  font-size: 11.5px;
-}
-
-.connection-header > div > .connection-header-hint {
-  color: #aaa69d;
-  font-size: 11px;
-}
-
-.connection-list-region {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.connection-scroll {
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  transition: opacity 140ms ease;
-}
-
-.connection-scroll.is-connecting {
-  opacity: 0.5;
-}
-
-.connection-list .ant-list-items {
-  display: flex;
-  flex-direction: column;
-  gap: 7px;
-}
-
-/* 单条连接配置采用紧凑卡片式行布局；hover、连接中和 focus 状态分别反馈。 */
-.connection-row.ant-list-item {
-  cursor: pointer;
-  min-height: 54px;
-  padding: 8px 10px !important;
-  border: 1px solid #3c3f41 !important;
-  border-radius: 6px;
-  background: #252526;
-  transition: background-color 140ms ease, border-color 140ms ease;
-}
-
-.connection-row.ant-list-item:hover {
-  border-color: #53565a !important;
-  background: #2b2b2b;
-}
-
-.connection-row.ant-list-item.is-connecting,
-.connection-row.ant-list-item.is-connecting:hover {
-  border-color: #eb9070 !important;
-  border-color: lab(68.9646% 33.16 32.3692) !important;
-  background: #332b27;
-}
-
-.connection-row.ant-list-item:focus-visible {
-  outline: 2px solid rgba(192, 138, 102, 0.72);
-  outline-offset: 1px;
-}
-
-.connection-row .ant-list-item-action,
-.connection-row .ant-list-item-action button {
-  cursor: default;
-}
-
-.connection-row .ant-list-item-meta {
-  align-items: center;
-  min-width: 0;
-}
-
-.connection-row .ant-list-item-meta-avatar {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 22px;
-  margin-inline-end: 10px;
-}
-
-.connection-row .ant-list-item-meta-content {
-  align-self: center;
-  min-width: 0;
-}
-
-.connection-row .ant-list-item-meta-title {
-  margin-bottom: 1px;
-  line-height: 20px;
-}
-
-.connection-row .ant-list-item-meta-description {
-  line-height: 17px;
-}
-
-.connection-row .ant-list-item-action {
-  margin-inline-start: 12px;
-}
-
-.connection-row .ant-list-item-action > li {
-  padding: 0 0 0 5px;
-}
-
-.connection-row-loading {
-  display: inline-flex;
-  width: 28px;
-  height: 28px;
-  align-items: center;
-  justify-content: center;
-  color: #eb9070;
-  color: lab(68.9646% 33.16 32.3692);
-}
-
-.connection-loading .ant-spin-dot-item,
-.connection-row-loading .ant-spin-dot-item {
-  background-color: #eb9070;
-  background-color: lab(68.9646% 33.16 32.3692);
-}
-
-.connection-row-icon {
-  color: #eb9070;
-  color: lab(68.9646% 33.16 32.3692);
-  font-size: 17px;
-}
-
-.connection-row-name {
-  display: block;
-  overflow: hidden;
-  color: #ebe8e1;
-  font-size: 13.5px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.connection-row-endpoint {
-  display: block;
-  overflow: hidden;
-  color: #c0bcb4;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.connection-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  min-height: 160px;
-  box-sizing: border-box;
-  gap: 9px;
-  color: #c0bcb4;
-  font-size: 13px;
-}
-
-.connection-empty .app-icon {
-  color: #817c72;
-  font-size: 26px;
-}
-
-/* 连接期间覆盖列表但不销毁内容，让用户看到当前配置仍保持可识别。 */
-.connection-loading {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border-radius: 6px;
-  background: rgba(31, 31, 31, 0.56);
-  color: #e8e5de;
-  font-size: 12.5px;
-}
-
 /* 已连接文件浏览器的主布局；工具栏固定，远程列表占据剩余高度。 */
 .file-browser {
   display: flex;
@@ -912,21 +678,81 @@ html,
   background: #1f1f1f;
 }
 
-/* 服务器状态、远程操作和路径导航组成同一工作区头部。 */
+/* 文件区按自身宽度压缩按钮标签，不跟随整个窗口宽度挤压路径输入。 */
+.file-browser {
+  container-name: file-browser;
+  container-type: inline-size;
+}
+
 .file-workspace-header {
+  display: grid;
   position: relative;
   flex: 0 0 auto;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
 }
 
-/* 路径工具栏由返回、路径输入和刷新组成，所有子项允许在窄屏收缩。 */
+.file-workspace-header .connection-toolbar {
+  grid-column: 1 / -1;
+}
+
+.file-action-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.file-action-toolbar .ant-btn {
+  flex: 0 0 auto;
+  height: 32px;
+  padding-inline: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.file-action-toolbar .file-terminal-action,
+.file-action-toolbar .file-disconnect-action {
+  width: 32px;
+  min-width: 32px;
+  padding: 0;
+}
+
+@container file-browser (width < 720px) {
+  .file-action-toolbar .mkdir-action-button > span:not(.ant-btn-icon) {
+    display: none;
+  }
+
+  .file-action-toolbar .mkdir-action-button {
+    width: 32px;
+    padding: 0;
+    gap: 0;
+  }
+}
+
+@container file-browser (width < 480px) {
+  .file-action-toolbar .upload-action-button > span:not(.ant-btn-icon) {
+    display: none;
+  }
+
+  .file-action-toolbar .upload-action-button {
+    width: 32px;
+    padding: 0;
+    gap: 0;
+  }
+}
+
+/* 所有文件操作保持一行，窄面板只压缩路径及按钮标签。 */
 .path-toolbar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   min-width: 0;
+  flex-wrap: nowrap;
   gap: 6px;
-  margin-bottom: 8px;
+  margin-bottom: 0;
 }
 
 .toolbar-icon-button.ant-btn {
@@ -1050,20 +876,6 @@ html,
   color: #b8b4ab;
   font-size: 12px;
   text-overflow: ellipsis;
-}
-
-.connection-actions {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  margin-left: 11px;
-}
-
-.connection-actions .ant-btn {
-  height: 28px;
-  padding-inline: 9px;
-  font-size: 12.5px;
 }
 
 /* 远程文件列表滚动壳；原生拖放进入时用边框和内阴影提示有效投放区。 */
@@ -1680,14 +1492,14 @@ html,
 .terminal-emulator .xterm-rows span,
 .terminal-emulator .xterm-char-measure-element {
   font-family: "SF Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace !important;
-  font-size: 12px !important;
+  font-size: var(--terminal-font-size, 13px) !important;
   font-kerning: none;
 }
 
 .terminal-emulator .xterm-rows {
   pointer-events: none;
   color: #e6e8eb !important;
-  line-height: 1.18 !important;
+  line-height: 1.25 !important;
   white-space: pre;
 }
 
@@ -2123,7 +1935,7 @@ html,
   display: flex;
   gap: 11px;
   align-items: flex-start;
-  padding: 8px 10px;
+  padding: 10px 12px 8px;
   margin-bottom: 11px;
   border: 1px solid;
   border-radius: 6px;
@@ -2226,6 +2038,7 @@ html,
 /* 服务器工作窗口以可收缩的 Ant Design 分栏承载文件、终端和资源面板。 */
 .server-workspace-shell {
   display: flex;
+  position: relative;
   flex-direction: column;
   width: 100%;
   height: 100dvh;
@@ -2233,34 +2046,8 @@ html,
   min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
-  background: #1f1f1f;
-  color: #e8e5de;
-}
-
-.server-workspace-header {
-  display: flex;
-  flex: 0 0 48px;
-  min-width: 0;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 0 12px;
-  border-bottom: 1px solid #3c3f41;
-}
-
-.server-workspace-identity {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-
-.server-workspace-name,
-.server-workspace-endpoint {
-  max-width: min(34vw, 360px);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  background: var(--portal-geek-canvas);
+  color: var(--portal-geek-text);
 }
 
 .server-workspace-main {
@@ -2271,12 +2058,60 @@ html,
   overflow: hidden;
 }
 
+/* 隐藏但仍参与布局，终端可在遮罩下按实际尺寸完成首次初始化。 */
+.server-workspace-main.is-initializing {
+  visibility: hidden;
+}
+
+.server-workspace-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  opacity: 1;
+  transition: opacity 180ms ease-out;
+}
+
+.server-workspace-loading.is-leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.server-workspace-footer[hidden] {
+  display: none;
+}
+
 .server-workspace-horizontal,
 .server-workspace-vertical {
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+/* 仅隐藏分割条的装饰层，保留原有拖动命中范围和布局尺寸。 */
+.server-workspace-shell .ant-splitter-bar .ant-splitter-bar-dragger::before,
+.server-workspace-shell .ant-splitter-bar .ant-splitter-bar-dragger::after {
+  opacity: 0;
+}
+
+.server-workspace-shell .ant-splitter-bar .ant-splitter-bar-dragger::before {
+  background: var(--portal-geek-teal);
+  box-shadow: 0 0 6px rgba(103, 199, 209, 0.3);
+  transition: opacity 120ms ease-out;
+}
+
+.server-workspace-shell .ant-splitter-horizontal > .ant-splitter-bar .ant-splitter-bar-dragger::before {
+  width: 1px;
+}
+
+.server-workspace-shell .ant-splitter-vertical > .ant-splitter-bar .ant-splitter-bar-dragger::before {
+  height: 1px;
+}
+
+.server-workspace-shell .ant-splitter > .ant-splitter-bar .ant-splitter-bar-dragger:not(.ant-splitter-bar-dragger-disabled):hover::before,
+.server-workspace-shell .ant-splitter > .ant-splitter-bar .ant-splitter-bar-dragger.ant-splitter-bar-dragger-active::before {
+  background: var(--portal-geek-teal);
+  opacity: 1;
 }
 
 .server-workspace-horizontal > .ant-splitter-panel,
@@ -2301,6 +2136,7 @@ html,
 
 .server-workspace-shell .server-terminal-card,
 .server-workspace-shell .server-monitor-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 100%;
@@ -2310,20 +2146,77 @@ html,
   overflow: hidden;
 }
 
+.server-workspace-shell .server-terminal-card::after,
+.server-workspace-shell .server-monitor-card::after {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 17px;
+  height: 9px;
+  border-top: 1px solid var(--portal-geek-teal);
+  border-left: 1px solid var(--portal-geek-teal);
+  border-top-left-radius: 7px;
+  content: '';
+  opacity: .6;
+  pointer-events: none;
+}
+
+.server-terminal-controls { white-space: nowrap; }
+.server-terminal-controls .ant-btn { padding-inline: 6px; height: 25px; font-size: 11px; }
+.server-terminal-controls .terminal-font-size-label { color: var(--portal-geek-text-muted); font: 11px/1.4 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+
 .server-workspace-shell .server-terminal-card > .ant-card-head,
 .server-workspace-shell .server-monitor-card > .ant-card-head {
   flex: 0 0 auto;
+  min-height: 34px;
+  padding-inline: 10px;
+  border-bottom-color: rgba(127, 166, 164, 0.22);
   min-width: 0;
+  font-size: 12px;
 }
 
 .server-workspace-shell .server-terminal-card > .ant-card-body,
 .server-workspace-shell .server-monitor-card > .ant-card-body {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 100px);
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  padding: 10px;
   overflow: hidden;
+}
+
+.server-workspace-shell .server-terminal-card > .ant-card-body {
+  padding: 5px;
+}
+
+.server-workspace-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  min-width: 0;
+}
+
+/* 专注模式只改变分栏呈现，保持文件、监控和 PTY 实例存活。 */
+.is-terminal-focus .server-workspace-horizontal > .ant-splitter-panel:first-child,
+.is-terminal-focus .server-workspace-vertical > .ant-splitter-panel:last-child {
+  flex-basis: 0 !important;
+  padding: 0 !important;
+  visibility: hidden;
+}
+
+.is-terminal-focus .server-workspace-horizontal > .ant-splitter-panel:last-child,
+.is-terminal-focus .server-workspace-vertical > .ant-splitter-panel:first-child {
+  flex-basis: 100% !important;
+  padding: 0 !important;
+}
+
+.is-terminal-focus .ant-splitter-bar {
+  display: none;
 }
 
 .server-workspace-shell .terminal-view {
@@ -2334,16 +2227,13 @@ html,
   min-height: 0;
 }
 
-.server-workspace-shell .terminal-connection-meta {
-  flex: 0 0 auto;
-}
-
 .server-workspace-shell .terminal-emulator {
   flex: 1 1 0;
   width: 100%;
   height: auto;
   min-width: 0;
   min-height: 0;
+  padding: 7px;
   box-sizing: border-box;
 }
 
@@ -2372,12 +2262,124 @@ html,
   flex: 0 0 auto;
 }
 
+.server-monitor-platform-tag.ant-tag {
+  min-height: 18px;
+  margin-inline-end: 0;
+  padding-inline: 5px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 16px;
+  color: #a8c5c2;
+  border: 1px solid rgba(127, 166, 164, 0.22);
+  background: rgba(127, 166, 164, 0.09);
+}
+
+.server-monitor-title,
+.server-monitor-updated,
+.server-process-summary {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.server-monitor-title > .app-icon {
+  color: #7fa6a4;
+}
+
+.server-monitor-updated {
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.server-monitor-live-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #8fb996;
+}
+
+.server-monitor-live-dot.is-stale {
+  background: #e0b16b;
+}
+
+.server-monitor-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.server-monitor-metric {
+  min-width: 0;
+  padding: 7px 9px 5px;
+  border: 1px solid rgba(127, 166, 164, 0.16);
+  border-radius: 6px;
+  background: rgba(127, 166, 164, 0.045);
+}
+
+.server-monitor-metric-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: #a9adb6;
+  font-size: 11px;
+}
+
+.server-monitor-metric-heading > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-monitor-metric-heading strong {
+  flex: 0 0 auto;
+  color: #e6e8eb;
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 24px;
+}
+
+.server-monitor-memory-detail {
+  margin-left: 5px;
+  font-size: 10px;
+}
+
+.server-monitor-metric .ant-progress {
+  display: block;
+  margin-top: 3px;
+  line-height: 1;
+}
+
+.server-terminal-status.ant-tag {
+  min-height: 18px;
+  margin-inline-end: 0;
+  padding-inline: 6px;
+  border-radius: 5px;
+  font-size: 10px;
+  line-height: 16px;
+}
+
+.server-process-count {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.045);
+  cursor: help;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
 .server-monitor-loading {
   display: flex;
   flex: 1 1 auto;
   min-height: 0;
   align-items: center;
   justify-content: center;
+  gap: 8px;
+  color: #a9adb6;
+  font-size: 12px;
 }
 
 .server-process-heading {
@@ -2389,11 +2391,18 @@ html,
   padding: 8px 0 6px;
 }
 
+.server-process-heading .ant-segmented {
+  flex: 0 0 auto;
+  font-size: 11px;
+}
+
 .server-process-table-wrap {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  border: 1px solid rgba(127, 166, 164, 0.16);
+  border-radius: 6px;
 }
 
 .server-process-table-wrap .ant-table-wrapper,
@@ -2417,11 +2426,32 @@ html,
   min-height: 0;
 }
 
+.server-process-table-wrap .ant-table-thead > tr > th {
+  padding-block: 5px;
+  color: #bfc9c6;
+  background: rgba(127, 166, 164, 0.06);
+  border-bottom-color: rgba(127, 166, 164, 0.18);
+}
+
+.server-process-table-wrap .ant-table-tbody > tr > td {
+  padding-block: 5px;
+  border-bottom-color: rgba(255, 255, 255, 0.055);
+  font-size: 12px;
+}
+
 .server-process-table-wrap .ant-table-body {
-  flex: 1 1 auto;
   min-height: 0;
-  max-height: calc(100% - 36px) !important;
-  overflow: auto !important;
+  scrollbar-gutter: stable;
+}
+
+.server-process-number,
+.server-process-pid {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.server-process-pid {
+  color: #a9adb6;
 }
 
 .server-monitor-alert .ant-alert-description {
