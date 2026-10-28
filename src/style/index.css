@@ -1226,6 +1226,8 @@ html,
 
 /* xterm 容器必须有稳定的最小高度；ResizeObserver 会据此计算 PTY 行列数。 */
 .terminal-emulator {
+  display: flex;
+  flex-direction: column;
   height: clamp(300px, calc(100dvh - 154px), 660px);
   min-height: 300px;
   padding: 10px 11px;
@@ -1233,6 +1235,13 @@ html,
   border: 1px solid #45474d;
   border-radius: 5px;
   background: #1e1f22;
+}
+
+/* 将实际渲染区域与外框装饰隔离，缩小分栏时只保留能完整容纳的终端行。 */
+.terminal-fit-container {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
 }
 
 .terminal-emulator .xterm {

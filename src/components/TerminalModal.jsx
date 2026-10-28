@@ -731,14 +731,16 @@ export const TerminalView = ({
         </div>
       )}
       <div
-        ref={containerRef}
         className="terminal-emulator"
         role="application"
         aria-label="远程终端"
         onClick={() => {
           if (activeRef.current && (!document.hasFocus || document.hasFocus())) terminalRef.current?.focus()
         }}
-      />
+      >
+        {/* FitAddon 按父元素的 CSS 高度计算行数，使用无边框和内边距的容器避免把装饰空间算入终端。 */}
+        <div ref={containerRef} className="terminal-fit-container" />
+      </div>
       {searchOpen && (
         <div
           role="search"

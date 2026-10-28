@@ -73,7 +73,7 @@ const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange 
       title: 'PID',
       dataIndex: 'pid',
       key: 'pid',
-      width: 64,
+      width: 96,
       className: 'server-process-pid',
       ellipsis: true
     },
@@ -209,7 +209,7 @@ const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange 
                 locale={{ emptyText: snapshot
                   ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="当前没有进程数据" />
                   : '等待服务器数据' }}
-                scroll={{ y: tableHeight, x: 340, scrollToFirstRowOnChange: false }}
+                scroll={{ y: tableHeight, x: 372, scrollToFirstRowOnChange: false }}
               />
             </div>
           </>
