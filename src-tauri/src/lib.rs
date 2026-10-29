@@ -15,6 +15,7 @@ mod terminal_flow;
 mod transfer_connect;
 mod transfer_tasks;
 mod transfer_validation;
+mod window_menu;
 mod workspace_preferences;
 
 use aes_gcm::{
@@ -319,6 +320,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(ssh::SshState::default())
+        .manage(window_menu::MenuWindowState::default())
         .invoke_handler(tauri::generate_handler![
             workspace_preferences::update_workspace_layout,
             workspace_preferences::write_store_preference,
@@ -364,7 +366,12 @@ pub fn run() {
             ssh::cancel_transfer
         ])
         .on_window_event(|window, event| {
+            let menu_state = window.state::<window_menu::MenuWindowState>();
+            if matches!(event, tauri::WindowEvent::Focused(true)) {
+                menu_state.focused(window.label());
+            }
             if matches!(event, tauri::WindowEvent::Destroyed) {
+                menu_state.destroyed(window.label());
                 ssh::cleanup_window(&window.state::<ssh::SshState>(), window.label());
             }
         })
@@ -391,6 +398,13 @@ pub fn run() {
                 let quit_item = MenuItem::with_id(app, "quit", "退出", true, Some(quit_shortcut))?;
                 let download_path_item =
                     MenuItem::with_id(app, "download-path", "选择下载路径", true, None::<&str>)?;
+                let show_download_path_item = MenuItem::with_id(
+                    app,
+                    "show-download-path",
+                    "显示下载路径",
+                    true,
+                    None::<&str>,
+                )?;
                 let show_hidden_files_item = CheckMenuItem::with_id(
                     app,
                     "show-hidden-files",
@@ -421,6 +435,7 @@ pub fn run() {
 
                 // macOS 菜单栏的顶层项目使用 Submenu，确保下载路径入口可见。
                 let download_path_submenu = Submenu::new(app, "下载路径", true)?;
+                download_path_submenu.append(&show_download_path_item)?;
                 download_path_submenu.append(&download_path_item)?;
 
                 // 创建主菜单
@@ -434,26 +449,31 @@ pub fn run() {
                 app.set_menu(menu)?;
 
                 // 绑定菜单事件
-                app.on_menu_event(move |app, event| match event.id().as_ref() {
-                    "update" => {
-                        let _ = app.emit("menu-update", ());
-                    }
-                    "about" => {
-                        let _ = app.emit("menu-about", ());
-                    }
-                    "quit" => {
-                        let _ = app.emit("menu-request-exit", ());
-                    }
-                    "download-path" => {
-                        let _ = app.emit("menu-download-path", ());
-                    }
-                    "show-hidden-files" => {
-                        if let Ok(show_hidden_files) = show_hidden_files_item.is_checked() {
-                            let _ = app.emit("menu-show-hidden-files", show_hidden_files);
+                app.on_menu_event(move |app, event| {
+                    let dispatch_to_active = |name| {
+                        if let Err(error) = app
+                            .state::<window_menu::MenuWindowState>()
+                            .dispatch(app, name)
+                        {
+                            eprintln!("分发窗口菜单操作失败：{error}");
                         }
-                    }
+                    };
+                    match event.id().as_ref() {
+                        "update" => dispatch_to_active("menu-update"),
+                        "about" => dispatch_to_active("menu-about"),
+                        "download-path" => dispatch_to_active("menu-download-path"),
+                        "show-download-path" => dispatch_to_active("menu-show-download-path"),
+                        "quit" => {
+                            let _ = app.emit("menu-request-exit", ());
+                        }
+                        "show-hidden-files" => {
+                            if let Ok(show_hidden_files) = show_hidden_files_item.is_checked() {
+                                let _ = app.emit("menu-show-hidden-files", show_hidden_files);
+                            }
+                        }
 
-                    _ => {}
+                        _ => {}
+                    }
                 });
             }
             Ok(())

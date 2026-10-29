@@ -1,25 +1,21 @@
 /**
  * Portal 主窗口入口。
- * 负责应用级菜单、持久化偏好、更新检查和主文件浏览页面的编排。
+ * 负责窗口入口选择、主窗口偏好和连接列表的编排。
  */
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Button, ConfigProvider, Modal } from 'antd'
+import { lazy, Suspense, useCallback, useEffect, useRef } from 'react'
+import { ConfigProvider } from 'antd'
 import zhCN from 'antd/locale/zh_CN'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWindow } from '@tauri-apps/api/window'
-import * as dialog from '@tauri-apps/plugin-dialog'
-import { openUrl } from '@tauri-apps/plugin-opener'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { getErrorDetails, normalizeError, StoreKeys } from './utils/constants.js'
 import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
-import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.js'
 import TransferProgressProvider from './components/TransferProgressProvider.jsx'
-import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
-import AppIcon from './components/AppIcon'
 import NotificationHost from './components/NotificationHost.jsx'
+import WindowMenuHost from './components/WindowMenuHost.jsx'
 import {
   closeServerWorkspaceWindow,
   closeServerWorkspaceWindows,
@@ -27,7 +23,6 @@ import {
   updateServerWorkspaceWindow
 } from './utils/terminalWindow.js'
 import { getServerWorkspaceParams } from './utils/serverWorkspace.js'
-import packageInfo from '../package.json'
 
 // 终端依赖体积较大，只有用户打开终端标签或独立终端窗口时才加载。
 const LazyTerminalWindow = lazy(() => import('./components/TerminalWindow.jsx'))
@@ -74,10 +69,10 @@ const getTerminalWindowParams = () => {
 }
 
 /**
- * 主窗口应用壳，集中管理菜单事件和当前连接页面。
- * 文件操作细节由 FileBrowserPanel 负责，本组件只协调应用级状态。
+ * 主窗口应用壳，集中管理退出事件、偏好和连接列表。
+ * 文件操作由 FileBrowserPanel 负责，窗口菜单弹窗由共享宿主承接。
  *
- * @returns {JSX.Element} 主窗口布局及其应用级弹窗。
+ * @returns {JSX.Element} 主窗口布局及下载目录状态。
  */
 function MainApp() {
   // 从响应式 Store 读取当前下载目录和隐藏文件偏好，值变化会驱动底部提示及列表刷新。
@@ -88,20 +83,10 @@ function MainApp() {
   const downloadPathHint = downloadPath || '尚未设置（首次下载时选择）'
   // 仅保留用户明确开启的偏好；旧版没有该设置时默认不显示以点开头的远程项目。
   const showHiddenFiles = storedShowHiddenFiles === true
-  // 控制“关于”弹窗的显示状态；关闭弹窗不会销毁应用级更新数据。
-  const [ aboutOpen, setAboutOpen ] = useState(false)
-  // 保存当前待展示的发布信息；null 表示没有需要提示的更新。
-  const [ availableUpdate, setAvailableUpdate ] = useState(null)
-  // 标记手动或启动检查是否正在请求，供菜单和关于弹窗显示 loading。
-  const [ checkingUpdate, setCheckingUpdate ] = useState(false)
-  // 防止重复打开项目仓库时连续触发多个外部窗口。
-  const [ openingRepository, setOpeningRepository ] = useState(false)
   // 防止退出确认框重复打开；useRef 不触发渲染，适合处理竞态事件。
   const exitConfirmingRef = useRef(false)
   // 标记退出命令是否已经提交，避免关闭事件再次进入退出流程。
   const exitRequestedRef = useRef(false)
-  // 启动检查只允许执行一次，即使 React StrictMode 在开发环境重复挂载。
-  const updateCheckStartedRef = useRef(false)
 
   /**
    * 防止重复弹出确认框，并在退出前释放所有服务器工作窗口。
@@ -131,107 +116,6 @@ function MainApp() {
       exitConfirmingRef.current = false
     }
   }, [])
-
-  /**
-   * 检查 Gitee 最新发布版本。
-   * 启动检查静默失败，手动检查则向用户反馈网络或版本解析错误。
-   *
-   * @param {{manual?: boolean}} [options={}] - 是否由用户从菜单主动发起检查。
-   * @returns {Promise<boolean>} 发现并展示新版本时返回 true，否则返回 false。
-   */
-  const checkApplicationUpdate = useCallback(async ({ manual = false } = {}) => {
-    setCheckingUpdate(true)
-    try {
-      const update = await checkLatestRelease(packageInfo.version)
-      if (!update) {
-        if (manual) void notification.info('当前已是最新版本')
-        return false
-      }
-
-      const skippedVersion = await store.get(StoreKeys.UPDATE_SKIPPED_VERSION)
-      if (!manual && skippedVersion === update.latestVersion) return false
-
-      setAvailableUpdate({
-        ...update,
-        // 启动时允许用户跳过当前版本；手动检查始终不显示跳过选项。
-        canSkipVersion: !manual
-      })
-      return true
-    } catch (error) {
-      // 启动检查失败不应打断用户进入应用；手动检查则提供可见反馈。
-      console.warn('检查应用更新失败:', error)
-      if (manual) void notification.error('检查更新失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
-      return false
-    } finally {
-      setCheckingUpdate(false)
-    }
-  }, [])
-
-  // 首次挂载时静默检查更新；依赖回调保持稳定，卸载时没有外部资源需要释放。
-  useEffect(() => {
-    if (updateCheckStartedRef.current) return undefined
-    updateCheckStartedRef.current = true
-    void checkApplicationUpdate()
-  }, [checkApplicationUpdate])
-
-  /**
-   * 关闭更新弹窗，并在用户选择跳过时持久化版本号。
-   *
-   * @param {{skipVersion?: boolean, version?: string}} options - 当前弹窗的跳过选项和版本号。
-   * @returns {Promise<void>} 状态关闭及跳过设置保存完成后的 Promise。
-   */
-  const dismissAvailableUpdate = useCallback(async ({ skipVersion, version }) => {
-    if (skipVersion) {
-      try {
-        await store.set(StoreKeys.UPDATE_SKIPPED_VERSION, version)
-      } catch (error) {
-        console.warn('保存跳过的更新版本失败:', error)
-      }
-    }
-    setAvailableUpdate(null)
-  }, [])
-
-  /**
-   * 打开发布页供用户手动下载安装包，并处理“跳过此版本”设置。
-   *
-   * @param {{skipVersion?: boolean, version?: string, releaseUrl: string}} options - 发布页地址和跳过设置。
-   * @returns {Promise<void>} 外部页面打开及本地设置保存完成后的 Promise。
-   */
-  const openReleasePage = useCallback(async ({ skipVersion, version, releaseUrl }) => {
-    try {
-      await openUrl(releaseUrl)
-    } catch (error) {
-      void notification.error('打开更新页面失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
-      return
-    }
-
-    if (skipVersion) {
-      try {
-        await store.set(StoreKeys.UPDATE_SKIPPED_VERSION, version)
-      } catch (error) {
-        console.warn('保存跳过的更新版本失败:', error)
-      }
-    }
-    setAvailableUpdate(null)
-  }, [])
-
-  /**
-   * 打开项目开源地址；按钮 loading 状态防止重复触发外部打开操作。
-   *
-   * @returns {Promise<void>} 外部地址打开完成后的 Promise。
-   */
-  const openProjectRepository = useCallback(async () => {
-    if (openingRepository) return
-
-    setOpeningRepository(true)
-    try {
-      await openUrl(PROJECT_REPOSITORY_URL)
-    } catch (error) {
-      void notification.error('打开开源地址失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
-    } finally {
-      setOpeningRepository(false)
-    }
-  }, [openingRepository])
 
   /**
    * 打开或聚焦指定连接配置对应的服务器工作窗口。
@@ -272,50 +156,6 @@ function MainApp() {
     void updateServerWorkspaceWindow(connection).catch(error => {
       console.warn('更新服务器工作窗口标题失败：', normalizeError(error))
     })
-  }, [])
-
-  // 注册“设置下载路径”菜单事件；异步注册完成前若组件卸载则立即释放监听器。
-  useEffect(() => {
-    let active = true
-    let unlisten
-
-    /**
-     * 注册下载路径菜单监听，并把用户选择的目录写入持久化 Store。
-     *
-     * @returns {Promise<void>} 菜单监听注册流程完成后的 Promise。
-     */
-    const listenForDownloadPathMenu = async () => {
-      try {
-        const dispose = await listen('menu-download-path', async () => {
-          try {
-            const result = await dialog.open({
-              title: '选择本地下载路径',
-              directory: true,
-              multiple: false,
-              canCreateDirectories: true
-            })
-            if (typeof result !== 'string' || !result) return
-            await store.set(StoreKeys.DOWNLOAD_PATH, result)
-            void notification.success('下载路径已更新')
-          } catch (error) {
-            void notification.error('设置下载路径失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
-          }
-        })
-        if (active) {
-          unlisten = dispose
-        } else {
-          dispose()
-        }
-      } catch (error) {
-        console.error('注册下载路径菜单失败:', error)
-      }
-    }
-
-    void listenForDownloadPathMenu()
-    return () => {
-      active = false
-      unlisten?.()
-    }
   }, [])
 
   // Store 里的隐藏文件偏好变化时，同步更新 Rust 原生菜单的勾选状态。
@@ -361,13 +201,11 @@ function MainApp() {
     }
   }, [])
 
-  // 统一注册窗口关闭、退出、更新和关于菜单事件，并在卸载时逐一撤销。
+  // 主窗口统一承接应用退出，其余窗口菜单由共享宿主定向处理。
   useEffect(() => {
     let disposed = false
     let unlistenCloseRequested
     let unlistenMenuExit
-    let unlistenMenuUpdate
-    let unlistenMenuAbout
 
     /**
      * 注册应用窗口及菜单事件，异步注册期间用 disposed 防止泄漏监听器。
@@ -394,24 +232,6 @@ function MainApp() {
           return
         }
         unlistenMenuExit = exitListener
-
-        const updateListener = await listen('menu-update', () => {
-          void checkApplicationUpdate({ manual: true })
-        })
-        if (disposed) {
-          updateListener()
-          return
-        }
-        unlistenMenuUpdate = updateListener
-
-        const aboutListener = await listen('menu-about', () => {
-          setAboutOpen(true)
-        })
-        if (disposed) {
-          aboutListener()
-          return
-        }
-        unlistenMenuAbout = aboutListener
       } catch (error) {
         console.error('注册应用菜单事件失败:', error)
       }
@@ -422,10 +242,8 @@ function MainApp() {
       disposed = true
       unlistenCloseRequested?.()
       unlistenMenuExit?.()
-      unlistenMenuUpdate?.()
-      unlistenMenuAbout?.()
     }
-  }, [ checkApplicationUpdate, requestApplicationExit ])
+  }, [requestApplicationExit])
 
   return (
     <ConfigProvider theme={ AntdThemeConfig } locale={ zhCN } componentSize="small">
@@ -455,79 +273,12 @@ function MainApp() {
           </div>
         </div>
       </div>
-      <UpdateAvailableModal
-        open={Boolean(availableUpdate)}
-        update={availableUpdate}
-        canSkipVersion={availableUpdate?.canSkipVersion}
-        onCancel={dismissAvailableUpdate}
-        onDownload={openReleasePage}
-      />
-      <Modal
-        rootClassName="compact-modal about-modal"
-        open={aboutOpen}
-        title={null}
-        centered
-        width="min(410px, calc(100vw - 24px))"
-        onCancel={() => setAboutOpen(false)}
-        footer={(
-          <div className="modal-actions">
-            <Button
-              icon={<AppIcon name="reload" />}
-              loading={checkingUpdate}
-              onClick={() => void checkApplicationUpdate({ manual: true })}
-            >
-              检查更新
-            </Button>
-            <Button type="primary" onClick={() => setAboutOpen(false)}>关闭</Button>
-          </div>
-        )}
-        destroyOnHidden
-      >
-        <section className="about-content" aria-label="关于 Portal">
-          <div className="about-brand">
-            <img className="about-logo" src="/portal-logo.svg" alt="Portal 标志" />
-            <div className="about-brand-copy">
-              <h1 className="about-title">Portal</h1>
-              <p className="about-description">SSH / SFTP 文件管理工具</p>
-            </div>
-          </div>
-          <p className="about-summary">
-            面向 macOS 的桌面应用，支持连接远程服务器、管理文件和使用 SSH 终端。
-          </p>
-          <div className="about-meta" aria-label="应用信息">
-            <div className="about-meta-item">
-              <span>版本</span>
-              <strong>{packageInfo.version}</strong>
-            </div>
-            <div className="about-meta-item">
-              <span>许可证</span>
-              <strong>{packageInfo.license}</strong>
-            </div>
-            <div className="about-meta-item">
-              <span>主要发布平台</span>
-              <strong>macOS</strong>
-            </div>
-          </div>
-          <Button
-            type="text"
-            className="about-repository"
-            loading={openingRepository}
-            icon={<AppIcon name="externalLink" size="16" />}
-            onClick={() => void openProjectRepository()}
-          >
-            <span className="about-repository-copy">
-              <span className="about-repository-label">开源地址</span>
-              <span className="about-repository-url">gitee.com/Mage-7-28/portal</span>
-            </span>
-          </Button>
-        </section>
-      </Modal>
     </ConfigProvider>
   )
 }
 
 /**
- * 根据窗口 URL 在主窗口和独立终端窗口之间选择渲染入口。
+ * 根据窗口 URL 选择主窗口、服务器工作区或独立终端，并挂载共享弹窗宿主。
  *
  * @returns {JSX.Element} 主窗口或独立终端窗口的 React 根组件。
  */
@@ -550,7 +301,13 @@ function App() {
   } else {
     content = <TransferProgressProvider baseTitle="Portal"><MainApp /></TransferProgressProvider>
   }
-  return <>{content}<NotificationHost /></>
+  return (
+    <>
+      {content}
+      <WindowMenuHost checkOnStartup={!serverWorkspaceParams && !terminalWindowParams} />
+      <NotificationHost />
+    </>
+  )
 }
 
 export default App

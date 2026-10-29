@@ -1,4 +1,5 @@
 import toast, { Toaster, ToastBar } from 'react-hot-toast'
+import AppIcon from './AppIcon.jsx'
 import '../style/notification.css'
 
 /** 每个 WebView 共享一个通知宿主，独立于懒加载页面和连接状态。 */
@@ -33,7 +34,7 @@ const NotificationHost = () => (
                 aria-label="关闭提示"
                 onClick={() => toast.dismiss(item.id)}
               >
-                ×
+                <AppIcon name="close" size={14} strokeWidth={2} />
               </button>
             )}
           </>

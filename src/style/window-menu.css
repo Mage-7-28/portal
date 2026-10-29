@@ -1,0 +1,38 @@
+.download-path-description {
+  margin: 0 0 12px;
+  color: #a9b4b5;
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+.download-path-location {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #3c4547;
+  border-radius: 9px;
+  background: rgb(103 199 209 / 4%);
+}
+
+.download-path-location > .app-icon {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: #67c7d1;
+}
+
+.download-path-value {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: #e1e8e9;
+  font: 12px/1.75 ui-monospace, 'SF Mono', Menlo, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.download-path-location.is-empty .download-path-value {
+  color: #a9b4b5;
+  font-family: var(--global-font-family);
+}
