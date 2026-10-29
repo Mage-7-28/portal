@@ -20,6 +20,7 @@ import AppIcon from './AppIcon.jsx'
 import { notification } from '../utils/notificationUtils.js'
 import { decryptPassword, encryptPassword } from '../utils/credentialUtils.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
+import { createNativeBatchWorkflow, createOperationLock, runTransferBatch } from '../utils/transferWorkflow.js'
 
 /**
  * @typedef {Object} ConnectionProfile
@@ -264,6 +265,8 @@ function FileBrowserPanel({
   const directoryIntentRef = useRef(null)
   const latestDirectoryRequestRef = useRef(null)
   const loadRemoteDirectoryRef = useRef(null)
+  const batchDownloadLockRef = useRef(null)
+  if (!batchDownloadLockRef.current) batchDownloadLockRef.current = createOperationLock()
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
   const previewAbortRef = useRef(null)
@@ -1224,7 +1227,8 @@ function FileBrowserPanel({
             total: Number(payload.total) || previous?.total || 0,
             percent: Number(progress) || 0
           }))
-        }
+        },
+        previewController.signal
       )
       if (currentPreviewRequest !== previewRequestId.current) return
 
@@ -1259,7 +1263,7 @@ function FileBrowserPanel({
         })
       }
     } catch (previewError) {
-      if (currentPreviewRequest === previewRequestId.current) {
+      if (!previewController.signal.aborted && currentPreviewRequest === previewRequestId.current) {
         void notification.error(`预览失败：${ normalizeError(previewError) }`)
       }
     } finally {
@@ -1305,11 +1309,12 @@ function FileBrowserPanel({
    * 在发起操作的远程目录创建子目录，并按最新视图状态决定是否刷新。
    *
    * @param {string} name - 已通过界面校验的新目录名称。
+   * @param {Object} target - 打开弹窗时捕获的连接和目录。
    * @returns {Promise<void>} 目录创建和必要刷新完成后的 Promise。
    * @throws {Error} 当远程目录创建失败时抛出。
    */
-  const handleCreateDirectory = async (name) => {
-    const target = captureOperationTarget(currentConnectionId, currentPath)
+  const handleCreateDirectory = async (name, target) => {
+    if (!isCurrentOperationTarget(target)) return
     try {
       await sftpManager.createRemoteDirectory(target.connectionId, joinRemotePath(target.path, name))
     } finally {
@@ -1318,7 +1323,7 @@ function FileBrowserPanel({
   }
 
   /**
-   * 批量下载选中的远程项目，逐项处理覆盖确认并发布进度。
+   * 将选中项目下载为单个原生批次，并只重试用户确认覆盖的冲突项。
    *
    * @param {RemoteEntry[]} entries - 要下载的远程文件或目录条目。
    * @param {() => void} [onConfirmed] - 用户确认下载后调用的回调。
@@ -1326,174 +1331,103 @@ function FileBrowserPanel({
    */
   const handleDownloadItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
+    const release = batchDownloadLockRef.current.acquire()
+    if (!release) return false
     const target = captureOperationTarget(currentConnectionId, currentPath)
-    if (!isCurrentOperationTarget(target)) return false
-
-    let downloadPath
+    const isCurrent = () => isCurrentOperationTarget(target)
+    let progressIds
     try {
-      downloadPath = await resolveDownloadPath()
-      if (!downloadPath || !isCurrentOperationTarget(target)) return false
-    } catch (error) {
-      void notification.error(`下载失败：${ normalizeError(error) }`)
-      return false
-    }
-
-    const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
-    const omittedCount = entries.length - Math.min(entries.length, 3)
-    const accepted = await confirm(
-      `确定下载选中的 ${ entries.length } 个项目吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n保存到：${ downloadPath }`,
-      {
-        title: '确认批量下载',
-        kind: 'warning',
-        okLabel: '下载全部',
-        cancelLabel: '取消'
-      }
-    )
-    if (!accepted || !isCurrentOperationTarget(target)) return false
-    onConfirmed?.()
-
-    const failedEntries = []
-    let downloadedCount = 0
-    let skippedCount = 0
-    let transferId = null
-    let cancelled = false
-    const progressIds = createProgressIds('download-batch')
-    /**
-     * 把单项下载回调转换为窗口标题和取消入口共用的批量进度载荷。
-     *
-     * @param {number} progress - 当前文件进度百分比。
-     * @param {RemoteEntry} entry - 当前队列中的远程项目。
-     * @param {number} queueIndex - 当前项目在批量队列中的索引。
-     * @param {Object} [payload={}] - 目录下载返回的文件级进度信息。
-     * @returns {void}
-     */
-    const publishProgress = (progress, entry, queueIndex, payload = {}) => {
-      const isDirectoryDownload = Boolean(entry.isDirectory)
-      const fileIndex = Number(payload.fileIndex)
-      const fileTotal = Number(payload.fileTotal)
-      PubSubBusinessKeyEnum.SEND_MASK({
-        ...progressIds,
-        progress: Math.round(Number(progress) || 0),
-        fileName: isDirectoryDownload ? (payload.fileName || entry.name) : entry.name,
-        operation: isDirectoryDownload ? 'download-directory' : 'download',
-        queueIndex,
-        queueTotal: entries.length,
-        pendingCount: Math.max(entries.length - queueIndex - 1, 0),
-        folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
-        folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
-        overallProgress: Number.isFinite(Number(payload.overallProgress))
-          ? Number(payload.overallProgress)
-          : undefined,
-        current: payload.current,
-        total: payload.total,
-        completedBytes: payload.completedBytes,
-        totalBytes: payload.totalBytes,
-        onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
-      })
-    }
-    /**
-     * 下载队列中的单个项目，并在结束时清空可取消的传输 ID。
-     *
-     * @param {RemoteEntry} entry - 要下载的远程项目。
-     * @param {number} queueIndex - 项目在队列中的索引。
-     * @param {boolean} overwrite - 是否覆盖已存在的本地目标。
-     * @returns {Promise<void>} 单项下载完成后的 Promise。
-     */
-    const downloadOne = async (entry, queueIndex, overwrite) => {
-      transferId = null
-      const remotePath = joinRemotePath(target.path, entry.name)
-      const localPath = joinLocalPath(downloadPath, entry.name)
-      publishProgress(0, entry, queueIndex)
-      try {
-        const download = entry.isDirectory
-          ? sftpManager.downloadDirectory.bind(sftpManager)
-          : sftpManager.downloadFile.bind(sftpManager)
-        await download(
-          target.connectionId,
-          remotePath,
-          localPath,
-          (progress, payload) => publishProgress(progress, entry, queueIndex, payload),
-          overwrite,
-          id => {
-            transferId = id
-            publishProgress(0, entry, queueIndex)
-          },
-          target.connection
-        )
-      } finally {
-        transferId = null
-      }
-    }
-
-    try {
-      for (const [ queueIndex, entry ] of entries.entries()) {
-        if (!isCurrentOperationTarget(target)) break
-        try {
-          await downloadOne(entry, queueIndex, false)
-          downloadedCount += 1
-          if (!isCurrentOperationTarget(target)) break
-          continue
-        } catch (downloadError) {
-          const message = normalizeError(downloadError)
-          if (!isCurrentOperationTarget(target)) break
-          if (!message.includes('已存在')) {
-            failedEntries.push({ entry, error: message })
-            cancelled = message.includes('传输已取消')
-            if (cancelled || !isCurrentOperationTarget(target)) break
-            continue
-          }
-
-          const itemLabel = entry.isDirectory ? '文件夹' : '文件'
-          const overwriteAccepted = await confirm(
-            `本地${ itemLabel }已存在：\n${ joinLocalPath(downloadPath, entry.name) }\n${ entry.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
-            {
-              title: '确认覆盖',
-              kind: 'warning',
-              okLabel: entry.isDirectory ? '合并并覆盖' : '覆盖',
-              cancelLabel: '跳过'
-            }
-          )
-          if (!isCurrentOperationTarget(target)) break
-          if (!overwriteAccepted) {
-            skippedCount += 1
-            continue
-          }
-          try {
-            await downloadOne(entry, queueIndex, true)
-            downloadedCount += 1
-            if (!isCurrentOperationTarget(target)) break
-          } catch (retryError) {
-            const retryMessage = normalizeError(retryError)
-            failedEntries.push({ entry, error: retryMessage })
-            cancelled = retryMessage.includes('传输已取消')
-            if (cancelled || !isCurrentOperationTarget(target)) break
-          }
+      if (!isCurrent()) return false
+      const downloadPath = await resolveDownloadPath()
+      if (!downloadPath || !isCurrent()) return false
+      const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
+      const omittedCount = entries.length - Math.min(entries.length, 3)
+      const accepted = await confirm(
+        `确定下载选中的 ${ entries.length } 个项目吗？\n\n${ previewNames }${ omittedCount > 0 ? ` 等 ${ omittedCount } 项` : '' }\n\n保存到：${ downloadPath }`,
+        {
+          title: '确认批量下载',
+          kind: 'warning',
+          okLabel: '下载全部',
+          cancelLabel: '取消'
         }
+      )
+      if (!accepted || !isCurrent()) return false
+      onConfirmed?.()
+      progressIds = createProgressIds('download-batch')
+      const jobs = entries.map(entry => ({
+        entry,
+        localPath: joinLocalPath(downloadPath, entry.name),
+        remotePath: entry.path || joinRemotePath(target.path, entry.name),
+        isDirectory: Boolean(entry.isDirectory)
+      }))
+      let workflow
+      const publishProgress = (progress, payload = {}) => {
+        const fileIndex = Number(payload.fileIndex)
+        const fileTotal = Number(payload.fileTotal)
+        PubSubBusinessKeyEnum.SEND_MASK({
+          ...progressIds,
+          progress: Math.round(Number(progress) || 0),
+          fileName: payload.fileName || `${ entries.length } 个项目`,
+          operation: 'download',
+          queueIndex: Number.isFinite(Number(payload.queueIndex)) ? Number(payload.queueIndex) : 0,
+          queueTotal: entries.length,
+          pendingCount: Number.isFinite(Number(payload.pendingCount)) ? Number(payload.pendingCount) : undefined,
+          folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
+          folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
+          overallProgress: Number.isFinite(Number(payload.overallProgress)) ? Number(payload.overallProgress) : undefined,
+          current: payload.current,
+          total: payload.total,
+          completedBytes: payload.completedBytes,
+          totalBytes: payload.totalBytes,
+          onCancel: workflow ? () => workflow.cancel() : undefined
+        })
       }
-    } finally {
-      transferId = null
-      PubSubBusinessKeyEnum.SEND_MASK({
-        ...progressIds,
-        event: PROGRESS_EVENT_END
+      workflow = createNativeBatchWorkflow({
+        isCurrent,
+        cancelTransfer: id => sftpManager.cancelTransfer(id),
+        onProgress: publishProgress,
+        transfer: (batch, context, overwrite) => sftpManager.transferBatch(
+          target.connectionId,
+          batch.map(({ localPath, remotePath, isDirectory }) => ({ localPath, remotePath, isDirectory })),
+          {
+            direction: 'download',
+            connection: target.connection,
+            shouldStart: context.isCurrent,
+            overwrite,
+            onProgress: context.reportProgress,
+            onTransferId: id => {
+              context.registerTransferId(id)
+              if (context.isCurrent()) publishProgress(0)
+            }
+          }
+        ),
+        confirmOverwrite: job => confirm(
+          `本地${ job.isDirectory ? '文件夹' : '文件' }已存在：\n${ job.localPath }\n${ job.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
+          {
+            title: '确认覆盖',
+            kind: 'warning',
+            okLabel: job.isDirectory ? '合并并覆盖' : '覆盖',
+            cancelLabel: '跳过'
+          }
+        )
       })
-    }
-
-    if (cancelled || !isCurrentOperationTarget(target)) {
+      publishProgress(0)
+      const result = await workflow.run(jobs)
+      if (!isCurrent()) return false
+      const { succeeded, skipped, failed, notStarted, unknown, unlistedSkipped, directoryCount } = result
+      const failedNames = failed.map(item => item.item?.localPath || item.job.entry.name).join('、')
+      const skippedCount = skipped.length + unlistedSkipped
+      const summary = `已下载 ${ succeeded.length } 个文件${ directoryCount ? `、${ directoryCount } 个目录` : '' }${ skippedCount ? `，跳过 ${ skippedCount } 个` : '' }${ failed.length ? `，${ failed.length } 个失败` : '' }${ notStarted.length ? `，${ notStarted.length } 个未开始` : '' }${ unknown.length ? `，${ unknown.length } 个结果待核对` : '' }${ failedNames ? `：${ failedNames }` : '' }`
+      if (failed.length || notStarted.length || unknown.length || result.cancelled) void notification.error(`${ result.cancelled ? '下载已取消：' : '' }${ summary }`)
+      else void notification.success(summary)
+      return !result.cancelled && !failed.length && !notStarted.length && !unknown.length && !skippedCount
+    } catch (error) {
+      if (isCurrent()) void notification.error(`下载失败：${ normalizeError(error) }`)
       return false
+    } finally {
+      if (progressIds) PubSubBusinessKeyEnum.SEND_MASK({ ...progressIds, event: PROGRESS_EVENT_END })
+      release()
     }
-    if (failedEntries.length === 0 && skippedCount === 0 && downloadedCount === entries.length) {
-      void notification.success(`已下载 ${ entries.length } 个项目`)
-      return true
-    }
-    const failedNames = failedEntries.map(item => item.entry.name).join('、')
-    const summary = `已下载 ${ downloadedCount } 个项目${ skippedCount > 0 ? `，跳过 ${ skippedCount } 个` : '' }${ failedEntries.length > 0 ? `，${ failedEntries.length } 个失败` : '' }`
-    const summaryMessage = `${ summary }${ failedNames ? `：${ failedNames }` : '' }`
-    if (failedEntries.length > 0) {
-      void notification.error(summaryMessage)
-    } else {
-      void notification.success(summaryMessage)
-    }
-    return false
   }
 
   /**
@@ -1557,6 +1491,7 @@ function FileBrowserPanel({
    */
   const handleDeleteItem = async (entry) => {
     const target = captureOperationTarget(currentConnectionId, currentPath)
+    if (!isCurrentOperationTarget(target)) return
     const description = entry.isDirectory
       ? `确定删除文件夹“${ entry.name }”及其所有内容吗？此操作无法撤销。`
       : `确定删除“${ entry.name }”吗？`
@@ -1567,7 +1502,7 @@ function FileBrowserPanel({
         okLabel: '删除',
         cancelLabel: '取消'
       })
-      if (!accepted) return
+      if (!accepted || !isCurrentOperationTarget(target)) return
     } catch (confirmError) {
       void notification.error(`确认删除失败：${ normalizeError(confirmError) }`)
       return
@@ -1606,6 +1541,7 @@ function FileBrowserPanel({
   const handleDeleteItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
     const target = captureOperationTarget(currentConnectionId, currentPath)
+    if (!isCurrentOperationTarget(target)) return false
     const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
     const omittedCount = entries.length - Math.min(entries.length, 3)
     const accepted = await confirm(
@@ -1622,26 +1558,46 @@ function FileBrowserPanel({
 
     const status = createOperationStatus('delete', `${ entries.length } 个项目`)
     status.start(`正在删除 ${ entries.length } 个项目...`)
-    const failedEntries = []
-    let deletedCount = 0
     let refreshStarted = false
     try {
-      for (const [ queueIndex, entry ] of entries.entries()) {
-        if (!isCurrentOperationTarget(target)) break
-        try {
-          await deleteRemoteEntry(entry, status, target, {
-            queueIndex,
-            queueTotal: entries.length,
-            showBatchPosition: true
-          })
-          deletedCount += 1
-          if (!isCurrentOperationTarget(target)) break
-        } catch (deleteError) {
-          failedEntries.push({ entry, error: normalizeError(deleteError) })
-          if (!isCurrentOperationTarget(target)) break
-        }
+      const progresses = Array(entries.length).fill(0)
+      const entryIndexes = new Map(entries.map((entry, index) => [ entry, index ]))
+      let progressTotal = 0
+      let finished = 0
+      const setProgress = (index, value) => {
+        progressTotal += value - progresses[index]
+        progresses[index] = value
       }
-
+      const publishBatchProgress = (fileName, phase) => {
+        if (!isCurrentOperationTarget(target)) return
+        const progress = progressTotal / entries.length
+        status.update(Math.round(progress), `正在删除：${ finished }/${ entries.length } 项已结束`, {
+          fileName,
+          phase,
+          queueIndex: finished,
+          queueTotal: entries.length,
+          pendingCount: Math.max(entries.length - finished, 0)
+        })
+      }
+      const batch = runTransferBatch(entries, async (entry, context) => {
+        const itemStatus = {
+          update: (progress, _message, details = {}) => {
+            setProgress(context.index, Math.max(0, Math.min(100, Number(progress) || 0)))
+            publishBatchProgress(details.fileName || entry.name, details.phase)
+          }
+        }
+        await deleteRemoteEntry(entry, itemStatus, target)
+      }, {
+        concurrency: 4,
+        isCurrent: () => isCurrentOperationTarget(target),
+        onOutcome: (_state, outcome) => {
+          const index = entryIndexes.get(outcome.job)
+          if (index !== undefined) setProgress(index, 100)
+          finished += 1
+          publishBatchProgress(outcome.job.name, 'deleting')
+        }
+      })
+      const result = await batch.promise
       if (!isCurrentOperationTarget(target)) {
         return false
       }
@@ -1654,12 +1610,13 @@ function FileBrowserPanel({
       refreshStarted = true
       await refreshDirectoryAfterMutation(target)
       if (!isCurrentOperationTarget(target)) return false
-      if (failedEntries.length === 0 && deletedCount === entries.length) {
+      const deletedCount = result.succeeded.length
+      if (deletedCount === entries.length) {
         void notification.success(`已删除 ${ entries.length } 个项目`)
         return true
       }
-      const failedNames = failedEntries.map(item => item.entry.name).join('、')
-      void notification.error(`已删除 ${ deletedCount } 个项目，${ failedEntries.length } 个失败${ failedNames ? `：${ failedNames }` : '' }`)
+      const failedNames = result.failed.map(outcome => outcome.job.name).join('、')
+      void notification.error(`已删除 ${ deletedCount } 个项目，${ result.failed.length } 个失败，${ result.notStarted.length } 个未开始，${ result.unknown.length } 个结果待核对${ failedNames ? `：${ failedNames }` : '' }`)
       return false
     } finally {
       try {
@@ -1675,13 +1632,14 @@ function FileBrowserPanel({
    *
    * @param {RemoteEntry} entry - 待重命名的远程文件或目录条目。
    * @param {string} name - 用户输入的新名称。
+   * @param {Object} target - 打开弹窗时捕获的连接和目录。
    * @returns {Promise<void>} 重命名和目录刷新完成后的 Promise。
    * @throws {Error} 当名称无效或远程重命名失败时抛出。
    */
-  const handleRenameItem = async (entry, name) => {
+  const handleRenameItem = async (entry, name, target) => {
     const trimmedName = name.trim()
     if (!trimmedName || trimmedName === entry.name) return
-    const target = captureOperationTarget(currentConnectionId, currentPath)
+    if (!isCurrentOperationTarget(target)) return
     const status = createOperationStatus('rename', `${ entry.name } -> ${ trimmedName }`)
     let refreshStarted = false
     status.start('正在重命名...')
@@ -1691,10 +1649,11 @@ function FileBrowserPanel({
         joinRemotePath(target.path, entry.name),
         joinRemotePath(target.path, trimmedName)
       )
+      if (!isCurrentOperationTarget(target)) return
       status.update(82, '正在刷新目录...')
       refreshStarted = true
       await refreshDirectoryAfterMutation(target)
-      void notification.success('已重命名')
+      if (isCurrentOperationTarget(target)) void notification.success('已重命名')
     } catch (renameError) {
       // 保持弹窗打开，让用户修正名称或重新尝试。
       throw renameError

@@ -55,20 +55,9 @@ export const SftpConnectionStatus = {
   ERROR: 'error'
 }
 
-// 文件传输任务状态枚举，供兼容调用方和进度层统一判断。
-export const TransferStatus = {
-  QUEUED: 'queued',
-  RUNNING: 'running',
-  COMPLETED: 'completed',
-  FAILED: 'failed',
-  CANCELLED: 'cancelled'
-}
-
-// SSH 连接、传输缓冲、进度节流和并发传输的跨模块保护参数。
+// SSH 连接与进度节流的跨模块保护参数。
 export const CONNECTION_TIMEOUT_MS = 30_000
-export const TRANSFER_BUFFER_SIZE = 64 * 1024
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
-export const MAX_CONCURRENT_TRANSFERS = 4
 
 // LAB 用于浏览器界面的强调色样式。Ant Design 的 FastColor 调色板生成器
 // 目前只接受 RGB、HSL 和十六进制颜色，因此生成派生主题令牌时需要对应的 sRGB 降级色。

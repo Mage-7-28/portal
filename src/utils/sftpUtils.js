@@ -134,7 +134,7 @@ const TRANSFER_STATUS_POLL_INTERVAL_MS = 2000
 const TRANSFER_STATUS_QUERY_TIMEOUT_MS = 10000
 // 仅限制未确认登记的启动请求，不限制已经登记的文件任务运行时间。
 const TRANSFER_START_TIMEOUT_MS = 30000
-const TRANSFER_STATUSES = new Set([ 'queued', 'starting', 'running', 'committing', 'succeeded', 'failed', 'cancelled' ])
+const TRANSFER_STATUSES = new Set([ 'queued', 'starting', 'planning', 'running', 'committing', 'succeeded', 'partial', 'failed', 'cancelled' ])
 // 原生契约保证这些启动拒绝均发生在任务登记之前。
 const TRANSFER_START_REJECTION_CODES = new Set([
   'ConnectionGenerationChanged', 'TransferStartExpired', 'TransferCancelled', 'TransferRejected', 'ConnectionNotFound'
@@ -726,6 +726,10 @@ class SftpManager {
    * @returns {void}
    */
   applyTransferSnapshot(task, snapshot, reportProgress = true, fromEvent = false) {
+    if (Number.isSafeInteger(snapshot.revision)) {
+      if (snapshot.revision < (task.revision || 0)) return
+      task.revision = snapshot.revision
+    }
     if (task.settled || snapshot?.id !== task.connectionId || snapshot?.transferId !== task.transferId) return
     if (snapshot.generation !== task.generation || !TRANSFER_STATUSES.has(snapshot.status)) return
     const registered = !task.ready
@@ -736,11 +740,11 @@ class SftpManager {
     }
     task.missingStatusCount = 0
 
-    if (snapshot.status === 'succeeded' || snapshot.status === 'failed' || snapshot.status === 'cancelled') {
+    if ([ 'succeeded', 'partial', 'failed', 'cancelled' ].includes(snapshot.status)) {
       task.settled = true
       this.removeActiveTransfer(task)
-      if (snapshot.status === 'succeeded') {
-        task.resolve({ message: snapshot.message })
+      if (snapshot.status === 'succeeded' || (task.batch && snapshot.result)) {
+        task.resolve({ message: snapshot.message, result: snapshot.result && { ...snapshot.result, status: snapshot.status }})
       } else {
         const error = createTaskError(snapshot, snapshot.status === 'cancelled' ? '传输已取消' : task.failureMessage)
         // 独立传输会话出错不能使仍正常工作的主连接断开。
@@ -856,7 +860,9 @@ class SftpManager {
       transferId,
       onProgress,
       failureMessage: options.failureMessage,
-      directoryTransfer: command === 'sftp_upload_directory' || command === 'sftp_download_directory',
+      directoryTransfer: command === 'start_transfer',
+      batch: options.batch === true,
+      shouldStart: options.shouldStart,
       resolve: resolveCompletion,
       generation: connection.generation,
       dispatched: false,
@@ -879,7 +885,7 @@ class SftpManager {
         this.applyTransferSnapshot(task, {
           ...payload,
           transferId,
-          status: payload.cancelled ? 'cancelled' : payload.success ? 'succeeded' : 'failed'
+          status: TRANSFER_STATUSES.has(payload.status) ? payload.status : payload.cancelled ? 'cancelled' : payload.success ? 'succeeded' : 'failed'
         })
       } else {
         task.lastProgress = payload
@@ -900,7 +906,7 @@ class SftpManager {
         if (task.settled) {
           const result = await completion
           if (result.error) throw result.error
-          return result.message
+          return task.batch ? result.result : result.message
         }
         if (task.cancelRequested) throw createTaskError({ status: 'cancelled' }, '传输已取消')
       }
@@ -908,7 +914,7 @@ class SftpManager {
       if (task.settled) {
         const result = await completion
         if (result.error) throw result.error
-        return result.message
+        return task.batch ? result.result : result.message
       }
       if (task.cancelRequested && !task.dispatched) {
         throw createTaskError({ status: 'cancelled' }, '传输已取消')
@@ -917,6 +923,10 @@ class SftpManager {
         const error = new Error('连接已更改，未启动文件任务')
         error.code = 'ConnectionGenerationChanged'
         throw error
+      }
+      if (task.shouldStart && !task.shouldStart()) throw createTaskError({ status: 'cancelled' }, '传输已取消')
+      if (!this.isCurrentConnection(connectionId, connection)) {
+        throw createTaskError({ code: 'ConnectionGenerationChanged', message: '连接已更改，未启动文件任务' }, '连接已更改')
       }
       const expiresAt = Date.now() + TRANSFER_START_TIMEOUT_MS
       task.startTimer = window.setTimeout(() => {
@@ -954,7 +964,7 @@ class SftpManager {
 
       const result = await completion
       if (result.error) throw result.error
-      return result.message
+      return task.batch ? result.result : result.message
     } finally {
       this.removeActiveTransfer(task)
       // 解绑失败或 IPC 挂起不能吞掉已确认的传输结果，所有清理 Promise 都显式接住异常。
@@ -974,6 +984,20 @@ class SftpManager {
    * @throws {Error} 当连接无效、启动失败或任务以失败、取消终态结束时抛出。
    */
   async transfer(direction, connectionId, options) {
+    const result = await this.transferBatch(connectionId, [{
+      localPath: options.localPath,
+      remotePath: options.remotePath,
+      isDirectory: direction.endsWith('-directory')
+    }], { ...options, direction: direction.startsWith('upload') ? 'upload' : 'download' })
+    if (result.failed || result.unknown || result.notStarted || result.status === 'cancelled') {
+      const item = result.items.find(item => item.error)
+      throw createTaskError({ ...result, error: item?.error }, '传输未全部完成')
+    }
+    return result.message
+  }
+
+  /** 一次登记整个批次，由原生有界工作池调度，避免前端逐文件 IPC 串行等待。 */
+  async transferBatch(connectionId, entries, options = {}) {
     const connection = options.connection || this.captureConnection(connectionId)
     if (!this.isCurrentConnection(connectionId, connection)) {
       const error = new Error('连接已更改，未启动文件任务')
@@ -981,21 +1005,29 @@ class SftpManager {
       throw error
     }
     const info = connection.record
+    if (options.shouldStart && !options.shouldStart()) throw createTaskError({ status: 'cancelled' }, '传输已取消')
+    if (options.shouldStart && !options.shouldStart()) throw createTaskError({ status: 'cancelled' }, '传输已取消')
+    if (!this.isCurrentConnection(connectionId, connection)) {
+      throw createTaskError({ code: 'ConnectionGenerationChanged', message: '连接已更改，未启动文件任务' }, '连接已更改')
+    }
+    const direction = options.direction === 'upload' ? 'upload' : 'download'
     const transferId = randomId(direction)
-    const isUpload = direction === 'upload' || direction === 'upload-directory'
-    const command = direction === 'upload'
-      ? 'scp_upload'
-      : direction === 'upload-directory'
-        ? 'sftp_upload_directory'
-        : direction === 'download-directory'
-          ? 'sftp_download_directory'
-          : 'scp_download'
+    const isUpload = direction === 'upload'
     const result = await this.runTransferTask({
       connectionId,
       connection,
       transferId,
-      command,
-      args: { id: connectionId, localPath: options.localPath, remotePath: options.remotePath, transferId, overwrite: options.overwrite },
+      command: 'start_transfer',
+      batch: true,
+      shouldStart: options.shouldStart,
+      args: { id: connectionId, transferId, request: {
+        version: 2,
+        direction,
+        entries,
+        overwrite: options.overwrite === true,
+        mode: 'auto',
+        compression: 'auto'
+      }},
       progressEvent: isUpload ? 'upload-progress' : 'download-progress',
       completeEvent: isUpload ? 'upload-complete' : 'download-complete',
       onProgress: options.onProgress,
@@ -1004,7 +1036,19 @@ class SftpManager {
     })
     info.lastActivity = Date.now()
     if (isUpload && this.isCurrentConnection(connectionId, connection)) this.invalidateDirectorySizeCache(connectionId)
-    return result
+    const items = []
+    // 原生快照只携带汇总，按页读取结果明细，避免大目录事件复制百兆清单。
+    while (items.length < (result?.itemCount || 0)) {
+      const page = await invoke('get_transfer_results', { transferId, offset: items.length, limit: 256 })
+      if (!page || !page.items.length) {
+        const error = new Error('传输明细已过期，请核对目标文件；不会自动重传')
+        error.code = 'TransferStateUnavailable'
+        throw error
+      }
+      items.push(...page.items)
+      if (!page.hasMore) break
+    }
+    return { ...result, items, transferId }
   }
 
   /**
@@ -1049,24 +1093,41 @@ class SftpManager {
    * @returns {Promise<Uint8Array>} 文件原始字节；文本解码由预览层负责。
    * @throws {Error} 当连接无效、文件过大或远程读取失败时抛出。
    */
-  async getRemoteFileContent(connectionId, remotePath, previewId, onProgress) {
-    this.requireConnected(connectionId)
+  async getRemoteFileContent(connectionId, remotePath, previewId, onProgress, signal) {
+    const connection = this.captureConnection(connectionId)
+    previewId ||= randomId('preview')
+    if (signal?.aborted) throw createDirectoryAbortError()
     let unlistenProgress
+    let onAbort
+    const aborted = signal && new Promise((resolve, reject) => {
+      onAbort = () => {
+        void invoke('cancel_sftp_preview', { previewId }).catch(() => undefined)
+        reject(createDirectoryAbortError())
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
+    })
+    // 事件监听注册也需要 await；在这个窗口内取消不能产生未处理的 rejection。
+    aborted?.catch(() => undefined)
     try {
       if (onProgress && previewId) {
         unlistenProgress = await listen('preview-progress', event => {
           const payload = event.payload || {}
-          if (payload.id !== connectionId || payload.previewId !== previewId) return
+          if (payload.id !== connectionId || payload.previewId !== previewId || !this.isCurrentConnection(connectionId, connection)) return
           onProgress(payload.progress, payload)
         })
       }
-      const result = await this.invokeRemote(connectionId, 'get_sftp_file_content', {
+      if (signal?.aborted) throw createDirectoryAbortError()
+      const request = invoke('get_sftp_file_content', {
         id: connectionId,
         remotePath,
-        previewId: previewId || null
+        previewId,
+        expectedGeneration: connection.generation
       })
+      const result = await (aborted ? Promise.race([ request, aborted ]) : request)
+      if (!this.isCurrentConnection(connectionId, connection)) throw createDirectoryAbortError()
       return new Uint8Array(result)
     } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort)
       unlistenProgress?.()
     }
   }

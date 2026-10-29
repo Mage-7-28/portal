@@ -12,6 +12,10 @@ const STALL_TIMEOUT: Duration = Duration::from_secs(120);
 const CANCEL_TOMBSTONE_TTL: Duration = Duration::from_secs(120);
 const MAX_CANCEL_TOMBSTONES: usize = 1024;
 const MAX_IDENTIFIER_BYTES: usize = 256;
+const MAX_ACTIVE_WORKERS: usize = 8;
+const INITIAL_HOST_WORKERS: usize = 2;
+const MAX_HOST_WORKERS: usize = 4;
+const PROGRESS_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -19,37 +23,54 @@ pub(crate) struct TaskSnapshot {
     pub transfer_id: String,
     pub id: String,
     pub generation: u64,
+    pub revision: u64,
     pub status: String,
     pub current: u64,
     pub total: Option<u64>,
     pub progress: f64,
     pub message: String,
     pub error: Option<Value>,
+    pub result: Option<Value>,
 }
 impl TaskSnapshot {
     pub fn terminal(&self) -> bool {
-        matches!(self.status.as_str(), "succeeded" | "failed" | "cancelled")
+        matches!(
+            self.status.as_str(),
+            "succeeded" | "partial" | "failed" | "cancelled"
+        )
     }
+
+    /// 调用方先按窗口读取快照；重试还须绑定已结束任务的原连接及其代次。
+    pub fn allows_retry_for(&self, connection_id: &str, generation: u64) -> bool {
+        self.terminal() && self.id == connection_id && self.generation == generation
+    }
+}
+
+struct WorkerRecord {
+    socket: Option<TcpStream>,
+    committing: bool,
 }
 struct Record {
     snapshot: TaskSnapshot,
     owner: String,
     host: String,
-    order: u64,
     cancel: bool,
     updated: Instant,
     emitted: Option<Instant>,
     file: String,
-    socket: Option<TcpStream>,
+    workers: HashMap<String, WorkerRecord>,
+    legacy_commit_shield: bool,
 }
 #[derive(Default)]
 struct Inner {
     records: HashMap<String, Record>,
     cancel_tombstones: HashMap<(String, String), Instant>,
     cancel_overflowed_at: Option<Instant>,
-    next_order: u64,
+    next_worker_order: u64,
     active: usize,
     hosts: HashMap<String, usize>,
+    host_limits: HashMap<String, usize>,
+    waiting_workers: HashMap<(String, String), (String, u64)>,
 }
 #[derive(Default)]
 pub(crate) struct TransferTasks {
@@ -95,18 +116,18 @@ impl TransferTasks {
         {
             return Err("文件任务等待队列已满".into());
         }
-        inner.next_order += 1;
-        let order = inner.next_order;
         let snapshot = TaskSnapshot {
             transfer_id: id.into(),
             id: connection.into(),
             generation,
+            revision: 1,
             status: "queued".into(),
             current: 0,
             total: None,
             progress: 0.0,
             message: "等待执行".into(),
             error: None,
+            result: None,
         };
         inner.records.insert(
             id.into(),
@@ -114,15 +135,18 @@ impl TransferTasks {
                 snapshot: snapshot.clone(),
                 owner: owner.into(),
                 host: host.into(),
-                order,
                 cancel: false,
                 updated: Instant::now(),
                 emitted: None,
                 file: String::new(),
-                socket: None,
+                workers: HashMap::new(),
+                legacy_commit_shield: false,
             },
         );
         Ok(snapshot)
+    }
+    fn bump_revision(row: &mut Record) {
+        row.snapshot.revision = row.snapshot.revision.saturating_add(1);
     }
     fn prune(inner: &mut Inner) {
         inner
@@ -155,35 +179,157 @@ impl TransferTasks {
             }
         }
     }
-    /// 同一主机最多两个执行者；等待主机名额时不持有全局执行名额。
+    /// 为旧的单文件/删除执行者申请唯一名额。
     pub fn acquire(self: &Arc<Self>, id: &str) -> Result<TaskLease, String> {
+        self.acquire_inner(id, "", true)
+    }
+
+    /// 为父任务的一个独立 worker 申请数据名额；父协调者自身无需持有名额。
+    ///
+    /// `worker_id` 在同一父任务内必须唯一；等待主机容量时不占用全局容量。
+    pub fn acquire_worker(
+        self: &Arc<Self>,
+        id: &str,
+        worker_id: &str,
+    ) -> Result<TaskLease, String> {
+        if !Self::valid_identifier(worker_id) {
+            return Err("工作线程标识无效".into());
+        }
+        self.acquire_inner(id, worker_id, false)
+    }
+
+    /// 预取是可选工作；名额繁忙时立即返回，避免扫描者持有名额形成循环等待。
+    pub fn try_acquire_worker(
+        self: &Arc<Self>,
+        id: &str,
+        worker_id: &str,
+    ) -> Result<TaskLease, String> {
+        if !Self::valid_identifier(worker_id) {
+            return Err("工作线程标识无效".into());
+        }
         let mut inner = self.inner.lock().map_err(|_| "任务状态锁已损坏")?;
+        let row = inner.records.get(id).ok_or("任务不存在")?;
+        if row.cancel || row.snapshot.terminal() || row.workers.contains_key(worker_id) {
+            return Err("预取任务已取消或重复".into());
+        }
+        let host = row.host.clone();
+        let limit = inner
+            .host_limits
+            .get(&host)
+            .copied()
+            .unwrap_or(INITIAL_HOST_WORKERS);
+        if inner.active >= MAX_ACTIVE_WORKERS
+            || inner.hosts.get(&host).copied().unwrap_or(0) >= limit
+            || inner
+                .waiting_workers
+                .values()
+                .any(|(waiting, _)| waiting == &host)
+        {
+            return Err("预取名额繁忙".into());
+        }
+        inner.active += 1;
+        *inner.hosts.entry(host.clone()).or_default() += 1;
+        inner.records.get_mut(id).unwrap().workers.insert(
+            worker_id.into(),
+            WorkerRecord {
+                socket: None,
+                committing: false,
+            },
+        );
+        Ok(TaskLease {
+            tasks: self.clone(),
+            host,
+            task_id: id.into(),
+            worker_id: worker_id.into(),
+        })
+    }
+
+    fn acquire_inner(
+        self: &Arc<Self>,
+        id: &str,
+        worker_id: &str,
+        legacy: bool,
+    ) -> Result<TaskLease, String> {
+        let mut inner = self.inner.lock().map_err(|_| "任务状态锁已损坏")?;
+        let key = (id.to_owned(), worker_id.to_owned());
+        let row = inner.records.get(id).ok_or("任务不存在")?;
+        if row.cancel || row.snapshot.terminal() {
+            return Err("传输已取消".into());
+        }
+        if (legacy && row.snapshot.status != "queued")
+            || row.workers.contains_key(worker_id)
+            || inner.waiting_workers.contains_key(&key)
+        {
+            return Err("任务已开始或结束，不能重复执行".into());
+        }
+        let host = row.host.clone();
+        inner.next_worker_order = inner.next_worker_order.saturating_add(1);
+        let order = inner.next_worker_order;
+        inner
+            .waiting_workers
+            .insert(key.clone(), (host.clone(), order));
+
         loop {
-            let row = inner.records.get(id).ok_or("任务不存在")?;
-            if row.cancel {
+            let valid = inner.records.get(id).is_some_and(|row| {
+                !row.cancel
+                    && !row.snapshot.terminal()
+                    && (!legacy || row.snapshot.status == "queued")
+            });
+            if !valid {
+                inner.waiting_workers.remove(&key);
+                self.wake.notify_all();
                 return Err("传输已取消".into());
             }
-            if row.snapshot.status != "queued" {
-                return Err("任务已开始或结束，不能重复执行".into());
-            }
-            let host = row.host.clone();
-            let order = row.order;
-            let earlier = inner.records.values().any(|r| {
-                r.host == host && r.order < order && r.snapshot.status == "queued" && !r.cancel
-            });
-            if !earlier && inner.active < 4 && inner.hosts.get(&host).copied().unwrap_or(0) < 2 {
+            let earlier = inner
+                .waiting_workers
+                .values()
+                .any(|(other_host, other_order)| other_host == &host && *other_order < order);
+            let host_active = inner.hosts.get(&host).copied().unwrap_or(0);
+            // 初始两条并发完成会话握手后可逐步扩展至四条；报告连接成功前不扩大。
+            let host_limit = inner
+                .host_limits
+                .get(&host)
+                .copied()
+                .unwrap_or(INITIAL_HOST_WORKERS);
+            if !earlier && inner.active < MAX_ACTIVE_WORKERS && host_active < host_limit {
+                inner.waiting_workers.remove(&key);
                 inner.active += 1;
                 *inner.hosts.entry(host.clone()).or_default() += 1;
                 let row = inner.records.get_mut(id).unwrap();
-                row.snapshot.status = "starting".into();
+                row.workers.insert(
+                    worker_id.to_owned(),
+                    WorkerRecord {
+                        socket: None,
+                        committing: false,
+                    },
+                );
+                if legacy {
+                    row.snapshot.status = "starting".into();
+                    Self::bump_revision(row);
+                }
                 row.updated = Instant::now();
                 self.wake.notify_all();
                 return Ok(TaskLease {
                     tasks: self.clone(),
                     host,
+                    task_id: id.to_owned(),
+                    worker_id: worker_id.to_owned(),
                 });
             }
             inner = self.wake.wait(inner).map_err(|_| "任务状态锁已损坏")?;
+        }
+    }
+
+    /// 成功建立独立会话后，逐步提高该物理对端的并发上限。
+    pub fn worker_connected(&self, id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(host) = inner.records.get(id).map(|row| row.host.clone()) {
+            let limit = inner
+                .host_limits
+                .entry(host)
+                .or_insert(INITIAL_HOST_WORKERS);
+            *limit = (*limit + 1).min(MAX_HOST_WORKERS);
+            self.wake.notify_all();
         }
     }
     pub fn snapshots(&self, owner: &str, ids: &[String]) -> Vec<TaskSnapshot> {
@@ -216,20 +362,37 @@ impl TransferTasks {
             .get(id)
             .map(|r| r.snapshot.generation)
     }
-    pub fn attach_socket(&self, id: &str, socket: TcpStream) {
-        if let Some(row) = self.inner.lock().unwrap().records.get_mut(id) {
-            if row.cancel {
-                let _ = socket.shutdown(Shutdown::Both);
-            }
-            row.socket = Some(socket);
+    /// 为当前 worker 绑定 socket；取消或标识冲突时拒绝并中断新 socket。
+    pub fn attach_worker_socket(&self, id: &str, worker_id: &str, socket: TcpStream) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(row) = inner.records.get_mut(id) else {
+            let _ = socket.shutdown(Shutdown::Both);
+            return false;
+        };
+        if row.cancel || row.snapshot.terminal() {
+            let _ = socket.shutdown(Shutdown::Both);
+            return false;
         }
+        let Some(worker) = row.workers.get_mut(worker_id) else {
+            let _ = socket.shutdown(Shutdown::Both);
+            return false;
+        };
+        if worker.socket.is_some() {
+            let _ = socket.shutdown(Shutdown::Both);
+            return false;
+        }
+        worker.socket = Some(socket);
+        true
     }
-    /// 归还会话前先移除取消句柄，避免迟到取消关闭已被其他任务租用的 socket。
-    pub fn detach_socket(&self, id: &str) -> bool {
+
+    /// 归还会话前先移除对应取消句柄，避免迟到取消关闭其他任务复用的 socket。
+    pub fn detach_worker_socket(&self, id: &str, worker_id: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         if let Some(row) = inner.records.get_mut(id) {
-            row.socket = None;
-            row.cancel
+            if let Some(worker) = row.workers.get_mut(worker_id) {
+                worker.socket = None;
+            }
+            row.cancel || row.snapshot.terminal()
         } else {
             true
         }
@@ -237,6 +400,20 @@ impl TransferTasks {
     pub fn running(&self, id: &str) {
         if let Some(row) = self.inner.lock().unwrap().records.get_mut(id) {
             if !row.snapshot.terminal() {
+                if row.legacy_commit_shield {
+                    row.legacy_commit_shield = false;
+                    if let Some(worker) = row.workers.get_mut("") {
+                        worker.committing = false;
+                        if row.cancel {
+                            if let Some(socket) = &worker.socket {
+                                let _ = socket.shutdown(Shutdown::Both);
+                            }
+                        }
+                    }
+                }
+                if row.snapshot.status != "running" {
+                    Self::bump_revision(row);
+                }
                 row.snapshot.status = "running".into();
                 row.updated = Instant::now();
             }
@@ -253,14 +430,59 @@ impl TransferTasks {
     pub fn committing(&self, id: &str) -> Result<(), String> {
         let mut inner = self.inner.lock().unwrap();
         let row = inner.records.get_mut(id).ok_or("任务不存在")?;
-        if row.cancel {
+        if row.cancel || row.snapshot.terminal() {
             return Err("传输已取消".into());
         }
+        row.legacy_commit_shield = true;
+        row.workers
+            .entry("".into())
+            .or_insert(WorkerRecord {
+                socket: None,
+                committing: false,
+            })
+            .committing = true;
         row.snapshot.status = "committing".into();
         row.updated = Instant::now();
+        Self::bump_revision(row);
         Ok(())
     }
-    /// 字节增长重置停滞计时，普通进度最多 10Hz，切换文件时立即发送。
+
+    /// 原子地检查父任务取消状态并保护此 worker 的提交，不影响其他 worker。
+    pub fn begin_commit(&self, id: &str, worker_id: &str) -> Result<(), String> {
+        let mut inner = self.inner.lock().unwrap();
+        let row = inner.records.get_mut(id).ok_or("任务不存在")?;
+        if row.cancel || row.snapshot.terminal() {
+            return Err("传输已取消".into());
+        }
+        let worker = row.workers.get_mut(worker_id).ok_or("工作线程不存在")?;
+        if worker.committing {
+            return Err("工作线程正在提交".into());
+        }
+        worker.committing = true;
+        row.updated = Instant::now();
+        Self::bump_revision(row);
+        Ok(())
+    }
+
+    /// 离开提交保护；若期间已取消，立即中断此 worker 的独占连接。
+    pub fn end_commit(&self, id: &str, worker_id: &str) {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(row) = inner.records.get_mut(id) {
+            if let Some(worker) = row.workers.get_mut(worker_id) {
+                if worker.committing {
+                    worker.committing = false;
+                    if row.cancel {
+                        if let Some(socket) = &worker.socket {
+                            let _ = socket.shutdown(Shutdown::Both);
+                        }
+                    }
+                    Self::bump_revision(row);
+                }
+            }
+        }
+    }
+
+    /// 字节增长重置停滞计时；整个父任务的进度事件最多 10Hz。
     pub fn progress(&self, id: &str, current: u64, total: Option<u64>, file: &str) -> bool {
         let mut inner = self.inner.lock().unwrap();
         let Some(row) = inner.records.get_mut(id) else {
@@ -283,10 +505,10 @@ impl TransferTasks {
         if row.snapshot.status != "committing" {
             row.snapshot.status = "running".into();
         }
-        let send = changed_file
-            || row
-                .emitted
-                .is_none_or(|last| last.elapsed() >= Duration::from_millis(100));
+        Self::bump_revision(row);
+        let send = row
+            .emitted
+            .is_none_or(|last| last.elapsed() >= PROGRESS_INTERVAL);
         if send {
             row.emitted = Some(Instant::now());
         }
@@ -298,17 +520,33 @@ impl TransferTasks {
             .unwrap()
             .records
             .get(id)
-            .is_none_or(|r| r.cancel && r.snapshot.status != "committing")
+            .is_none_or(|r| r.cancel && !r.legacy_commit_shield)
+    }
+
+    /// 只有正在提交的 worker 可暂时忽略父任务取消；其他 worker 仍立即停止。
+    pub fn cancelled_worker(&self, id: &str, worker_id: &str) -> bool {
+        self.inner.lock().unwrap().records.get(id).is_none_or(|r| {
+            r.cancel
+                && !r
+                    .workers
+                    .get(worker_id)
+                    .is_some_and(|worker| worker.committing)
+        })
     }
     fn cancel_row(row: &mut Record) {
         if row.snapshot.terminal() {
             return;
         }
-        row.cancel = true;
-        // 安全替换已发出时不能以取消来断言结果，交给提交返回值判定。
-        if row.snapshot.status != "committing" {
-            if let Some(socket) = &row.socket {
-                let _ = socket.shutdown(Shutdown::Both);
+        if !row.cancel {
+            row.cancel = true;
+            Self::bump_revision(row);
+        }
+        // 只保护已进入原子提交的独占连接，不保护其他并行 worker。
+        for worker in row.workers.values() {
+            if !worker.committing {
+                if let Some(socket) = &worker.socket {
+                    let _ = socket.shutdown(Shutdown::Both);
+                }
             }
         }
     }
@@ -364,18 +602,39 @@ impl TransferTasks {
         Self::prune(&mut inner);
         self.wake.notify_all();
     }
+
+    /// 保存可恢复的聚合结果；终态一经发布不再改变。
+    pub fn set_result(&self, id: &str, result: Value) -> bool {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(row) = inner.records.get_mut(id) else {
+            return false;
+        };
+        if row.snapshot.terminal() {
+            return false;
+        }
+        row.snapshot.result = Some(result);
+        Self::bump_revision(row);
+        true
+    }
+
     pub fn finish(&self, id: &str, result: Result<String, Value>) -> Option<TaskSnapshot> {
         let mut inner = self.inner.lock().unwrap();
         let row = inner.records.get_mut(id)?;
         if row.snapshot.terminal() {
             return Some(row.snapshot.clone());
         }
-        row.socket = None;
         match result {
             Ok(message) => {
-                row.snapshot.status = "succeeded".into();
+                let partial = row.snapshot.result.as_ref().is_some_and(|result| {
+                    ["failed", "unknown", "notStarted"]
+                        .iter()
+                        .any(|field| result.get(*field).and_then(Value::as_u64).unwrap_or(0) > 0)
+                });
+                row.snapshot.status = if partial { "partial" } else { "succeeded" }.into();
                 row.snapshot.message = message;
-                row.snapshot.progress = 100.0;
+                if !partial {
+                    row.snapshot.progress = 100.0;
+                }
                 row.snapshot.error = None;
             }
             Err(error) => {
@@ -396,6 +655,7 @@ impl TransferTasks {
             }
         }
         row.updated = Instant::now();
+        Self::bump_revision(row);
         self.wake.notify_all();
         Some(row.snapshot.clone())
     }
@@ -403,15 +663,25 @@ impl TransferTasks {
 pub(crate) struct TaskLease {
     tasks: Arc<TransferTasks>,
     host: String,
+    task_id: String,
+    worker_id: String,
 }
 impl Drop for TaskLease {
     fn drop(&mut self) {
         let mut inner = self.tasks.inner.lock().unwrap();
+        if let Some(row) = inner.records.get_mut(&self.task_id) {
+            if let Some(worker) = row.workers.remove(&self.worker_id) {
+                if let Some(socket) = worker.socket {
+                    let _ = socket.shutdown(Shutdown::Both);
+                }
+            }
+        }
         inner.active = inner.active.saturating_sub(1);
         if let Some(count) = inner.hosts.get_mut(&self.host) {
             *count = count.saturating_sub(1);
             if *count == 0 {
                 inner.hosts.remove(&self.host);
+                inner.host_limits.remove(&self.host);
             }
         }
         self.tasks.wake.notify_all();
@@ -421,6 +691,7 @@ impl Drop for TaskLease {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     fn register(tasks: &TransferTasks, id: &str) {
         tasks
             .register("window", id, "connection", 1, "host:22")
@@ -700,6 +971,23 @@ mod tests {
         assert!(tasks.snapshots("other", &["a".into()]).is_empty());
     }
     #[test]
+    fn retry_requires_the_original_completed_connection_generation() {
+        let tasks = TransferTasks::default();
+        tasks
+            .register("window", "batch", "connection-a", 7, "host:22")
+            .unwrap();
+        let snapshot = tasks.snapshots("window", &["batch".into()]).pop().unwrap();
+        assert!(!snapshot.allows_retry_for("connection-a", 7));
+        tasks.finish("batch", Err(serde_json::json!({"code":"PermissionDenied"})));
+        let snapshot = tasks.snapshots("window", &["batch".into()]).pop().unwrap();
+        assert!(snapshot.allows_retry_for("connection-a", 7));
+        assert!(!snapshot.allows_retry_for("connection-b", 7));
+        assert!(!snapshot.allows_retry_for("connection-a", 8));
+        assert!(tasks
+            .snapshots("other-window", &["batch".into()])
+            .is_empty());
+    }
+    #[test]
     fn acquiring_the_same_task_twice_does_not_duplicate_execution_slots() {
         let tasks = Arc::new(TransferTasks::default());
         register(&tasks, "duplicate");
@@ -714,6 +1002,37 @@ mod tests {
         let inner = tasks.inner.lock().unwrap();
         assert_eq!(inner.active, 0);
         assert!(inner.hosts.is_empty());
+    }
+    #[test]
+    fn optional_prefetch_respects_limits_and_releases_its_slot() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "prefetch");
+        let first = tasks.try_acquire_worker("prefetch", "first").unwrap();
+        let second = tasks.try_acquire_worker("prefetch", "second").unwrap();
+        assert!(tasks.try_acquire_worker("prefetch", "first").is_err());
+        assert!(tasks.try_acquire_worker("prefetch", "overflow").is_err());
+        assert_eq!(tasks.inner.lock().unwrap().active, INITIAL_HOST_WORKERS);
+        drop(first);
+        let replacement = tasks.try_acquire_worker("prefetch", "replacement").unwrap();
+        drop(second);
+        drop(replacement);
+        assert_eq!(tasks.inner.lock().unwrap().active, 0);
+        tasks.cancel("window", "prefetch");
+        assert!(tasks.try_acquire_worker("prefetch", "cancelled").is_err());
+    }
+
+    #[test]
+    fn optional_prefetch_never_jumps_a_host_waiter() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "prefetch");
+        tasks
+            .inner
+            .lock()
+            .unwrap()
+            .waiting_workers
+            .insert(("waiting".into(), "worker".into()), ("host:22".into(), 1));
+        assert!(tasks.try_acquire_worker("prefetch", "optional").is_err());
+        assert_eq!(tasks.inner.lock().unwrap().active, 0);
     }
     #[test]
     fn cancel_during_commit_does_not_override_actual_success() {
@@ -870,13 +1189,200 @@ mod tests {
         );
     }
     #[test]
-    fn throttles_progress_but_flushes_file_boundaries() {
+    fn throttles_progress_even_when_files_change() {
         let tasks = TransferTasks::default();
         register(&tasks, "a");
         assert!(tasks.progress("a", 0, Some(10), "a"));
         assert!(!tasks.progress("a", 1, Some(10), "a"));
-        assert!(tasks.progress("a", 0, None, "b"));
+        assert!(!tasks.progress("a", 0, None, "b"));
         assert!(tasks.snapshots("window", &["a".into()])[0].total.is_none());
+    }
+
+    #[test]
+    fn result_and_revision_are_retained_for_partial_tasks() {
+        let tasks = TransferTasks::default();
+        let initial = tasks
+            .register("window", "a", "connection", 1, "host:22")
+            .unwrap();
+        assert!(tasks.progress("a", 4, Some(10), "first"));
+        let progress = tasks.snapshots("window", &["a".into()]).remove(0);
+        assert!(progress.revision > initial.revision);
+        assert!(tasks.set_result(
+            "a",
+            serde_json::json!({"failed": 1, "unknown": 0, "notStarted": 0})
+        ));
+        let result = tasks.snapshots("window", &["a".into()]).remove(0);
+        assert!(result.revision > progress.revision);
+        assert_eq!(result.result.unwrap()["failed"], 1);
+        let finished = tasks.finish("a", Ok("done".into())).unwrap();
+        assert_eq!(finished.status, "partial");
+        assert!(finished.terminal());
+        assert!(finished.revision > result.revision);
+        assert!(!tasks.set_result("a", serde_json::json!({})));
+    }
+
+    #[test]
+    fn cancellation_shields_only_committing_worker_and_closes_others() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "folder");
+        let first = tasks.acquire_worker("folder", "w0").unwrap();
+        let second = tasks.acquire_worker("folder", "w1").unwrap();
+        let (socket0, mut peer0) = tcp_pair();
+        let (socket1, mut peer1) = tcp_pair();
+        assert!(tasks.attach_worker_socket("folder", "w0", socket0));
+        assert!(tasks.attach_worker_socket("folder", "w1", socket1));
+        tasks.begin_commit("folder", "w0").unwrap();
+        tasks.cancel("window", "folder");
+        assert!(tasks.cancelled("folder"));
+        assert!(!tasks.cancelled_worker("folder", "w0"));
+        assert!(tasks.cancelled_worker("folder", "w1"));
+        peer1
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let mut byte = [0];
+        assert_eq!(peer1.read(&mut byte).unwrap(), 0);
+        peer0
+            .set_read_timeout(Some(Duration::from_millis(50)))
+            .unwrap();
+        assert!(peer0.read(&mut byte).is_err());
+        tasks.end_commit("folder", "w0");
+        assert!(tasks.cancelled_worker("folder", "w0"));
+        peer0
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        assert_eq!(peer0.read(&mut byte).unwrap(), 0);
+        drop((first, second));
+    }
+
+    fn tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let peer = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (socket, _) = listener.accept().unwrap();
+        (socket, peer)
+    }
+
+    #[test]
+    fn worker_socket_requires_an_active_worker_lease() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "folder");
+        let (socket, mut peer) = tcp_pair();
+        assert!(!tasks.attach_worker_socket("folder", "unleased", socket));
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        assert_eq!(peer.read(&mut [0]).unwrap(), 0);
+        let lease = tasks.acquire_worker("folder", "w0").unwrap();
+        let (socket, _peer) = tcp_pair();
+        assert!(tasks.attach_worker_socket("folder", "w0", socket));
+        drop(lease);
+    }
+
+    #[test]
+    fn host_limit_starts_at_two_then_grows_to_four_without_overbooking() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "folder");
+        let first = tasks.acquire_worker("folder", "w0").unwrap();
+        let second = tasks.acquire_worker("folder", "w1").unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (lease_tx, lease_rx) = std::sync::mpsc::channel();
+        let waiting_tasks = tasks.clone();
+        let waiting = std::thread::spawn(move || {
+            started_tx.send(()).unwrap();
+            lease_tx
+                .send(waiting_tasks.acquire_worker("folder", "w2"))
+                .unwrap();
+        });
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(lease_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        tasks.worker_connected("folder");
+        let third = lease_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        waiting.join().unwrap();
+        tasks.worker_connected("folder");
+        let fourth = tasks.acquire_worker("folder", "w3").unwrap();
+        assert_eq!(tasks.inner.lock().unwrap().active, 4);
+
+        let (lease_tx, lease_rx) = std::sync::mpsc::channel();
+        let waiting_tasks = tasks.clone();
+        let waiting = std::thread::spawn(move || {
+            lease_tx
+                .send(waiting_tasks.acquire_worker("folder", "w4"))
+                .unwrap();
+        });
+        assert!(lease_rx.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(first);
+        let fifth = lease_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        waiting.join().unwrap();
+        assert_eq!(tasks.inner.lock().unwrap().active, 4);
+        drop((second, third, fourth, fifth));
+        let inner = tasks.inner.lock().unwrap();
+        assert_eq!(inner.active, 0);
+        assert!(inner.host_limits.is_empty());
+    }
+
+    #[test]
+    fn one_parent_cannot_acquire_a_duplicate_worker_id() {
+        let tasks = Arc::new(TransferTasks::default());
+        register(&tasks, "folder");
+        let worker = tasks.acquire_worker("folder", "w0").unwrap();
+        assert!(tasks.acquire_worker("folder", "w0").is_err());
+        assert_eq!(tasks.inner.lock().unwrap().active, 1);
+        drop(worker);
+    }
+
+    #[test]
+    fn worker_leases_across_parents_share_the_global_eight_budget() {
+        let tasks = Arc::new(TransferTasks::default());
+        for (id, host) in [("a", "host-a"), ("b", "host-b"), ("c", "host-c")] {
+            tasks.register("window", id, "connection", 1, host).unwrap();
+        }
+        let mut leases = Vec::new();
+        for parent in ["a", "b"] {
+            leases.push(tasks.acquire_worker(parent, "w0").unwrap());
+            leases.push(tasks.acquire_worker(parent, "w1").unwrap());
+            tasks.worker_connected(parent);
+            tasks.worker_connected(parent);
+            leases.push(tasks.acquire_worker(parent, "w2").unwrap());
+            leases.push(tasks.acquire_worker(parent, "w3").unwrap());
+        }
+        assert_eq!(tasks.inner.lock().unwrap().active, 8);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let waiting_tasks = tasks.clone();
+        let waiting = std::thread::spawn(move || {
+            sender
+                .send(waiting_tasks.acquire_worker("c", "w0"))
+                .unwrap();
+        });
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        drop(leases.pop());
+        let ninth = receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        waiting.join().unwrap();
+        assert_eq!(tasks.inner.lock().unwrap().active, 8);
+        drop((leases, ninth));
+        assert_eq!(tasks.inner.lock().unwrap().active, 0);
+    }
+
+    #[test]
+    fn cancelled_finish_keeps_the_published_batch_result() {
+        let tasks = TransferTasks::default();
+        register(&tasks, "folder");
+        let summary = serde_json::json!({"succeeded": 2, "notStarted": 1, "itemCount": 3});
+        assert!(tasks.set_result("folder", summary.clone()));
+        tasks.cancel("window", "folder");
+        let snapshot = tasks
+            .finish(
+                "folder",
+                Err(serde_json::json!({"code":"TransferCancelled"})),
+            )
+            .unwrap();
+        assert_eq!(snapshot.status, "cancelled");
+        assert_eq!(snapshot.result, Some(summary));
     }
     #[test]
     fn queue_is_bounded_and_retains_only_bounded_terminal_results() {
@@ -931,9 +1437,9 @@ mod tests {
         assert_eq!(tasks.inner.lock().unwrap().active, 0);
     }
     #[test]
-    fn global_execution_capacity_remains_four() {
+    fn global_execution_capacity_is_eight() {
         let tasks = Arc::new(TransferTasks::default());
-        for index in 0..5 {
+        for index in 0..9 {
             tasks
                 .register(
                     "window",
@@ -944,7 +1450,7 @@ mod tests {
                 )
                 .unwrap();
         }
-        let leases: Vec<_> = (0..4)
+        let leases: Vec<_> = (0..8)
             .map(|index| tasks.acquire(&format!("task-{index}")).unwrap())
             .collect();
         let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -952,13 +1458,13 @@ mod tests {
         let waiting = tasks.clone();
         let worker = std::thread::spawn(move || {
             ready_tx.send(()).unwrap();
-            let lease = waiting.acquire("task-4").unwrap();
+            let lease = waiting.acquire("task-8").unwrap();
             acquired_tx.send(()).unwrap();
             drop(lease);
         });
         ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(acquired_rx.recv_timeout(Duration::from_millis(50)).is_err());
-        assert_eq!(tasks.inner.lock().unwrap().active, 4);
+        assert_eq!(tasks.inner.lock().unwrap().active, 8);
         drop(leases);
         acquired_rx.recv_timeout(Duration::from_secs(2)).unwrap();
         worker.join().unwrap();

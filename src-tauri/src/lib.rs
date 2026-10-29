@@ -3,6 +3,7 @@
 //! 本模块组装插件、原生菜单和 SSH 状态，并提供本地路径检查、
 //! 平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
 
+mod archive_transfer;
 mod connection_profiles;
 mod directory_requests;
 mod local_transfer;
@@ -340,16 +341,16 @@ pub fn run() {
             ssh::disconnect_ssh,
             ssh::get_server_monitor_snapshot,
             ssh::check_ssh_connection,
-            ssh::scp_upload,
-            ssh::sftp_upload_directory,
-            ssh::scp_download,
-            ssh::sftp_download_directory,
+            ssh::start_transfer,
+            ssh::get_transfer_results,
+            ssh::retry_transfer,
             ssh::list_sftp_directory,
             ssh::cancel_sftp_directory_request,
             ssh::get_sftp_directory_size,
             ssh::cancel_sftp_directory_size,
             ssh::remove_ssh_connection,
             ssh::get_sftp_file_content,
+            ssh::cancel_sftp_preview,
             ssh::sftp_mkdir,
             ssh::sftp_delete,
             ssh::sftp_rename,

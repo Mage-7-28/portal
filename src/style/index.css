@@ -647,7 +647,7 @@ html,
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
-  overflow-y: auto;
+  overflow-y: hidden;
   border: 1px solid #3c3f41;
   border-radius: 5px;
   background: #171717;
@@ -678,8 +678,6 @@ html,
   cursor: pointer;
   outline: none;
   user-select: none;
-  content-visibility: auto;
-  contain-intrinsic-size: 46px;
 }
 
 .file-list-item.ant-list-item {

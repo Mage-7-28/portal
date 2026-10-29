@@ -126,8 +126,10 @@ mod tests {
 
     #[test]
     fn default_budget_still_enforces_its_total_time_limit() {
-        let mut budget = ScanBudget::default();
-        budget.started = Instant::now() - Duration::from_secs(121);
+        let mut budget = ScanBudget {
+            started: Instant::now() - Duration::from_secs(121),
+            ..Default::default()
+        };
         assert!(budget.check().is_err());
         assert!(budget.record(Path::new("file")).is_err());
     }

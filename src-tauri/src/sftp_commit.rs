@@ -58,27 +58,68 @@ pub(crate) fn posix_rename(
     cancelled: impl Fn() -> bool,
     begin_commit: impl Fn() -> Result<(), CommitError>,
 ) -> Result<(), CommitError> {
-    let request = prepare_commit(source, target)?;
-    check_cancelled(&cancelled)?;
-    let mut channel = session.channel_session().map_err(|error| {
-        if cancelled() {
-            CommitError::Cancelled
-        } else {
-            CommitError::Io(error.to_string())
-        }
-    })?;
-    check_cancelled(&cancelled)?;
-    channel.subsystem("sftp").map_err(|error| {
-        if cancelled() {
-            CommitError::Cancelled
-        } else {
-            CommitError::Io(error.to_string())
-        }
-    })?;
-    perform_commit(&mut channel, &request, &cancelled, begin_commit)
+    // 无效路径在创建任何网络通道前即被拒绝。
+    prepare_commit_with_id(source, target, REQUEST_ID)?;
+    let mut client = PosixRenameClient::open(session, &cancelled)?;
+    client.rename(source, target, cancelled, begin_commit)
 }
 
+/// 独占 SSH worker 会话上的持久原子重命名通道；不得跨独立会话复用。
+///
+/// 出现结果未知的请求后通道会被标记失效，调用方不得复用或重试该请求。
+pub(crate) struct PosixRenameClient {
+    inner: PersistentCommit<ssh2::Channel>,
+}
+
+impl PosixRenameClient {
+    /// 创建并协商一次独立 SFTP 通道，不影响同一 session 的数据 SFTP 子会话。
+    pub fn open(
+        session: &ssh2::Session,
+        cancelled: impl Fn() -> bool,
+    ) -> Result<Self, CommitError> {
+        check_cancelled(&cancelled)?;
+        let mut channel = session.channel_session().map_err(|error| {
+            if cancelled() {
+                CommitError::Cancelled
+            } else {
+                CommitError::Io(error.to_string())
+            }
+        })?;
+        check_cancelled(&cancelled)?;
+        channel.subsystem("sftp").map_err(|error| {
+            if cancelled() {
+                CommitError::Cancelled
+            } else {
+                CommitError::Io(error.to_string())
+            }
+        })?;
+        Ok(Self {
+            inner: PersistentCommit::open(channel, &cancelled)?,
+        })
+    }
+
+    /// 仅当调用方成功进入 worker 提交保护后才发送 EXTENDED 请求。
+    pub fn rename(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        cancelled: impl Fn() -> bool,
+        begin_commit: impl Fn() -> Result<(), CommitError>,
+    ) -> Result<(), CommitError> {
+        self.inner.rename(source, target, &cancelled, begin_commit)
+    }
+}
+
+#[cfg(test)]
 fn prepare_commit(source: &Path, target: &Path) -> Result<Vec<u8>, CommitError> {
+    prepare_commit_with_id(source, target, REQUEST_ID)
+}
+
+fn prepare_commit_with_id(
+    source: &Path,
+    target: &Path,
+    request_id: u32,
+) -> Result<Vec<u8>, CommitError> {
     let source = posix_path_bytes(source)?;
     let target = posix_path_bytes(target)?;
     // 类型、请求 ID、扩展名及两个路径各自的长度字段均计入 payload。
@@ -96,7 +137,7 @@ fn prepare_commit(source: &Path, target: &Path) -> Result<Vec<u8>, CommitError> 
     let mut request = Vec::with_capacity(payload_len + 4);
     request.extend_from_slice(&(payload_len as u32).to_be_bytes());
     request.push(200); // SSH_FXP_EXTENDED
-    request.extend_from_slice(&REQUEST_ID.to_be_bytes());
+    request.extend_from_slice(&request_id.to_be_bytes());
     append_string(&mut request, POSIX_RENAME);
     append_string(&mut request, source);
     append_string(&mut request, target);
@@ -131,6 +172,67 @@ fn posix_path_bytes(path: &Path) -> Result<&[u8], CommitError> {
     Ok(bytes)
 }
 
+struct PersistentCommit<T> {
+    transport: T,
+    next_id: Option<u32>,
+    usable: bool,
+}
+
+impl<T: Read + Write> PersistentCommit<T> {
+    fn open(mut transport: T, cancelled: &impl Fn() -> bool) -> Result<Self, CommitError> {
+        let mut init_attempted = false;
+        write_all_checked(&mut transport, &INIT, cancelled, &mut init_attempted)?;
+        let version = read_packet(&mut transport, cancelled)?;
+        parse_version(&version)?;
+        Ok(Self {
+            transport,
+            next_id: Some(REQUEST_ID),
+            usable: true,
+        })
+    }
+
+    fn rename(
+        &mut self,
+        source: &Path,
+        target: &Path,
+        cancelled: &impl Fn() -> bool,
+        begin_commit: impl Fn() -> Result<(), CommitError>,
+    ) -> Result<(), CommitError> {
+        if !self.usable {
+            return Err(protocol("重命名通道已失效"));
+        }
+        let request_id = self
+            .next_id
+            .ok_or_else(|| protocol("重命名请求 ID 已耗尽"))?;
+        let request = prepare_commit_with_id(source, target, request_id)?;
+        check_cancelled(cancelled)?;
+        begin_commit()?;
+        let mut attempted = false;
+        let result = (|| {
+            write_all_checked(&mut self.transport, &request, cancelled, &mut attempted)?;
+            let response = read_packet(&mut self.transport, cancelled)?;
+            parse_status(&response, request_id)
+        })();
+        if attempted {
+            self.next_id = request_id.checked_add(1);
+        }
+        match result {
+            Err(error)
+                if attempted
+                    && !matches!(
+                        error,
+                        CommitError::Unsupported | CommitError::Rejected { .. }
+                    ) =>
+            {
+                self.usable = false;
+                Err(CommitError::OutcomeUnknown(error.to_string()))
+            }
+            other => other,
+        }
+    }
+}
+
+#[cfg(test)]
 fn perform_commit<T: Read + Write>(
     transport: &mut T,
     request: &[u8],
@@ -148,7 +250,7 @@ fn perform_commit<T: Read + Write>(
     let result = (|| {
         write_all_checked(transport, request, cancelled, &mut commit_attempted)?;
         let response = read_packet(transport, cancelled)?;
-        parse_status(&response)
+        parse_status(&response, REQUEST_ID)
     })();
     match result {
         Err(error)
@@ -245,10 +347,8 @@ fn parse_version(payload: &[u8]) -> Result<(), CommitError> {
     while !parser.finished() {
         let name = parser.string()?;
         let value = parser.string()?;
-        if name == POSIX_RENAME {
-            if found.replace(value).is_some() {
-                return Err(protocol("服务器重复声明原子重命名扩展"));
-            }
+        if name == POSIX_RENAME && found.replace(value).is_some() {
+            return Err(protocol("服务器重复声明原子重命名扩展"));
         }
     }
     match found {
@@ -257,9 +357,9 @@ fn parse_version(payload: &[u8]) -> Result<(), CommitError> {
     }
 }
 
-fn parse_status(payload: &[u8]) -> Result<(), CommitError> {
+fn parse_status(payload: &[u8], request_id: u32) -> Result<(), CommitError> {
     let mut parser = Parser::new(payload);
-    if parser.byte()? != 101 || parser.u32()? != REQUEST_ID {
+    if parser.byte()? != 101 || parser.u32()? != request_id {
         return Err(protocol("SFTP 提交响应类型或请求 ID 不匹配"));
     }
     let code = parser.u32()?;
@@ -465,6 +565,46 @@ mod tests {
         string(&mut request, b"/safe/file");
         expected.extend_from_slice(&packet(&request));
         assert_eq!(transport.written, expected);
+    }
+
+    #[test]
+    fn persistent_transport_negotiates_once_and_uses_monotonic_request_ids() {
+        let mut replies = supported_version();
+        replies.extend_from_slice(&status(1, 0, b""));
+        replies.extend_from_slice(&status(2, 0, b""));
+        let transport = ScriptedTransport::new(replies);
+        let mut client = PersistentCommit::open(transport, &|| false).unwrap();
+        client
+            .rename(Path::new("/a"), Path::new("/b"), &|| false, || Ok(()))
+            .unwrap();
+        client
+            .rename(Path::new("/c"), Path::new("/d"), &|| false, || Ok(()))
+            .unwrap();
+        let mut expected = INIT.to_vec();
+        expected.extend_from_slice(
+            &prepare_commit_with_id(Path::new("/a"), Path::new("/b"), 1).unwrap(),
+        );
+        expected.extend_from_slice(
+            &prepare_commit_with_id(Path::new("/c"), Path::new("/d"), 2).unwrap(),
+        );
+        assert_eq!(client.transport.written, expected);
+    }
+
+    #[test]
+    fn persistent_transport_is_never_reused_after_unknown_outcome() {
+        let replies = supported_version();
+        let mut client =
+            PersistentCommit::open(ScriptedTransport::new(replies), &|| false).unwrap();
+        assert!(matches!(
+            client.rename(Path::new("/a"), Path::new("/b"), &|| false, || Ok(())),
+            Err(CommitError::OutcomeUnknown(_))
+        ));
+        let written = client.transport.written.len();
+        assert!(matches!(
+            client.rename(Path::new("/c"), Path::new("/d"), &|| false, || Ok(())),
+            Err(CommitError::Protocol(_))
+        ));
+        assert_eq!(client.transport.written.len(), written);
     }
 
     #[test]

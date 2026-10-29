@@ -208,8 +208,8 @@ impl DirectoryRequests {
         let mut state = self.lock();
         state.remove_expired_tombstones(Instant::now());
         for entry in &state.entries {
-            if owner.map_or(true, |value| value == entry.owner)
-                && connection.map_or(true, |value| value == entry.connection)
+            if owner.is_none_or(|value| value == entry.owner)
+                && connection.is_none_or(|value| value == entry.connection)
             {
                 if let EntryStatus::Active(cancellation) = &entry.status {
                     cancellation.store(true, Ordering::Release);

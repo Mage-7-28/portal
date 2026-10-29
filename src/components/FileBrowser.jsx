@@ -4,6 +4,7 @@
  */
 import React from 'react'
 import { Alert, Button, Dropdown, Input, List, Modal, Space, Spin, Tooltip, Upload } from 'antd'
+import VirtualList from '@rc-component/virtual-list'
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import FileItem from './FileItem'
@@ -19,6 +20,7 @@ import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 import { getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
+import { createKeyedOperationLocks, createNativeBatchWorkflow, createOperationLock, getKeyboardFileIndex } from '../utils/transferWorkflow.js'
 
 // 按 macOS 实际拖拽反馈校准 30 个 CSS 像素，只影响纵向命中位置。
 const MACOS_DROP_TARGET_Y_OFFSET = 30
@@ -176,6 +178,13 @@ const FileBrowser = ({
   const [ uploadDropProcessing, setUploadDropProcessing ] = React.useState(false)
   // 当前目录中的多选结果和批量操作 loading 状态。
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
+  const [ renameTarget, setRenameTarget ] = React.useState(null)
+  const [ renameValue, setRenameValue ] = React.useState('')
+  const [ renaming, setRenaming ] = React.useState(false)
+  const [ listHeight, setListHeight ] = React.useState(128)
+  const virtualListRef = React.useRef(null)
+  const virtualMetricsRef = React.useRef(null)
+  const [ , setItemOperationsVersion ] = React.useState(0)
   const selectedKeySet = React.useMemo(() => new Set(selectedKeys), [selectedKeys])
   const fileIndexByKey = React.useMemo(() => {
     const indexes = new Map()
@@ -194,16 +203,33 @@ const FileBrowser = ({
   const fileListDropRef = React.useRef(null)
   const startUploadQueueRef = React.useRef(null)
   const selectionAnchorRef = React.useRef(null)
-  const selectionPathRef = React.useRef(currentPath)
+  const selectionLocationRef = React.useRef(`${ currentConnectionId }\u0000${ currentPath }`)
+  const pendingFocusKeyRef = React.useRef(null)
+  const navigationKeyRef = React.useRef(null)
+  const focusFrameRef = React.useRef(null)
+  const focusAttemptsRef = React.useRef(0)
   const filesRef = React.useRef(files)
   const fileIndexByKeyRef = React.useRef(fileIndexByKey)
   const batchStateRef = React.useRef({ batchDeleting, batchDownloading })
+  const batchActionLockRef = React.useRef(null)
+  const directoryActionLockRef = React.useRef(null)
+  const uploadPickingLockRef = React.useRef(null)
+  const mountedRef = React.useRef(false)
+  const itemLocksRef = React.useRef(null)
+  const directoryTargetRef = React.useRef(null)
+  if (!batchActionLockRef.current) batchActionLockRef.current = createOperationLock()
+  if (!directoryActionLockRef.current) directoryActionLockRef.current = createOperationLock()
+  if (!uploadPickingLockRef.current) uploadPickingLockRef.current = createOperationLock()
+  if (!itemLocksRef.current) itemLocksRef.current = createKeyedOperationLocks(() => {
+    if (mountedRef.current) setItemOperationsVersion(version => version + 1)
+  })
   const itemActionRefs = React.useRef({ handleItemClick, handleDeleteItem, handleRenameItem })
   const uploadModalOpenRef = React.useRef(uploadModalOpen)
   const uploadSubmittingRef = React.useRef(uploadSubmitting)
   const uploadDropProcessingRef = React.useRef(uploadDropProcessing)
   const uploadSessionRef = React.useRef(0)
   const uploadViewRef = React.useRef(null)
+  const uploadModalTargetRef = React.useRef(null)
   const uploadRecord = sftpManager.getConnectionInfo(currentConnectionId)
   uploadViewRef.current = {
     connectionId: currentConnectionId,
@@ -218,12 +244,71 @@ const FileBrowser = ({
   uploadModalOpenRef.current = uploadModalOpen
   uploadSubmittingRef.current = uploadSubmitting
   uploadDropProcessingRef.current = uploadDropProcessing
+  // 使用 antd 官方 List 虚拟列表方案，滚动容器高度跟随工作区布局。
+  React.useLayoutEffect(() => {
+    const shell = fileListDropRef.current
+    if (!shell) return undefined
+    const observer = new window.ResizeObserver(() => setListHeight(Math.max(1, shell.clientHeight)))
+    observer.observe(shell)
+    setListHeight(Math.max(1, shell.clientHeight))
+    return () => observer.disconnect()
+  }, [])
+
+  const focusPendingRow = React.useCallback(function restorePendingFocus() {
+    const key = pendingFocusKeyRef.current
+    if (!key) return
+    const index = fileIndexByKeyRef.current.get(key)
+    if (index === undefined) return
+    const row = fileListDropRef.current?.querySelector(`[data-index="${ index }"] .file-item-row`)
+    if (row) {
+      const bounds = fileListDropRef.current.getBoundingClientRect()
+      const rowBounds = row.getBoundingClientRect()
+      const offset = rowBounds.top < bounds.top
+        ? rowBounds.top - bounds.top
+        : Math.max(0, rowBounds.bottom - bounds.bottom)
+      if (offset) virtualListRef.current?.scrollTo(virtualListRef.current.getScrollInfo().y + offset)
+      pendingFocusKeyRef.current = null
+      row.focus({ preventScroll: true })
+    } else if (focusAttemptsRef.current < 32) {
+      // Home/End 首次定位使用估算行高；新行测量后继续修正，不能停在目标行之前。
+      const metrics = virtualMetricsRef.current?.(key)
+      const list = virtualListRef.current
+      const shell = fileListDropRef.current
+      if (!metrics || !list || !shell) return
+      const top = list.getScrollInfo().y
+      if (metrics.top < top) list.scrollTo(metrics.top)
+      else if (metrics.bottom > top + shell.clientHeight) list.scrollTo(metrics.bottom - shell.clientHeight)
+      focusAttemptsRef.current += 1
+      focusFrameRef.current = window.requestAnimationFrame(restorePendingFocus)
+    }
+  }, [])
+
+  const schedulePendingFocus = React.useCallback(() => {
+    window.cancelAnimationFrame(focusFrameRef.current)
+    focusFrameRef.current = window.requestAnimationFrame(focusPendingRow)
+  }, [focusPendingRow])
+
+  const captureVirtualMetrics = React.useCallback(({ getSize }) => {
+    virtualMetricsRef.current = getSize
+    return null
+  }, [])
+
+  React.useEffect(() => () => window.cancelAnimationFrame(focusFrameRef.current), [])
+
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
 
   // 当前目录或文件列表变化后，移除已经不存在的选中项并校正 Shift 选择锚点。
   React.useEffect(() => {
-    if (selectionPathRef.current !== currentPath) {
-      selectionPathRef.current = currentPath
+    const location = `${ currentConnectionId }\u0000${ currentPath }`
+    if (selectionLocationRef.current !== location) {
+      selectionLocationRef.current = location
       selectionAnchorRef.current = null
+      navigationKeyRef.current = null
+      pendingFocusKeyRef.current = null
+      setRenameTarget(null)
       setSelectedKeys([])
       return
     }
@@ -234,7 +319,7 @@ const FileBrowser = ({
     if (selectionAnchorRef.current && !fileIndexByKey.has(selectionAnchorRef.current)) {
       selectionAnchorRef.current = null
     }
-  }, [ currentPath, fileIndexByKey ])
+  }, [ currentConnectionId, currentPath, fileIndexByKey ])
 
   /**
    * 处理单选、Command/Ctrl 多选和 Shift 范围选择，并维护键盘操作锚点。
@@ -249,6 +334,10 @@ const FileBrowser = ({
     if (isBatchDeleting || isBatchDownloading) return
     const key = getEntryKey(entry)
     if (!key) return
+    if (event.type === 'click') {
+      navigationKeyRef.current = key
+      pendingFocusKeyRef.current = null
+    }
     const currentIndex = fileIndexByKeyRef.current.get(key) ?? -1
     const anchorIndex = fileIndexByKeyRef.current.get(selectionAnchorRef.current) ?? -1
     const rangeSelection = event.shiftKey && anchorIndex >= 0 && currentIndex >= 0
@@ -269,8 +358,56 @@ const FileBrowser = ({
     } else {
       setSelectedKeys([key])
     }
-    selectionAnchorRef.current = key
+    if (!rangeSelection) selectionAnchorRef.current = key
   }, [])
+
+  const handleItemKeyDown = React.useCallback((entry, event) => {
+    const currentFiles = filesRef.current
+    // DOM 焦点可能仍位于前一行；逻辑游标不能随虚拟行挂载或测量而倒退。
+    const index = fileIndexByKeyRef.current.get(navigationKeyRef.current)
+      ?? fileIndexByKeyRef.current.get(getEntryKey(entry))
+    if (index === undefined) return
+    const nextIndex = getKeyboardFileIndex(event.key, index, currentFiles.length)
+    if (nextIndex === null) {
+      navigationKeyRef.current = null
+      return
+    }
+    event.preventDefault()
+    if (nextIndex === index) return
+    const nextEntry = currentFiles[nextIndex]
+    const nextKey = getEntryKey(nextEntry)
+    navigationKeyRef.current = nextKey
+    if (event.shiftKey && !selectionAnchorRef.current) selectionAnchorRef.current = getEntryKey(entry)
+    if (event.shiftKey || (!event.metaKey && !event.ctrlKey)) handleItemSelect(nextEntry, event)
+    pendingFocusKeyRef.current = nextKey
+    focusAttemptsRef.current = 0
+    // 行测量和挂载期间由稳定容器接收连按，下一帧再聚焦行，不能在列表 layout effect 内更新焦点状态。
+    const shell = fileListDropRef.current
+    shell?.focus({ preventScroll: true })
+    const metrics = virtualMetricsRef.current?.(nextKey)
+    const list = virtualListRef.current
+    if (metrics && list && shell) {
+      const top = list.getScrollInfo().y
+      // 使用组件提供的行高缓存和数值滚动接口，避免快速连按触发索引滚动的同步重测循环。
+      if (metrics.top < top) list.scrollTo(metrics.top)
+      else if (metrics.bottom > top + shell.clientHeight) list.scrollTo(metrics.bottom - shell.clientHeight)
+    }
+    schedulePendingFocus()
+  }, [ handleItemSelect, schedulePendingFocus ])
+  // 重命名弹窗由列表持有，虚拟行滚出视口后不会丢失输入或连接快照。
+  const requestRename = React.useCallback(entry => {
+    try {
+      const target = { connectionId: currentConnectionId, path: currentPath, connection: sftpManager.captureConnection(currentConnectionId), entry }
+      setRenameValue(entry.name)
+      setRenameTarget(target)
+    } catch (error) {
+      void notification.error('重命名失败', normalizeError(error))
+    }
+  }, [ currentConnectionId, currentPath ])
+
+  const acquireItemOperation = React.useCallback((entry, action) => (
+    itemLocksRef.current.acquire(`${ currentConnectionId }\u0000${ getEntryKey(entry) }`, action)
+  ), [currentConnectionId])
 
   const handleItemActivate = React.useCallback((entry) => {
     return itemActionRefs.current.handleItemClick(entry)
@@ -280,9 +417,28 @@ const FileBrowser = ({
     return itemActionRefs.current.handleDeleteItem(entry)
   }, [])
 
-  const handleItemRename = React.useCallback((entry, name) => {
-    return itemActionRefs.current.handleRenameItem(entry, name)
-  }, [])
+  const submitRename = async () => {
+    const name = renameValue.trim()
+    if (!renameTarget || !name || /[\\/\0]/.test(name) || name === '.' || name === '..') return
+    const { entry, connectionId, connection } = renameTarget
+    const release = itemLocksRef.current.acquire(`${ connectionId }\u0000${ getEntryKey(entry) }`, 'rename')
+    if (!release) return
+    if (!sftpManager.isCurrentConnection(connectionId, connection)) {
+      release()
+      void notification.error('重命名失败', '连接已更改，请重新打开重命名窗口')
+      return
+    }
+    setRenaming(true)
+    try {
+      await itemActionRefs.current.handleRenameItem(entry, name, renameTarget)
+      if (mountedRef.current) setRenameTarget(null)
+    } catch (error) {
+      if (mountedRef.current) void notification.error('重命名失败', normalizeError(error))
+    } finally {
+      if (mountedRef.current) setRenaming(false)
+      release()
+    }
+  }
 
   /**
    * 批量删除当前选中项目，具体进度通过窗口标题展示。
@@ -293,6 +449,9 @@ const FileBrowser = ({
     if (batchDeleting || batchDownloading || selectedKeys.length < 2 || !handleDeleteItems) return
     const selectedEntries = files.filter(entry => selectedKeySet.has(getEntryKey(entry)))
     if (selectedEntries.length < 2) return
+    const release = batchActionLockRef.current.acquire()
+    if (!release) return
+    batchStateRef.current = { batchDeleting: true, batchDownloading: false }
     setBatchDeleting(true)
     try {
       await handleDeleteItems(selectedEntries, () => {
@@ -302,7 +461,9 @@ const FileBrowser = ({
     } catch (error) {
       void notification.error(`批量删除失败：${ normalizeError(error) }`)
     } finally {
+      batchStateRef.current = { batchDeleting: false, batchDownloading: false }
       setBatchDeleting(false)
+      release()
     }
   }
 
@@ -343,6 +504,9 @@ const FileBrowser = ({
    */
   const handleBatchDownload = async () => {
     if (batchDeleting || batchDownloading || selectedEntries.length < 2 || !handleDownloadItems) return
+    const release = batchActionLockRef.current.acquire()
+    if (!release) return
+    batchStateRef.current = { batchDeleting: false, batchDownloading: true }
     setBatchDownloading(true)
     try {
       await handleDownloadItems(selectedEntries, () => {
@@ -352,7 +516,9 @@ const FileBrowser = ({
     } catch (error) {
       void notification.error(`批量下载失败：${ normalizeError(error) }`)
     } finally {
+      batchStateRef.current = { batchDeleting: false, batchDownloading: false }
       setBatchDownloading(false)
+      release()
     }
   }
 
@@ -364,15 +530,25 @@ const FileBrowser = ({
   const submitDirectory = async () => {
     const name = directoryName.trim()
     if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return
+    const release = directoryActionLockRef.current.acquire()
+    if (!release) return
+    const target = directoryTargetRef.current
+    if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) {
+      release()
+      void notification.error('创建目录失败', '连接已更改，请重新打开新建目录窗口')
+      return
+    }
     setDirectorySubmitting(true)
     try {
-      await handleCreateDirectory(name)
+      await handleCreateDirectory(name, target)
+      if (!sftpManager.isCurrentConnection(target.connectionId, target.connection)) return
       setDirectoryModalOpen(false)
       setDirectoryName('')
     } catch (error) {
       notification.error('创建目录失败', error.message || error.toString() || '未知错误')
     } finally {
       setDirectorySubmitting(false)
+      release()
     }
   }
   /**
@@ -381,7 +557,10 @@ const FileBrowser = ({
    * @returns {void}
    */
   const handleUpload = () => {
-    if (uploadSubmittingRef.current) return
+    if (uploadSubmittingRef.current || uploadModalOpenRef.current) return
+    const target = uploadViewRef.current
+    if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
+    uploadModalTargetRef.current = target
     uploadSessionRef.current += 1
     setUploadItems([])
     setUploadPicking(null)
@@ -397,16 +576,20 @@ const FileBrowser = ({
    */
   const addUploadItems = async (kind) => {
     if (uploadPicking || uploadSubmittingRef.current || !uploadModalOpenRef.current) return
+    const release = uploadPickingLockRef.current.acquire()
+    if (!release) return
     const sessionId = uploadSessionRef.current
+    const target = uploadModalTargetRef.current
     setUploadPicking(kind)
     try {
+      if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
       const result = await dialog.open({
         title: kind === 'directory' ? '选择要上传的文件夹' : '选择要上传的文件',
         multiple: true,
         directory: kind === 'directory',
         recursive: kind === 'directory'
       })
-      if (!isUploadSessionActive(sessionId, {
+      if (!sftpManager.isCurrentConnection(target.connectionId, target.connection) || !isUploadSessionActive(sessionId, {
         sessionId: uploadSessionRef.current,
         modalOpen: uploadModalOpenRef.current,
         submitting: uploadSubmittingRef.current
@@ -424,13 +607,15 @@ const FileBrowser = ({
         submitting: uploadSubmittingRef.current
       }) ? mergeUploadItems(previous, items) : previous)
     } catch (error) {
-      if (sessionId !== uploadSessionRef.current || !uploadModalOpenRef.current) return
+      if (sessionId !== uploadSessionRef.current || !uploadModalOpenRef.current
+        || !sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
       notification.error(
         kind === 'directory' ? '添加文件夹失败' : '添加文件失败',
         error.message || error.toString() || '未知错误'
       )
     } finally {
       if (sessionId === uploadSessionRef.current) setUploadPicking(null)
+      release()
     }
   }
 
@@ -444,12 +629,13 @@ const FileBrowser = ({
     if (uploadSubmittingRef.current || uploadDropProcessingRef.current || !paths?.length) return
     const appendToQueue = uploadModalOpenRef.current
     const sessionId = uploadSessionRef.current
-    const target = uploadViewRef.current
+    const target = appendToQueue ? uploadModalTargetRef.current : uploadViewRef.current
     const dropOrigin = { appendToQueue, sessionId }
     uploadDropProcessingRef.current = true
     setUploadDropProcessing(true)
     try {
       const entries = await invoke('inspect_local_paths', { paths })
+      if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
       const items = (Array.isArray(entries) ? entries : [])
         .map(entry => ({
           localPath: entry.path,
@@ -543,17 +729,17 @@ const FileBrowser = ({
   }, [handleDroppedPaths])
 
   /**
-   * 顺序上传队列中的文件或文件夹，保留覆盖确认和取消回调语义。
+   * 将上传队列提交为一个原生批次，只对冲突项询问覆盖并重试。
    *
    * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} uploadQueue - 要提交的本地项目队列。
    * @param {boolean} [fromDrop=false] - 是否由已完成路径检查的直接拖放启动。
-   * @param {Object} [uploadTarget=uploadViewRef.current] - 整个队列共用的目录、条目和原始会话。
-   * @returns {Promise<void>} 队列处理、目录刷新和状态清理完成后的 Promise。
+   * @param {Object} [uploadTarget=uploadModalTargetRef.current] - 整个队列共用的目录、条目和原始会话。
+   * @returns {Promise<void>} 批次处理、目录刷新和状态清理完成后的 Promise。
    */
-  const startUploadQueue = async (uploadQueue, fromDrop = false, uploadTarget = uploadViewRef.current) => {
+  const startUploadQueue = async (uploadQueue, fromDrop = false, uploadTarget = uploadModalTargetRef.current) => {
     if (
       uploadSubmittingRef.current
-      || (!fromDrop && uploadPicking !== null)
+      || (!fromDrop && (uploadPicking !== null || uploadPickingLockRef.current.locked))
       || uploadQueue.length === 0
       || (uploadDropProcessingRef.current && !fromDrop)
       || !sftpManager.isCurrentConnection(uploadTarget?.connectionId, uploadTarget?.connection)
@@ -574,127 +760,102 @@ const FileBrowser = ({
     uploadModalOpenRef.current = false
     setUploadSubmitting(true)
     setUploadModalOpen(false)
+    const isCurrent = () => sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)
     const progressIds = createProgressIds('upload')
-    try {
-      for (const [ queueIndex, item ] of uploadQueue.entries()) {
-        const { localPath, fileName, kind } = item
-        if (!sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) break
-        let transferId = null
-        let overwrite = false
-        const existing = uploadTarget.files.find(entry => entry.name === fileName)
-        if (existing && ((kind === 'directory' && !existing.isDirectory)
-          || (kind === 'file' && existing.isDirectory))) {
-          notification.error(
-            '上传失败',
-            `远程目录中已存在类型不同的同名项目：${ fileName }`
-          )
-          continue
-        }
-        if (existing) {
-          overwrite = await confirm(
-            kind === 'directory'
-              ? `远程目录中已存在文件夹“${ fileName }”，是否合并并覆盖其中的同名文件？`
-              : `远程目录中已存在“${ fileName }”，是否覆盖？`,
-            {
-              title: '确认覆盖',
-              kind: 'warning',
-              okLabel: kind === 'directory' ? '合并并覆盖' : '覆盖',
-              cancelLabel: '取消'
-            }
-          )
-          if (!overwrite) continue
-        }
-        if (!sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) break
-        const remotePath = joinRemotePath(uploadTarget.path, fileName)
-        /**
-         * 发布队列及文件夹内部进度，并绑定当前传输的取消动作。
-         *
-         * @param {number} progress - 当前项目进度百分比。
-         * @param {Object} [payload={}] - 目录上传返回的文件级进度信息。
-         * @returns {void}
-         */
-        const publishProgress = (progress, payload = {}) => {
-          const fileTotal = Number(payload.fileTotal) || 0
-          const fileIndex = Number(payload.fileIndex) || 0
-          PubSubBusinessKeyEnum.SEND_MASK({
-            ...progressIds,
-            progress,
-            overallProgress: kind === 'directory' && Number.isFinite(Number(payload.overallProgress))
-              ? Number(payload.overallProgress)
-              : undefined,
-            fileName: payload.fileName || fileName,
-            operation: kind === 'directory' ? 'upload-directory' : 'upload',
-            queueIndex,
-            queueTotal: uploadQueue.length,
-            pendingCount: Math.max(uploadQueue.length - queueIndex - 1, 0),
-            folderQueueIndex: kind === 'directory' ? fileIndex : undefined,
-            folderQueueTotal: kind === 'directory' ? fileTotal : undefined,
-            current: payload.current,
-            total: payload.total,
-            completedBytes: payload.completedBytes,
-            totalBytes: payload.totalBytes,
-            onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
-          })
-        }
-        publishProgress(0)
-        try {
-          if (kind === 'directory') {
-            await sftpManager.uploadDirectory(
-              uploadTarget.connectionId,
-              localPath,
-              remotePath,
-              (progress, payload) => publishProgress(Math.round(progress), payload),
-              overwrite,
-              id => {
-                transferId = id
-                publishProgress(0)
-              },
-              uploadTarget.connection
-            )
-            notification.success('上传成功', `文件夹 ${ fileName } 上传成功`)
-          } else {
-            await sftpManager.uploadFile(
-              uploadTarget.connectionId,
-              localPath,
-              remotePath,
-              (progress, payload) => publishProgress(Math.round(progress), payload),
-              overwrite,
-              id => {
-                transferId = id
-                publishProgress(0)
-              },
-              uploadTarget.connection
-            )
-            notification.success('上传成功', `文件 ${ fileName } 上传成功`)
-          }
-        } catch (error) {
-          notification.error(
-            '上传失败',
-            `${ kind === 'directory' ? '文件夹' : '文件' } ${ fileName } 上传失败：${ error.message || error.toString() || '未知错误' }`
-          )
-          const errorMessage = error.message || error.toString() || ''
-          if (error.code === 'TransferCancelled' || (!error.code && errorMessage.includes('传输已取消'))
-            || !sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) {
-            break
-          }
-        }
-      }
-    } catch (error) {
-      notification.error('上传文件失败', error.message || error.toString() || '未知错误')
-    } finally {
-      uploadSubmittingRef.current = false
-      setUploadSubmitting(false)
-      setUploadItems([])
+    const items = uploadQueue.map(item => ({
+      ...item,
+      remotePath: joinRemotePath(uploadTarget.path, item.fileName),
+      isDirectory: item.kind === 'directory'
+    }))
+    const invalid = items.filter(item => {
+      const existing = uploadTarget.files.find(entry => entry.name === item.fileName)
+      return existing && Boolean(existing.isDirectory) !== item.isDirectory
+    })
+    const initialOutcomes = {
+      failed: invalid.map(job => ({
+        job,
+        error: { code: 'TargetTypeMismatch', message: '远程目录中已存在类型不同的同名项目' }
+      }))
+    }
+    const validItems = items.filter(item => !invalid.includes(item))
+    let workflow
+    const publishProgress = (progress, payload = {}) => {
+      const fileIndex = Number(payload.fileIndex)
+      const fileTotal = Number(payload.fileTotal)
       PubSubBusinessKeyEnum.SEND_MASK({
         ...progressIds,
-        event: PROGRESS_EVENT_END
+        progress: Math.round(Number(progress) || 0),
+        fileName: payload.fileName || `${ uploadQueue.length } 个项目`,
+        operation: 'upload',
+        queueIndex: Number.isFinite(Number(payload.queueIndex)) ? Number(payload.queueIndex) : 0,
+        queueTotal: uploadQueue.length,
+        pendingCount: Number.isFinite(Number(payload.pendingCount)) ? Number(payload.pendingCount) : undefined,
+        folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
+        folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
+        overallProgress: Number.isFinite(Number(payload.overallProgress)) ? Number(payload.overallProgress) : undefined,
+        current: payload.current,
+        total: payload.total,
+        completedBytes: payload.completedBytes,
+        totalBytes: payload.totalBytes,
+        onCancel: workflow ? () => workflow.cancel() : undefined
       })
-      if (sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) {
-        try {
-          await handleRefresh(uploadTarget)
-        } catch (error) {
-          notification.error('刷新目录失败', error.message || error.toString() || '未知错误')
+    }
+    workflow = createNativeBatchWorkflow({
+      isCurrent,
+      cancelTransfer: id => sftpManager.cancelTransfer(id),
+      onProgress: publishProgress,
+      transfer: (batch, context, overwrite) => sftpManager.transferBatch(
+        uploadTarget.connectionId,
+        batch.map(({ localPath, remotePath, isDirectory }) => ({ localPath, remotePath, isDirectory })),
+        {
+          direction: 'upload',
+          connection: uploadTarget.connection,
+          shouldStart: context.isCurrent,
+          overwrite,
+          onProgress: context.reportProgress,
+          onTransferId: id => {
+            context.registerTransferId(id)
+            if (context.isCurrent()) publishProgress(0)
+          }
         }
+      ),
+      confirmOverwrite: item => confirm(
+        item.isDirectory
+          ? `远程目录中已存在文件夹“${ item.remotePath }”，是否合并并覆盖其中的同名文件？`
+          : `远程目录中已存在“${ item.remotePath }”，是否覆盖？`,
+        {
+          title: '确认覆盖',
+          kind: 'warning',
+          okLabel: item.isDirectory ? '合并并覆盖' : '覆盖',
+          cancelLabel: '跳过'
+        }
+      )
+    })
+
+    try {
+      publishProgress(0)
+      const result = await workflow.run(validItems, initialOutcomes)
+      if (!isCurrent()) return
+      const { succeeded, failed, skipped, notStarted, unknown, unlistedSkipped, directoryCount } = result
+      const names = failed.map(outcome => outcome.item?.remotePath || outcome.job.fileName).join('、')
+      const skippedCount = skipped.length + unlistedSkipped
+      const summary = `已上传 ${ succeeded.length } 个文件${ directoryCount ? `、${ directoryCount } 个目录` : '' }${ skippedCount ? `，跳过 ${ skippedCount } 个` : '' }${ failed.length ? `，${ failed.length } 个失败` : '' }${ notStarted.length ? `，${ notStarted.length } 个未开始` : '' }${ unknown.length ? `，${ unknown.length } 个结果待核对` : '' }${ names ? `：${ names }` : '' }`
+      if (failed.length || unknown.length || notStarted.length || result.cancelled) notification.error(result.cancelled ? '上传已取消' : '上传未全部完成', summary)
+      else notification.success('上传完成', summary)
+    } catch (error) {
+      if (isCurrent()) notification.error('上传文件失败', normalizeError(error))
+    } finally {
+      PubSubBusinessKeyEnum.SEND_MASK({ ...progressIds, event: PROGRESS_EVENT_END })
+      try {
+        if (isCurrent()) {
+          await handleRefresh(uploadTarget)
+        }
+      } catch (error) {
+        if (isCurrent()) notification.error('刷新目录失败', normalizeError(error))
+      } finally {
+        uploadSubmittingRef.current = false
+        setUploadSubmitting(false)
+        setUploadItems([])
       }
     }
   }
@@ -730,12 +891,16 @@ const FileBrowser = ({
       connectionId={currentConnectionId}
       showHiddenFiles={showHiddenFiles}
       selected={selectedKeySet.has(getEntryKey(entry))}
+      downloading={itemLocksRef.current.isLocked(`${ currentConnectionId }\u0000${ getEntryKey(entry) }`, 'download')}
+      deleting={itemLocksRef.current.isLocked(`${ currentConnectionId }\u0000${ getEntryKey(entry) }`, 'delete')}
+      acquireOperation={acquireItemOperation}
       onSelect={handleItemSelect}
+      onNavigate={handleItemKeyDown}
       onActivate={handleItemActivate}
       onDelete={handleItemDelete}
-      onRename={handleItemRename}
+      onRequestRename={requestRename}
     />
-  ), [ currentPath, currentConnectionId, showHiddenFiles, selectedKeySet, handleItemSelect, handleItemActivate, handleItemDelete, handleItemRename ])
+  ), [ currentPath, currentConnectionId, showHiddenFiles, selectedKeySet, handleItemSelect, handleItemKeyDown, acquireItemOperation, handleItemActivate, handleItemDelete, requestRename ])
 
   return (
     <div className="file-browser">
@@ -783,7 +948,10 @@ const FileBrowser = ({
               aria-label="远程路径"
             />
 
-            <Dropdown menu={{ items: menuItems }} trigger={['click']}>
+            <Dropdown
+              menu={{ items: menuItems }}
+              trigger={['click']}
+            >
               <Button
                 className="path-menu-button"
                 type="text"
@@ -821,7 +989,12 @@ const FileBrowser = ({
               className="mkdir-action-button"
               size="small"
               icon={<AppIcon name="folderAdd" />}
-              onClick={() => setDirectoryModalOpen(true)}
+              onClick={() => {
+                const target = uploadViewRef.current
+                if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
+                directoryTargetRef.current = target
+                setDirectoryModalOpen(true)
+              }}
               aria-label="新建文件夹"
               title="新建文件夹"
             >
@@ -858,6 +1031,12 @@ const FileBrowser = ({
       <div
         ref={fileListDropRef}
         className={`file-list-shell${ directoryDropActive ? ' is-upload-drop-target' : '' }`}
+        tabIndex={-1}
+        onKeyDown={event => {
+          if (event.target !== event.currentTarget) return
+          const index = fileIndexByKeyRef.current.get(navigationKeyRef.current)
+          if (index !== undefined) handleItemKeyDown(filesRef.current[index], event)
+        }}
       >
         {error ? (
           <Alert
@@ -878,13 +1057,19 @@ const FileBrowser = ({
             该目录为空
           </div>
         ) : (
-          <List
-            className="file-list"
-            itemLayout="horizontal"
-            dataSource={files}
-            rowKey={getEntryKey}
-            renderItem={renderFileItem}
-          />
+          <List className="file-list" split={false}>
+            <VirtualList
+              ref={virtualListRef}
+              data={files}
+              height={listHeight}
+              itemHeight={42}
+              itemKey={getEntryKey}
+              onVisibleChange={schedulePendingFocus}
+              extraRender={captureVirtualMetrics}
+            >
+              {(entry, index) => <div data-index={index}>{renderFileItem(entry)}</div>}
+            </VirtualList>
+          </List>
         )}
       </div>
       {selectedKeys.length > 1 && (
@@ -929,6 +1114,7 @@ const FileBrowser = ({
         onCancel={() => {
           uploadSessionRef.current += 1
           uploadModalOpenRef.current = false
+          uploadModalTargetRef.current = null
           setUploadPicking(null)
           setUploadModalOpen(false)
         }}
@@ -1016,6 +1202,30 @@ const FileBrowser = ({
             </>
           )}
         </Upload.Dragger>
+      </Modal>
+      <Modal
+        rootClassName="compact-modal"
+        title={`重命名 ${ renameTarget?.entry.name || '' }`}
+        open={Boolean(renameTarget)}
+        onCancel={() => { if (!renaming) setRenameTarget(null) }}
+        onOk={submitRename}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={renaming}
+        width="min(360px, calc(100vw - 24px))"
+        destroyOnHidden
+      >
+        <Input
+          autoFocus
+          autoCapitalize="none"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          value={renameValue}
+          onChange={event => setRenameValue(event.target.value)}
+          onKeyDown={event => event.stopPropagation()}
+          onKeyUp={event => event.stopPropagation()}
+        />
       </Modal>
       <Modal
         rootClassName="compact-modal"

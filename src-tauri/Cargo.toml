@@ -36,6 +36,9 @@ rand = "0.8"
 cap-std = "4.0.3"
 cap-fs-ext = "4.0.3"
 socket2 = "0.6.3"
+tar = "0.4"
+flate2 = "1"
+tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

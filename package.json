@@ -20,12 +20,14 @@
     "tauri:linux": "tauri build --bundles deb,appimage --config src-tauri/tauri.prod.conf.json",
     "tauri:build": "tauri build --config src-tauri/tauri.prod.conf.json",
     "tauri:icon": "tauri icon public/portal-logo.svg",
+    "test:unit": "vitest run",
     "lint": "eslint src scripts vite.config.js eslint.config.js --ext .js,.jsx,.mjs,.ts,.tsx",
     "lint:fix": "eslint src scripts vite.config.js eslint.config.js --ext .js,.jsx,.mjs,.ts,.tsx --fix",
     "audit:prod": "pnpm audit --prod --audit-level moderate",
     "audit:dev": "pnpm audit --dev --audit-level high"
   },
   "dependencies": {
+    "@rc-component/virtual-list": "1.0.2",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "~2.3.2",
     "@tauri-apps/plugin-dialog": "~2.6.0",
@@ -58,6 +60,7 @@
     "eslint-plugin-react-refresh": "0.5.7",
     "goober": "2.1.18",
     "license-checker": "^25.0.1",
-    "vite": "7.3.7"
+    "vite": "7.3.7",
+    "vitest": "4.1.12"
   }
 }

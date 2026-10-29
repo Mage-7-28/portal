@@ -8,6 +8,7 @@ The versions below are the versions resolved by the current lockfiles. The front
 
 | Component | Version | License | Source |
 | --- | --- | --- | --- |
+| `@rc-component/virtual-list` | 1.0.2 | MIT | [react-component/virtual-list](https://github.com/react-component/virtual-list) |
 | `@tauri-apps/api` | 2.10.1 | Apache-2.0 OR MIT | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) |
 | `@tauri-apps/plugin-clipboard-manager` | 2.3.2 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `@tauri-apps/plugin-dialog` | 2.6.0 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
@@ -15,9 +16,9 @@ The versions below are the versions resolved by the current lockfiles. The front
 | `@tauri-apps/plugin-notification` | 2.3.3 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `@tauri-apps/plugin-opener` | 2.5.4 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `@tauri-apps/plugin-store` | 2.4.4 | MIT OR Apache-2.0 | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
-| `@xterm/addon-fit` | 0.11.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit) |
-| `@xterm/addon-search` | 0.16.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-search) |
-| `@xterm/xterm` | 6.0.0 | MIT | [xterm.js](https://github.com/xtermjs/xterm.js) |
+| `@xterm/addon-fit` | 0.11.0 | MIT | [xtermjs/xterm.js/tree/master/addons/addon-fit](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-fit) |
+| `@xterm/addon-search` | 0.16.0 | MIT | [xtermjs/xterm.js/tree/master/addons/addon-search](https://github.com/xtermjs/xterm.js/tree/master/addons/addon-search) |
+| `@xterm/xterm` | 6.0.0 | MIT | [xtermjs/xterm.js](https://github.com/xtermjs/xterm.js) |
 | `antd` | 6.3.3 | MIT | [ant-design/ant-design](https://github.com/ant-design/ant-design) |
 | `prismjs` | 1.30.0 | MIT | [PrismJS/prism](https://github.com/PrismJS/prism) |
 | `pubsub-js` | 1.9.5 | MIT | [mroderick/PubSubJS](https://github.com/mroderick/PubSubJS) |
@@ -37,14 +38,26 @@ The versions below are the versions resolved by the current lockfiles. The front
 | `tauri-plugin-notification` | 2.3.3 | Apache-2.0 OR MIT | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-plugin-opener` | 2.5.4 | Apache-2.0 OR MIT | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
 | `tauri-plugin-store` | 2.4.4 | Apache-2.0 OR MIT | [tauri-apps/plugins-workspace](https://github.com/tauri-apps/plugins-workspace) |
-| `serde` / `serde_json` | 1.0.228 / 1.0.149 | MIT OR Apache-2.0 | [serde-rs](https://github.com/serde-rs) |
+| `serde` | 1.0.228 | MIT OR Apache-2.0 | [serde-rs/serde](https://github.com/serde-rs/serde) |
+| `serde_json` | 1.0.149 | MIT OR Apache-2.0 | [serde-rs/json](https://github.com/serde-rs/json) |
 | `dirs` | 5.0.1 | MIT OR Apache-2.0 | [soc/dirs-rs](https://github.com/soc/dirs-rs) |
-| `ssh2` / `libssh2-sys` | 0.9.5 / 0.3.1 | MIT OR Apache-2.0 | [alexcrichton/ssh2-rs](https://github.com/alexcrichton/ssh2-rs) |
+| `ssh2` | 0.9.5 | MIT OR Apache-2.0 | [alexcrichton/ssh2-rs](https://github.com/alexcrichton/ssh2-rs) |
 | `thiserror` | 1.0.69 | MIT OR Apache-2.0 | [dtolnay/thiserror](https://github.com/dtolnay/thiserror) |
-| `tauri-build` (build dependency) | 2.5.6 | Apache-2.0 OR MIT | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) |
+| `tauri-build` | 2.5.6 | Apache-2.0 OR MIT | [tauri-apps/tauri](https://github.com/tauri-apps/tauri) |
 | `windows-sys` | 0.52.0 | MIT OR Apache-2.0 | [microsoft/windows-rs](https://github.com/microsoft/windows-rs) |
+| `aes-gcm` | 0.10.3 | Apache-2.0 OR MIT | [RustCrypto/AEADs](https://github.com/RustCrypto/AEADs) |
+| `base64` | 0.22.1 | MIT OR Apache-2.0 | [marshallpierce/rust-base64](https://github.com/marshallpierce/rust-base64) |
+| `rand` | 0.8.5 | MIT OR Apache-2.0 | [rust-random/rand](https://github.com/rust-random/rand) |
+| `cap-std` | 4.0.3 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [bytecodealliance/cap-std](https://github.com/bytecodealliance/cap-std) |
+| `cap-fs-ext` | 4.0.3 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | [bytecodealliance/cap-std](https://github.com/bytecodealliance/cap-std) |
+| `socket2` | 0.6.3 | MIT OR Apache-2.0 | [rust-lang/socket2](https://github.com/rust-lang/socket2) |
+| `tar` | 0.4.46 | MIT OR Apache-2.0 | [composefs/tar-rs](https://github.com/composefs/tar-rs) |
+| `flate2` | 1.1.9 | MIT OR Apache-2.0 | [rust-lang/flate2-rs](https://github.com/rust-lang/flate2-rs) |
+| `tokio` | 1.50.0 | MIT | [tokio-rs/tokio](https://github.com/tokio-rs/tokio) |
+| `libc` | 0.2.183 | MIT OR Apache-2.0 | [rust-lang/libc](https://github.com/rust-lang/libc) |
+| `libssh2-sys` | 0.3.1 | MIT OR Apache-2.0 | [alexcrichton/ssh2-rs](https://github.com/alexcrichton/ssh2-rs) |
 | `libz-sys` | 1.1.25 | MIT OR Apache-2.0 | [rust-lang/libz-sys](https://github.com/rust-lang/libz-sys) |
-| `openssl-sys` | 0.9.112 | MIT | [rust-openssl](https://github.com/rust-openssl/rust-openssl) |
+| `openssl-sys` | 0.9.112 | MIT | [rust-openssl/rust-openssl](https://github.com/rust-openssl/rust-openssl) |
 
 ## Transitive license exceptions
 
@@ -87,6 +100,6 @@ The complete upstream license files remain authoritative; this inventory is not 
 - MPL-2.0 dependencies use file-level copyleft: unmodified copies can remain separate dependencies, while changes to their files must retain the MPL terms. This does not require Portal's unrelated source files to become MPL-2.0.
 - Unicode-3.0 is a separate upstream license for ICU data and related code; retain its notice when the corresponding crates are included.
 - Development-only tools are listed in `license-report.csv` for source-repository transparency but are not part of the runtime application bundle.
-- `ssh2` brings native `libssh2`, zlib and OpenSSL bindings. The default build links to the platform-provided libraries, so their licenses and notices must be checked for the exact target image; they are separate from the Rust binding licenses listed above.
+- `ssh2` brings native `libssh2`, zlib and OpenSSL bindings. This project enables vendored OpenSSL; retain the bundled OpenSSL notices as well as the zlib/libssh2 notices for the exact target image; they are separate from the Rust binding licenses listed above.
 - Linux packages may use system GTK, WebKitGTK and (depending on the Tauri plugin set) libappindicator libraries. macOS and Windows use system WebKit/WebView2 components. Their platform licenses are separate from the Rust and JavaScript package licenses and are not changed by Portal's MIT license.
 - For a binary release, ship this notice file and the applicable upstream license/notice files alongside the installer or archive. Do not copy third-party text into `LICENSE`; keeping that file as the unmodified MIT template lets repository hosts identify the project license reliably.

@@ -3,16 +3,18 @@
  * 负责单项预览、下载、重命名、删除和可见范围内的目录大小统计。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { Button, Input, List, Modal, Spin, Tooltip } from 'antd'
+import { Button, List, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common'
+import { normalizeError } from '../utils/constants.js'
 import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 import { observeDirectoryVisibility } from '../utils/directoryVisibility.js'
+import { createNativeBatchWorkflow } from '../utils/transferWorkflow.js'
 
 /**
  * 拼接远程 POSIX 风格路径，避免重复分隔符影响 SFTP 调用。
@@ -83,19 +85,18 @@ const getPartialDirectorySizeHint = ({ inaccessibleCount, scannedEntries }) => {
  * @param {string} props.connectionId - 当前 SSH 连接 ID。
  * @param {boolean} [props.showHiddenFiles=false] - 是否按显示隐藏文件设置统计目录大小。
  * @param {boolean} props.selected - 当前条目是否被选中。
+ * @param {boolean} props.downloading - 当前条目是否正在下载。
+ * @param {boolean} props.deleting - 当前条目是否正在删除。
+ * @param {(entry: Object, action: string) => (() => void)|null} props.acquireOperation - 与行挂载状态无关的同步操作锁。
  * @param {(entry: Object, event: Object) => void} props.onSelect - 条目选中回调。
+ * @param {(entry: Object, event: Object) => void} props.onNavigate - 按完整列表导航。
  * @param {(entry: Object) => void} props.onActivate - 双击进入目录或打开文件的回调。
  * @param {(entry: Object) => Promise<void>} props.onDelete - 删除条目回调。
- * @param {(entry: Object, name: string) => Promise<void>} props.onRename - 重命名条目回调。
+ * @param {(entry: Object) => void} props.onRequestRename - 打开由列表持有的重命名弹窗。
  * @returns {JSX.Element} 远程文件/目录列表行。
  */
-const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, selected, onSelect, onActivate, onDelete, onRename }) => {
-  // 单项传输、删除和重命名的 loading 状态，分别阻止同一操作重复提交。
-  const [ downloading, setDownloading ] = useState(false)
-  const [ deleting, setDeleting ] = useState(false)
-  const [ renameOpen, setRenameOpen ] = useState(false)
-  const [ renameValue, setRenameValue ] = useState(entry.name)
-  const [ renaming, setRenaming ] = useState(false)
+const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, selected, downloading, deleting, acquireOperation, onSelect, onNavigate, onActivate, onDelete, onRequestRename }) => {
+  // 操作锁由父列表持有，滚动卸载或刷新当前行时仍可阻止重复操作。
   // 目录大小的异步结果、加载/错误状态及可见性开关。
   const [ directorySize, setDirectorySize ] = useState(null)
   const [ directorySizeLoading, setDirectorySizeLoading ] = useState(false)
@@ -176,141 +177,113 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
    */
   const handleDownload = async (event) => {
     event.stopPropagation()
-    if (downloading) return
-    let downloadPath
+    const release = acquireOperation(entry, 'download')
+    if (!release) return
+
+    let connection
     try {
-      downloadPath = await resolveDownloadPath()
-      if (!downloadPath) return
+      connection = sftpManager.captureConnection(connectionId)
     } catch (error) {
-      notification.error('下载失败', error.message || error.toString() || '无法选择本地下载目录')
+      release()
+      notification.error('下载失败', normalizeError(error))
       return
     }
-    const remotePath = joinRemotePath(currentPath, entry.name)
-    const localPath = joinLocalPath(downloadPath, entry.name)
-    const itemLabel = entry.isDirectory ? '文件夹' : '文件'
-    const accepted = await confirm(
-      `确定下载${ itemLabel }“${ entry.name }”吗？\n\n保存到：${ localPath }`,
-      {
-        title: '确认下载',
-        kind: 'warning',
-        okLabel: '下载',
-        cancelLabel: '取消'
-      }
-    )
-    if (!accepted) return
-    let transferId = null
-    const progressIds = createProgressIds('download')
-    /**
-     * 将单项下载回调转换为窗口进度，并关联可取消的传输 ID。
-     *
-     * @param {number} progress - 当前下载进度百分比。
-     * @param {Object} [payload={}] - 目录下载返回的文件级和总进度信息。
-     * @returns {void}
-     */
-    const publishProgress = (progress, payload = {}) => {
-      const fileIndex = Number(payload.fileIndex)
-      const fileTotal = Number(payload.fileTotal)
-      PubSubBusinessKeyEnum.SEND_MASK({
-        ...progressIds,
-        progress: Math.round(Number(progress) || 0),
-        fileName: entry.isDirectory ? (payload.fileName || entry.name) : entry.name,
-        operation: entry.isDirectory ? 'download-directory' : 'download',
-        folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
-        folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
-        overallProgress: Number.isFinite(Number(payload.overallProgress))
-          ? Number(payload.overallProgress)
-          : undefined,
-        current: payload.current,
-        total: payload.total,
-        completedBytes: payload.completedBytes,
-        totalBytes: payload.totalBytes,
-        onCancel: transferId ? () => sftpManager.cancelTransfer(transferId) : undefined
-      })
-    }
-    /**
-     * 执行一次文件或目录下载；覆盖重试会复用同一进度发布逻辑。
-     *
-     * @param {boolean} overwrite - 是否允许覆盖本地同名目标。
-     * @returns {Promise<void>} 下载任务完成后的 Promise。
-     */
-    const performDownload = async (overwrite) => {
-      transferId = null
-      const download = entry.isDirectory
-        ? sftpManager.downloadDirectory.bind(sftpManager)
-        : sftpManager.downloadFile.bind(sftpManager)
-      try {
-        await download(
-          connectionId,
-          remotePath,
-          localPath,
-          (progress, payload) => publishProgress(progress, payload),
-          overwrite,
-          id => {
-            transferId = id
-            publishProgress(0)
-          }
-        )
-      } finally {
-        transferId = null
-      }
-    }
-
+    const isCurrent = () => sftpManager.isCurrentConnection(connectionId, connection)
+    const remotePath = entry.path || joinRemotePath(currentPath, entry.name)
+    let progressIds
+    let activeWorkflow
     try {
-      setDownloading(true)
-      publishProgress(0)
-      await performDownload(false)
-      notification.success('下载成功', `${ itemLabel } ${ entry.name } 已保存到 ${ localPath }`)
-    } catch (error) {
-      const message = error.message || error.toString() || '未知错误'
-      if (!message.includes('已存在')) {
-        notification.error('下载失败', `${ itemLabel } ${ entry.name }：${ message }`)
-      } else {
-        const overwriteAccepted = await confirm(
-          `本地${ itemLabel }已存在：\n${ localPath }\n${ entry.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
+      const downloadPath = await resolveDownloadPath()
+      if (!downloadPath || !isCurrent()) return
+      const localPath = joinLocalPath(downloadPath, entry.name)
+      const itemLabel = entry.isDirectory ? '文件夹' : '文件'
+      const accepted = await confirm(
+        `确定下载${ itemLabel }“${ entry.name }”吗？\n\n保存到：${ localPath }`,
+        {
+          title: '确认下载',
+          kind: 'warning',
+          okLabel: '下载',
+          cancelLabel: '取消'
+        }
+      )
+      if (!accepted || !isCurrent()) return
+
+      progressIds = createProgressIds('download')
+      /**
+       * 将单项下载回调转换为窗口进度，并关联可取消的传输批次。
+       *
+       * @param {number} progress - 当前下载进度百分比。
+       * @param {Object} [payload={}] - 目录下载返回的文件级和总进度信息。
+       * @returns {void}
+       */
+      const publishProgress = (progress, payload = {}) => {
+        const fileIndex = Number(payload.fileIndex)
+        const fileTotal = Number(payload.fileTotal)
+        PubSubBusinessKeyEnum.SEND_MASK({
+          ...progressIds,
+          progress: Math.round(Number(progress) || 0),
+          fileName: entry.isDirectory ? (payload.fileName || entry.name) : entry.name,
+          operation: entry.isDirectory ? 'download-directory' : 'download',
+          folderQueueIndex: Number.isFinite(fileIndex) ? fileIndex : undefined,
+          folderQueueTotal: Number.isFinite(fileTotal) ? fileTotal : undefined,
+          overallProgress: Number.isFinite(Number(payload.overallProgress))
+            ? Number(payload.overallProgress)
+            : undefined,
+          current: payload.current,
+          total: payload.total,
+          completedBytes: payload.completedBytes,
+          totalBytes: payload.totalBytes,
+          onCancel: activeWorkflow ? () => activeWorkflow.cancel() : undefined
+        })
+      }
+      activeWorkflow = createNativeBatchWorkflow({
+        isCurrent,
+        cancelTransfer: id => sftpManager.cancelTransfer(id),
+        onProgress: publishProgress,
+        transfer: (batch, context, overwrite) => sftpManager.transferBatch(connectionId, batch, {
+          direction: 'download',
+          connection,
+          shouldStart: context.isCurrent,
+          overwrite,
+          onProgress: context.reportProgress,
+          onTransferId: id => {
+            context.registerTransferId(id)
+            if (context.isCurrent()) publishProgress(0)
+          }
+        }),
+        confirmOverwrite: job => confirm(
+          `本地${ job.isDirectory ? '文件夹' : '文件' }已存在：\n${ job.localPath }\n${ job.isDirectory ? '是否合并并覆盖其中的文件？' : '是否覆盖？' }`,
           {
             title: '确认覆盖',
             kind: 'warning',
-            okLabel: entry.isDirectory ? '合并并覆盖' : '覆盖',
+            okLabel: job.isDirectory ? '合并并覆盖' : '覆盖',
             cancelLabel: '取消'
           }
         )
-        if (overwriteAccepted) {
-          try {
-            await performDownload(true)
-            notification.success('下载成功', `${ itemLabel } ${ entry.name } 已覆盖`)
-          } catch (retryError) {
-            notification.error('下载失败', retryError.message || retryError.toString() || '未知错误')
-          }
-        }
-      }
-    } finally {
-      setDownloading(false)
-      PubSubBusinessKeyEnum.SEND_MASK({
-        ...progressIds,
-        event: PROGRESS_EVENT_END
       })
-    }
-  }
-
-  /**
-   * 校验远程名称后提交重命名请求，禁止路径分隔符和特殊目录名。
-   *
-   * @param {Object} [event] - 来自表单提交或键盘事件的可选事件对象。
-   * @returns {Promise<void>} 重命名及状态清理完成后的 Promise。
-   */
-  const submitRename = async (event) => {
-    event?.preventDefault()
-    event?.stopPropagation()
-    const name = renameValue.trim()
-    if (!name || /[\\/]/.test(name) || name === '.' || name === '..') return
-    setRenaming(true)
-    try {
-      await onRename(entry, name)
-      setRenameOpen(false)
+      publishProgress(0)
+      const result = await activeWorkflow.run([{ localPath, remotePath, isDirectory: entry.isDirectory }])
+      if (!isCurrent()) return
+      const { succeeded, failed, skipped, notStarted, unknown, unlistedSkipped } = result
+      const skippedCount = skipped.length + unlistedSkipped
+      if (failed.length || notStarted.length || unknown.length) {
+        const details = failed.map(outcome => `${ outcome.job.localPath }：${ normalizeError(outcome.item?.error || outcome.error) }`).join('、')
+        notification.error('下载未全部完成', `已下载 ${ succeeded.length } 个文件，${ failed.length } 个失败，${ notStarted.length } 个未开始，${ unknown.length } 个结果待核对${ details ? `：${ details }` : '' }`)
+      } else if (result.cancelled || skippedCount) {
+        notification.success(result.cancelled ? '下载已取消' : '下载未全部完成', `已下载 ${ succeeded.length } 个文件，跳过 ${ skippedCount } 个`)
+      } else {
+        notification.success('下载成功', `${ itemLabel } ${ entry.name } 已保存到 ${ localPath }`)
+      }
     } catch (error) {
-      notification.error('重命名失败', error.message || error.toString() || '未知错误')
+      if (isCurrent()) notification.error('下载失败', normalizeError(error))
     } finally {
-      setRenaming(false)
+      if (progressIds) {
+        PubSubBusinessKeyEnum.SEND_MASK({
+          ...progressIds,
+          event: PROGRESS_EVENT_END
+        })
+      }
+      release()
     }
   }
 
@@ -322,12 +295,12 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
    */
   const handleDelete = async (event) => {
     event.stopPropagation()
-    if (deleting) return
-    setDeleting(true)
+    const release = acquireOperation(entry, 'delete')
+    if (!release) return
     try {
       await onDelete(entry)
     } finally {
-      setDeleting(false)
+      release()
     }
   }
 
@@ -353,7 +326,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
         } else if (event.key === ' ') {
           event.preventDefault()
           handleSelect(event)
-        }
+        } else onNavigate(entry, event)
       }}
       role="button"
       tabIndex={0}
@@ -423,8 +396,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
               aria-label={`重命名 ${ entry.name }`}
               onClick={event => {
                 event.stopPropagation()
-                setRenameValue(entry.name)
-                setRenameOpen(true)
+                onRequestRename(entry)
               }}
             />
           </Tooltip>
@@ -441,42 +413,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
           </Tooltip>
         </div>
       </List.Item>
-      <div
-        onClick={event => event.stopPropagation()}
-        onDoubleClick={event => event.stopPropagation()}
-        onMouseDown={event => event.stopPropagation()}
-        onPointerDown={event => event.stopPropagation()}
-        onKeyDown={event => event.stopPropagation()}
-        onKeyUp={event => event.stopPropagation()}
-      >
-        <Modal
-          rootClassName="compact-modal"
-          title={`重命名 ${ entry.name }`}
-          open={renameOpen}
-          onCancel={event => {
-            event?.stopPropagation()
-            setRenameOpen(false)
-          }}
-          onOk={submitRename}
-          okText="保存"
-          cancelText="取消"
-          confirmLoading={renaming}
-          width="min(360px, calc(100vw - 24px))"
-          destroyOnHidden
-        >
-          <Input
-            autoFocus
-            autoCapitalize="none"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            value={renameValue}
-            onChange={event => setRenameValue(event.target.value)}
-            onKeyDown={event => event.stopPropagation()}
-            onKeyUp={event => event.stopPropagation()}
-          />
-        </Modal>
-      </div>
+
     </div>
   )
 }
