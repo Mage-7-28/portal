@@ -28,12 +28,18 @@ const percentage = value => Math.max(0, Math.min(100, Math.round(Number(value) |
  */
 export const formatProgressTask = task => {
   const directory = task.operation === 'upload-directory' || task.operation === 'download-directory'
+  const transfer = directory || task.operation === 'upload' || task.operation === 'download'
   const folderTotal = positiveCount(task.folderQueueTotal)
   const hasOverall = task.overallProgress !== undefined && task.overallProgress !== null && Number.isFinite(Number(task.overallProgress))
   const progress = percentage(directory && hasOverall ? task.overallProgress : task.progress)
-  const scanning = directory && folderTotal === 0 && progress < 100
+  const currentValue = directory ? task.completedBytes : task.current
+  const totalValue = directory ? task.totalBytes : task.total
+  const current = currentValue == null ? NaN : Number(currentValue)
+  const total = totalValue == null ? NaN : Number(totalValue)
+  const unknownTotal = transfer && totalValue === null && task.status !== 'queued' && task.status !== 'starting'
+  const scanning = directory && folderTotal === 0 && progress < 100 && !(Number.isFinite(current) && current > 0)
   const parts = [
-    `${ operationLabels[task.operation] || '正在处理' }${ scanning ? '' : ` ${ progress }%` }`
+    `${ operationLabels[task.operation] || '正在处理' }${ scanning || unknownTotal ? '' : ` ${ progress }%` }`
   ]
   if (scanning) parts.push('正在扫描文件夹')
   const queueTotal = positiveCount(task.queueTotal)
@@ -41,10 +47,10 @@ export const formatProgressTask = task => {
   if (directory && folderTotal > 0) {
     parts.push(`文件 ${ Math.min(positiveCount(task.folderQueueIndex) + 1, folderTotal) }/${ folderTotal }`)
   }
-  const current = Number(directory ? task.completedBytes : task.current)
-  const total = Number(directory ? task.totalBytes : task.total)
   if (!scanning && Number.isFinite(current) && Number.isFinite(total) && total > 0 && current >= 0) {
     parts.push(`${ formatFileSize(Math.min(current, total)) } / ${ formatFileSize(total) }`)
+  } else if (!scanning && unknownTotal && Number.isFinite(current) && current >= 0) {
+    parts.push(formatFileSize(current))
   }
   const fileName = compactText(task.fileName, 32)
   if (fileName) parts.push(fileName)

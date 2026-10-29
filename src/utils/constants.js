@@ -11,6 +11,7 @@ export const GlobalFontFamily = '"Lora Variable", "Lora", "Source Serif Pro", "S
 export const StoreKeys = {
   DOWNLOAD_PATH: 'download_path',
   SSH_CONNECTIONS: 'ssh_connections',
+  SSH_CONNECTIONS_REVISION: 'ssh_connections_revision',
   STORE_VERSION: 'store_version',
   UPDATE_SKIPPED_VERSION: 'update_skipped_version',
   SHOW_HIDDEN_FILES: 'show_hidden_files',

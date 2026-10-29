@@ -1,4 +1,4 @@
-//! 工作区布局偏好的跨窗口原子更新，不接触 SSH 会话或凭据。
+//! 工作区布局偏好的跨窗口原子更新，与连接配置共享同一把进程内存储锁。
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -23,7 +23,11 @@ fn normalize_ratio(value: f64, fallback: f64, min: f64, max: f64) -> f64 {
     }
 }
 
-fn update_layout_entry(current: Option<Value>, id: &str, layout: Option<WorkspaceLayout>) -> Value {
+pub(crate) fn update_layout_entry(
+    current: Option<Value>,
+    id: &str,
+    layout: Option<WorkspaceLayout>,
+) -> Value {
     let mut layouts = match current {
         Some(Value::Object(layouts)) => layouts,
         _ => Map::new(),
@@ -51,12 +55,12 @@ fn connection_profile_exists(connections: Option<Value>, id: &str) -> bool {
     }
 }
 
-fn with_workspace_layout_lock<T>(
+pub(crate) fn with_workspace_layout_lock<T>(
     operation: impl FnOnce() -> Result<T, String>,
 ) -> Result<T, String> {
     let _guard = WORKSPACE_LAYOUT_LOCK
         .lock()
-        .map_err(|_| "工作区布局存储锁不可用".to_string())?;
+        .map_err(|_| "连接配置与工作区布局存储锁不可用".to_string())?;
     operation()
 }
 
@@ -76,27 +80,84 @@ fn with_workspace_layout_lock<T>(
 ///
 /// 连接标识为空、待保存配置已被删除、存储锁不可用或本地 Store 打开、保存失败时返回错误。
 #[tauri::command]
-pub fn update_workspace_layout(
+pub async fn update_workspace_layout(
     app: tauri::AppHandle,
     connection_id: String,
     layout: Option<WorkspaceLayout>,
 ) -> Result<Value, String> {
-    if connection_id.trim().is_empty() {
-        return Err("连接标识不能为空".to_string());
-    }
-    with_workspace_layout_lock(|| {
-        let store = app.store("store.json").map_err(|error| error.to_string())?;
-        // 关闭事件异步送达，拒绝已删除配置窗口中迟到的拖动保存，防止布局项被重新插入。
-        if layout.is_some()
-            && !connection_profile_exists(store.get("ssh_connections"), &connection_id)
-        {
-            return Err("连接配置已删除，未保存工作区布局".to_string());
+    tauri::async_runtime::spawn_blocking(move || {
+        if connection_id.trim().is_empty() {
+            return Err("连接标识不能为空".to_string());
         }
-        let next = update_layout_entry(store.get(WORKSPACE_LAYOUTS_KEY), &connection_id, layout);
-        store.set(WORKSPACE_LAYOUTS_KEY, next.clone());
-        store.save().map_err(|error| error.to_string())?;
-        Ok(next)
+        with_workspace_layout_lock(|| {
+            let store = app.store("store.json").map_err(|error| error.to_string())?;
+            if layout.is_some()
+                && !connection_profile_exists(store.get("ssh_connections"), &connection_id)
+            {
+                return Err("连接配置已删除，未保存工作区布局".to_string());
+            }
+            let previous = store.get(WORKSPACE_LAYOUTS_KEY);
+            let next = update_layout_entry(previous.clone(), &connection_id, layout);
+            store.set(WORKSPACE_LAYOUTS_KEY, next.clone());
+            if let Err(error) = store.save() {
+                restore_value(&store, WORKSPACE_LAYOUTS_KEY, previous);
+                return Err(error.to_string());
+            }
+            Ok(next)
+        })
     })
+    .await
+    .map_err(|error| format!("工作区布局保存失败：{error}"))?
+}
+
+fn restore_value(store: &tauri_plugin_store::Store<tauri::Wry>, key: &str, value: Option<Value>) {
+    if let Some(value) = value {
+        store.set(key, value);
+    } else {
+        store.delete(key);
+    }
+}
+
+fn is_plain_preference(key: &str) -> bool {
+    matches!(
+        key,
+        "download_path"
+            | "store_version"
+            | "update_skipped_version"
+            | "show_hidden_files"
+            | "terminal_font_size"
+    )
+}
+
+/// 普通偏好与连接/布局使用同一把原生保存锁，禁止前端直接写入受保护的配置键。
+#[tauri::command]
+pub async fn write_store_preference(
+    app: tauri::AppHandle,
+    key: String,
+    value: Value,
+    remove: Option<bool>,
+) -> Result<(), String> {
+    if !is_plain_preference(&key) {
+        return Err("该设置必须通过专用的原生命令保存".into());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        with_workspace_layout_lock(|| {
+            let store = app.store("store.json").map_err(|error| error.to_string())?;
+            let previous = store.get(&key);
+            if remove.unwrap_or(false) {
+                store.delete(&key);
+            } else {
+                store.set(&key, value);
+            }
+            if let Err(error) = store.save() {
+                restore_value(&store, &key, previous);
+                return Err(error.to_string());
+            }
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|error| format!("偏好设置保存失败：{error}"))?
 }
 
 #[cfg(test)]
@@ -104,6 +165,29 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn plain_preferences_cannot_overwrite_connection_or_layout_transactions() {
+        for key in [
+            "ssh_connections",
+            "ssh_connections_revision",
+            "workspace_layouts",
+            "credential_key",
+            "",
+            "../store.json",
+        ] {
+            assert!(!is_plain_preference(key));
+        }
+        for key in [
+            "download_path",
+            "store_version",
+            "update_skipped_version",
+            "show_hidden_files",
+            "terminal_font_size",
+        ] {
+            assert!(is_plain_preference(key));
+        }
+    }
 
     #[test]
     fn preserves_other_connections_and_clamps_saved_ratios() {

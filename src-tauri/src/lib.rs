@@ -3,10 +3,17 @@
 //! 本模块组装插件、原生菜单和 SSH 状态，并提供本地路径检查、
 //! 平台识别及菜单状态同步能力。远程操作由 [`ssh`] 模块负责。
 
+mod connection_profiles;
+mod directory_requests;
 mod local_transfer;
 mod remote_policy;
 mod scan_budget;
+mod sftp_commit;
 mod ssh;
+mod terminal_flow;
+mod transfer_connect;
+mod transfer_tasks;
+mod transfer_validation;
 mod workspace_preferences;
 
 use aes_gcm::{
@@ -313,6 +320,11 @@ pub fn run() {
         .manage(ssh::SshState::default())
         .invoke_handler(tauri::generate_handler![
             workspace_preferences::update_workspace_layout,
+            workspace_preferences::write_store_preference,
+            connection_profiles::list_connection_profiles,
+            connection_profiles::save_connection_profile,
+            connection_profiles::patch_connection_profile,
+            connection_profiles::delete_connection_profile,
             exit_application,
             set_show_hidden_files_menu_checked,
             get_home_dir,
@@ -333,6 +345,7 @@ pub fn run() {
             ssh::scp_download,
             ssh::sftp_download_directory,
             ssh::list_sftp_directory,
+            ssh::cancel_sftp_directory_request,
             ssh::get_sftp_directory_size,
             ssh::cancel_sftp_directory_size,
             ssh::remove_ssh_connection,
@@ -344,14 +357,22 @@ pub fn run() {
             ssh::open_ssh_terminal,
             ssh::write_ssh_terminal,
             ssh::resize_ssh_terminal,
+            ssh::ack_ssh_terminal_output,
             ssh::close_ssh_terminal,
+            ssh::get_transfer_statuses,
             ssh::cancel_transfer
         ])
+        .on_window_event(|window, event| {
+            if matches!(event, tauri::WindowEvent::Destroyed) {
+                ssh::cleanup_window(&window.state::<ssh::SshState>(), window.label());
+            }
+        })
         .setup(|app| {
             // 设置AppHandle到SshState中
             let app_handle = app.app_handle();
             let state = app.state::<ssh::SshState>();
             *state.app_handle.lock().unwrap() = Some(app_handle.clone());
+            ssh::start_background_maintenance(state.inner().clone());
 
             #[cfg(desktop)]
             {
@@ -438,5 +459,9 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_, _| {});
+        .run(|app, event| {
+            if matches!(event, tauri::RunEvent::Exit) {
+                ssh::shutdown_background_tasks(&app.state::<ssh::SshState>());
+            }
+        });
 }

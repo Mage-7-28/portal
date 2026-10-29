@@ -33,11 +33,13 @@ import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js
  * @property {string} createdAt - 配置创建时间。
  * @property {string} updatedAt - 配置最近更新时间。
  * @property {string|null} encryptedPassword - Rust 加密后的持久化密码。
+ * @property {number} revision - 原生存储分配的乐观并发版本。
  */
 
 /**
  * @typedef {Object} ConnectionCredentials
  * @property {string} password - 仅保存在当前进程内存中的会话密码。
+ * @property {number} [revision] - 凭据对应的连接配置版本。
  */
 
 /**
@@ -76,8 +78,9 @@ const normalizeProfile = (profile, index) => {
     authMethod: 'password',
     hostKeyFingerprint: profile.hostKeyFingerprint || null,
     encryptedPassword: typeof profile.encryptedPassword === 'string' ? profile.encryptedPassword : null,
-    createdAt: profile.createdAt || new Date().toISOString(),
-    updatedAt: profile.updatedAt || profile.createdAt || new Date().toISOString()
+    createdAt: profile.createdAt || '1970-01-01T00:00:00.000Z',
+    updatedAt: profile.updatedAt || profile.createdAt || '1970-01-01T00:00:00.000Z',
+    revision: Number.isSafeInteger(profile.revision) && profile.revision >= 0 ? profile.revision : 0
   }
 }
 
@@ -88,6 +91,10 @@ const normalizeProfile = (profile, index) => {
  * @returns {ConnectionProfile[]} 新数组，原数组不会被修改。
  */
 const sortProfiles = (profiles) => [...profiles].sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+
+/** 比较会影响远程会话身份的字段；名称和密码密文变更不改变已认证的服务器。 */
+const sameProfileIdentity = (left, right) => Boolean(left && right)
+  && [ 'id', 'host', 'port', 'username', 'authMethod', 'hostKeyFingerprint' ].every(key => left[key] === right[key])
 
 /**
  * 规范化跨平台远程路径，同时保留 Windows 盘符根目录。
@@ -212,6 +219,7 @@ function FileBrowserPanel({
   const includeHiddenFiles = showHiddenFiles === true
   // 订阅连接配置的共享 Store，使连接首页和多个文件标签始终使用同一份最新密文。
   const storedConnections = useStoreValue(StoreKeys.SSH_CONNECTIONS)
+  const storedConnectionsRevision = useStoreValue(StoreKeys.SSH_CONNECTIONS_REVISION)
   // 持久化连接配置及当前进程内的临时凭据缓存。
   const [ connections, setConnections ] = useState([])
   const [ credentials, setCredentials ] = useState(new Map())
@@ -250,6 +258,12 @@ function FileBrowserPanel({
   const [ previewProgress, setPreviewProgress ] = useState(null)
   // 请求序号用于丢弃过期响应；预览 URL 用于在替换或卸载时释放 Blob 资源。
   const requestId = useRef(0)
+  const directoryAbortRef = useRef(null)
+  const directoryRequestPrefixRef = useRef(null)
+  const currentPathRef = useRef(currentPath)
+  const directoryIntentRef = useRef(null)
+  const latestDirectoryRequestRef = useRef(null)
+  const loadRemoteDirectoryRef = useRef(null)
   const previewRequestId = useRef(0)
   const previewUrlRef = useRef(null)
   const previewAbortRef = useRef(null)
@@ -262,6 +276,7 @@ function FileBrowserPanel({
   const connectionsRef = useRef([])
   const connectionsReadyRef = useRef(Promise.resolve())
   const connectionsLoadStartedRef = useRef(false)
+  const connectionsRevisionRef = useRef(-1)
   // 会话组件卸载和重连期间使用引用判断异步结果是否仍可写回当前标签。
   const componentMountedRef = useRef(false)
   const ownedConnectionIdRef = useRef(null)
@@ -359,6 +374,11 @@ function FileBrowserPanel({
   const resetRemoteView = useCallback(() => {
     activeConnectionIdRef.current = null
     requestId.current += 1
+    directoryAbortRef.current?.abort()
+    directoryAbortRef.current = null
+    currentPathRef.current = '/'
+    directoryIntentRef.current = null
+    latestDirectoryRequestRef.current = null
     setCurrentConnection(null)
     setCurrentConnectionId(null)
     setCurrentPath('/')
@@ -378,6 +398,10 @@ function FileBrowserPanel({
     return () => {
       componentMountedRef.current = false
       requestId.current += 1
+      directoryAbortRef.current?.abort()
+      directoryAbortRef.current = null
+      directoryIntentRef.current = null
+      latestDirectoryRequestRef.current = null
       previewRequestId.current += 1
       previewAbortRef.current?.abort()
       const connectionId = ownedConnectionIdRef.current
@@ -386,26 +410,6 @@ function FileBrowserPanel({
       if (connectionId) void sftpManager.disconnect(connectionId).catch(() => undefined)
     }
   }, [])
-
-  // 首次加载连接配置；配置迁移失败由上层错误边界或通知流程处理。
-  useEffect(() => {
-    if (connectionsLoadStartedRef.current) return
-    connectionsLoadStartedRef.current = true
-    connectionsReadyRef.current = loadConnections()
-    void connectionsReadyRef.current.catch(loadError => {
-      if (!componentMountedRef.current) return
-      setConnectionFailure(`读取连接配置失败：${ normalizeError(loadError) }`)
-      updateSessionState({ status: 'error', message: `读取连接配置失败：${ normalizeError(loadError) }` })
-    })
-  }, [])
-
-  // 任一标签更新指纹或加密密码后，同步刷新其他标签的本地快照。
-  useEffect(() => {
-    if (!Array.isArray(storedConnections)) return
-    const profiles = sortProfiles(storedConnections.map(normalizeProfile).filter(Boolean))
-    connectionsRef.current = profiles
-    if (componentMountedRef.current) setConnections(profiles)
-  }, [storedConnections])
 
   // 组件卸载时释放最后一次图片预览的 Object URL。
   useEffect(() => () => releasePreviewUrl(), [releasePreviewUrl])
@@ -430,6 +434,8 @@ function FileBrowserPanel({
   useEffect(() => {
     if (!currentConnectionId) return undefined
     const connectionId = currentConnectionId
+    const record = sftpManager.getConnectionInfo(connectionId)
+    const connection = { record, generation: record?.generation }
     let disposed = false
     let probing = false
     /**
@@ -438,13 +444,13 @@ function FileBrowserPanel({
      * @returns {Promise<void>} 探测完成或断线清理完成后的 Promise。
      */
     const probe = async () => {
-      if (disposed || probing || activeConnectionIdRef.current !== connectionId) return
+      if (disposed || probing || activeConnectionIdRef.current !== connectionId || !sftpManager.isCurrentConnection(connectionId, connection)) return
       probing = true
       try {
         await sftpManager.checkConnection(connectionId)
       } catch (probeError) {
         // 探测失败本身就说明当前会话不可用，不能只依赖连接管理器是否已经更新状态。
-        if (!disposed && activeConnectionIdRef.current === connectionId) {
+        if (!disposed && activeConnectionIdRef.current === connectionId && sftpManager.isCurrentConnection(connectionId, connection)) {
           resetRemoteView()
           const message = normalizeError(probeError)
           setConnectionFailure(message)
@@ -463,46 +469,94 @@ function FileBrowserPanel({
   }, [ currentConnectionId, resetRemoteView ])
 
   /**
-   * 从持久化 Store 读取连接配置并迁移旧数据结构。
+   * 仅接纳不早于当前全局版本的原生快照，避免跨窗口事件和 IPC 乱序回退配置。
    *
-   * @returns {Promise<void>} 连接状态更新和必要的数据迁移完成后的 Promise。
+   * @param {{profiles: ConnectionProfile[], revision: number}} snapshot - 同一原生事务读取的配置及版本。
+   * @returns {ConnectionProfile[]} 已知最新的配置，绝不返回被拒绝的旧数组。
    */
-  const loadConnections = async () => {
-    const saved = await store.get(StoreKeys.SSH_CONNECTIONS)
-    const profiles = Array.isArray(saved)
-      ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
-      : []
-    connectionsRef.current = profiles
-    if (componentMountedRef.current) setConnections(profiles)
-    if (JSON.stringify(saved || []) !== JSON.stringify(profiles)) {
-      await store.set(StoreKeys.SSH_CONNECTIONS, profiles)
+  const applyConnectionSnapshot = useCallback(snapshot => {
+    if (!Array.isArray(snapshot?.profiles) || !Number.isSafeInteger(snapshot.revision) || snapshot.revision < 0) {
+      throw new Error('连接配置快照格式无效')
     }
-    // 密码只在用户实际连接时按需解密，启动阶段不批量持有明文凭据。
-    return profiles
-  }
+    if (snapshot.revision <= connectionsRevisionRef.current) return connectionsRef.current
+    const sorted = sortProfiles(snapshot.profiles.map(normalizeProfile).filter(Boolean))
+    connectionsRevisionRef.current = snapshot.revision
+    connectionsRef.current = sorted
+    if (componentMountedRef.current) setConnections(sorted)
+    return sorted
+  }, [])
 
   /**
-   * 在 Store 最新快照上事务式更新连接配置。
+   * 注册 Store 监听后由原生进程读取并迁移配置，避免多个窗口同时回写旧数组。
    *
-   * @param {(profiles: ConnectionProfile[]) => ConnectionProfile[]} updater - 基于最新配置生成新数组的函数。
-   * @returns {Promise<ConnectionProfile[]>} 写入后的规范化连接配置数组。
-   * @throws {Error} 当 Store 无法读取或保存时抛出。
+   * @returns {Promise<ConnectionProfile[]>} 当前连接配置快照。
    */
-  const updateConnectionsTransaction = async (updater) => {
-    await connectionsReadyRef.current
-    const saved = await store.update(StoreKeys.SSH_CONNECTIONS, current => {
-      const latest = Array.isArray(current)
-        ? sortProfiles(current.map(normalizeProfile).filter(Boolean))
-        : [...connectionsRef.current]
-      const next = updater(latest)
-      if (!Array.isArray(next)) throw new Error('连接配置更新结果无效')
-      return sortProfiles(next)
+  const loadConnections = useCallback(async () => {
+    await store.init()
+    return applyConnectionSnapshot(await invoke('list_connection_profiles'))
+  }, [applyConnectionSnapshot])
+
+  // Store 的键事件可能在事务保存完成前到达，只作为失效通知，不直接采纳裸数组。
+  useEffect(() => {
+    void loadConnections().catch(loadError => {
+      if (componentMountedRef.current) void notification.error(`同步连接配置失败：${ normalizeError(loadError) }`)
     })
-    const profiles = Array.isArray(saved)
-      ? sortProfiles(saved.map(normalizeProfile).filter(Boolean))
-      : []
-    connectionsRef.current = profiles
-    if (componentMountedRef.current) setConnections(profiles)
+  }, [ loadConnections, storedConnections, storedConnectionsRevision ])
+
+  // 身份改变或配置删除时清理旧会话，不能以新服务器标题继续操作旧服务器。
+  useEffect(() => {
+    if (!currentConnection || connectionsRevisionRef.current < 0) return
+    const latest = connections.find(item => item.id === currentConnection.id)
+    if (sameProfileIdentity(currentConnection, latest)) {
+      if (currentConnection.revision !== latest.revision) setCurrentConnection(latest)
+      return
+    }
+    const id = currentConnection.id
+    ownedConnectionIdRef.current = null
+    resetRemoteView()
+    void sftpManager.disconnect(id).catch(() => undefined)
+    setCredentials(previous => {
+      const updated = new Map(previous)
+      updated.delete(id)
+      return updated
+    })
+    const message = latest ? '连接配置已更改，请重新连接' : '连接配置已删除'
+    setConnectionFailure(message)
+    updateSessionState({ status: 'error', phase: 'credentials', message })
+    void notification.error(message)
+  }, [ connections, currentConnection, resetRemoteView ])
+
+  // 首次加载连接配置；失败时保留用户可见的连接状态和错误说明。
+  useEffect(() => {
+    if (connectionsLoadStartedRef.current) return
+    connectionsLoadStartedRef.current = true
+    connectionsReadyRef.current = loadConnections()
+    void connectionsReadyRef.current.catch(loadError => {
+      if (!componentMountedRef.current) return
+      setConnectionFailure(`读取连接配置失败：${ normalizeError(loadError) }`)
+      updateSessionState({ status: 'error', message: `读取连接配置失败：${ normalizeError(loadError) }` })
+    })
+  }, [loadConnections])
+
+  /**
+   * 执行单条配置的原生原子操作，并继续通过 Store 事件同步其他窗口。
+   *
+   * @param {string} command - 原生连接配置命令。
+   * @param {Object} args - 命令参数。
+   * @returns {Promise<ConnectionProfile[]>} 本次操作提交后的完整配置快照。
+   */
+  const mutateConnectionProfiles = async (command, args) => {
+    await connectionsReadyRef.current
+    const snapshot = await invoke(command, args)
+    applyConnectionSnapshot(snapshot)
+    const profiles = await loadConnections()
+    const id = args.id || args.profile?.id
+    const committed = snapshot.profiles.find(item => item.id === id)
+    const latest = profiles.find(item => item.id === id)
+    // 保存后的通知和明文缓存也必须属于本次提交，不能把旧密码绑定到更新的版本。
+    if (Boolean(committed) !== Boolean(latest) || committed?.revision !== latest?.revision) {
+      throw new Error('连接配置已再次更改，请重新打开后重试')
+    }
     return profiles
   }
 
@@ -512,28 +566,24 @@ function FileBrowserPanel({
    * @param {ConnectionProfile} profile - 已通过表单校验的新连接配置。
    * @param {ConnectionCredentials} credentialsForProfile - 本次保存使用的明文密码，仅用于调用加密命令。
    * @returns {Promise<void>} 配置保存和内存凭据更新完成后的 Promise。
-   * @throws {Error} 当配置持久化失败时抛出。
+   * @throws {Error} 当配置持久化失败或编辑版本过期时抛出。
    */
   const handleAddConnection = async (profile, credentialsForProfile) => {
     const password = credentialsForProfile?.password
     if (typeof password !== 'string' || password.length === 0) {
       throw new Error('密码不能为空')
     }
+    // 编辑时保留弹窗打开时的版本，不用后续 Store 事件替换用户正在编辑的快照。
+    const expectedRevision = editingConnection?.id === profile.id ? editingConnection.revision : null
     const encryptedPassword = await encryptPassword(password)
-    const profiles = await updateConnectionsTransaction(latest => {
-      const previous = latest.find(item => item.id === profile.id)
-      const persistedProfile = {
-        ...profile,
-        encryptedPassword: encryptedPassword || previous?.encryptedPassword || null
-      }
-      return [ persistedProfile, ...latest.filter(item => item.id !== profile.id) ]
+    const profiles = await mutateConnectionProfiles('save_connection_profile', {
+      profile: { ...profile, encryptedPassword },
+      expectedRevision
     })
-    setCredentials(previous => {
-      const updated = new Map(previous)
-      if (password) updated.set(profile.id, { password })
-      return updated
-    })
-    onConnectionSaved?.(profiles.find(item => item.id === profile.id) || profile)
+    const savedProfile = profiles.find(item => item.id === profile.id)
+    if (!savedProfile) throw new Error('连接配置不存在')
+    setCredentials(previous => new Map(previous).set(profile.id, { password, revision: savedProfile.revision }))
+    onConnectionSaved?.(savedProfile)
   }
 
   /**
@@ -564,55 +614,69 @@ function FileBrowserPanel({
    * @returns {Promise<void>} 删除或取消确认流程完成后的 Promise。
    */
   const handleDeleteConnection = async (connectionId) => {
-    if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
-    if (currentConnectionId === connectionId) await handleDisconnect({ skipConfirm: true })
-    await sftpManager.removeConnection(connectionId).catch(() => undefined)
-    await updateConnectionsTransaction(latest => latest.filter(connection => connection.id !== connectionId))
-    await invoke('update_workspace_layout', { connectionId, layout: null })
-      .catch(error => console.warn('清理已删除连接的工作区布局失败：', normalizeError(error)))
-    setCredentials(previous => {
-      const updated = new Map(previous)
-      updated.delete(connectionId)
-      return updated
-    })
-    onConnectionDeleted?.(connectionId)
-    void notification.success('连接已删除')
+    const profile = connectionsRef.current.find(item => item.id === connectionId)
+    if (!profile) {
+      void notification.error('删除连接失败：连接配置已删除')
+      return
+    }
+    try {
+      if (!(await confirm('删除连接配置？当前会话中的密码也会被清除。', { title: '删除连接', kind: 'warning' }))) return
+      // 配置和布局由原生端同一事务删除；失败时不提前断开当前会话。
+      await mutateConnectionProfiles('delete_connection_profile', { id: connectionId, expectedRevision: profile.revision })
+      if (activeConnectionIdRef.current === connectionId) await handleDisconnect({ skipConfirm: true })
+      await sftpManager.removeConnection(connectionId).catch(() => undefined)
+      setCredentials(previous => {
+        const updated = new Map(previous)
+        updated.delete(connectionId)
+        return updated
+      })
+      onConnectionDeleted?.(connectionId)
+      void notification.success('连接已删除')
+    } catch (deleteError) {
+      void notification.error(`删除连接失败：${ normalizeError(deleteError) }`)
+    }
   }
 
   /**
-   * 合并并保存单个连接配置的字段变更。
+   * 对握手时捕获的配置版本执行字段更新，防止旧身份覆盖较新的配置。
    *
-   * @param {string} connectionId - 要更新的连接配置 ID。
+   * @param {ConnectionProfile} profile - 发生操作时捕获的连接配置。
    * @param {Partial<ConnectionProfile>} changes - 需要覆盖的配置字段。
-   * @returns {Promise<ConnectionProfile|undefined>} 更新后的配置；未找到时返回 undefined。
-   * @throws {Error} 当本地 Store 写入失败时抛出。
+   * @returns {Promise<ConnectionProfile>} 更新后的配置。
+   * @throws {Error} 当配置已更改、删除或本地 Store 写入失败时抛出。
    */
-  const updateProfile = async (connectionId, changes) => {
-    const next = await updateConnectionsTransaction(latest => latest.map(profile => profile.id === connectionId
-      ? { ...profile, ...changes, updatedAt: new Date().toISOString() }
-      : profile))
-    return next.find(profile => profile.id === connectionId)
+  const updateProfile = async (profile, changes) => {
+    const profiles = await mutateConnectionProfiles('patch_connection_profile', {
+      id: profile.id,
+      changes,
+      expectedRevision: profile.revision
+    })
+    const updated = profiles.find(item => item.id === profile.id)
+    if (!updated) throw new Error('连接配置不存在')
+    return updated
   }
 
   /**
-   * 在认证成功后立即加密并回写连接密码；持久化失败由调用方单独提示。
+   * 在认证成功后加密并回写握手时对应版本的密码。
    *
-   * @param {string} connectionId - 要更新的连接配置 ID。
+   * @param {ConnectionProfile} profile - 本次握手所使用的配置及版本。
    * @param {string} password - 已通过 SSH 认证的明文密码，仅在本次调用期间使用。
-   * @returns {Promise<ConnectionProfile|undefined>} 更新后的配置。
-   * @throws {Error} 当加密或 Store 写入失败时抛出。
+   * @returns {Promise<ConnectionProfile>} 更新后的配置。
+   * @throws {Error} 当加密、配置并发校验或 Store 写入失败时抛出。
    */
-  const persistConnectionPassword = async (connectionId, password) => {
+  const persistConnectionPassword = async (profile, password) => {
     if (typeof password !== 'string' || password.length === 0) {
       throw new Error('密码不能为空')
     }
     const encryptedPassword = await encryptPassword(password)
-    const profiles = await updateConnectionsTransaction(latest => latest.map(profile => profile.id === connectionId
-      ? { ...profile, encryptedPassword, updatedAt: new Date().toISOString() }
-      : profile))
-    const profile = profiles.find(item => item.id === connectionId)
-    if (!profile) throw new Error('连接配置不存在')
-    return profile
+    return updateProfile(profile, { encryptedPassword })
+  }
+
+  /** 每个连接阶段重新核对权威身份，拒绝迟到的握手继续使用已删除或已替换的配置。 */
+  const requireCurrentProfile = async profile => {
+    const latest = (await loadConnections()).find(item => item.id === profile.id)
+    if (!sameProfileIdentity(profile, latest)) throw new Error('连接配置已更改或删除，请重新连接')
+    return latest
   }
 
   /**
@@ -643,93 +707,137 @@ function FileBrowserPanel({
       ? { password: credentialsForProfile }
       : { password: credentialsForProfile?.password || '' }
     let connectionId = null
-    let authenticated = false
+    let connectionRecord = null
+    let connectionSnapshot = null
+    let handshakeProfile = connection
     let retryMessage = ''
+    const disconnectAttempt = async generation => {
+      const current = sftpManager.getConnectionInfo(connectionId)
+      const expectedGeneration = connectionSnapshot?.generation ?? generation
+      if (!connectionId || !connectionRecord || current !== connectionRecord
+        || (expectedGeneration != null && current.generation !== expectedGeneration)) return
+      await sftpManager.disconnect(connectionId).catch(() => undefined)
+    }
     try {
-      const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
-      connectionId = await sftpManager.createConnection({ ...latestConnection, ...credentialsValue })
+      // 从密码输入或解密时捕获的快照建立握手，不将旧凭据套到后来更改的主机身份上。
+      // 身份核对不提升凭据的并发版本；否则旧密码可能借新版本覆盖用户刚修改的密文。
+      await requireCurrentProfile(handshakeProfile)
+      if (!componentMountedRef.current) return
+      connectionId = await sftpManager.createConnection({ ...handshakeProfile, ...credentialsValue })
+      connectionRecord = sftpManager.getConnectionInfo(connectionId)
       ownedConnectionIdRef.current = connectionId
       if (!componentMountedRef.current) {
-        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        await disconnectAttempt()
         return
       }
       let result = await sftpManager.connect(connectionId)
       if (!componentMountedRef.current) {
-        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        await disconnectAttempt(result.connected ? result.generation : undefined)
         return
       }
 
       if (result.requiresHostKeyConfirmation) {
         updateSessionState({ status: 'waiting-user', phase: 'host-key', message: '请确认服务器身份指纹后继续' })
         const accepted = await confirm(
-          `首次连接 ${ latestConnection.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
+          `首次连接 ${ handshakeProfile.host } 需要确认服务器身份。\n\n服务器指纹：${ result.hostKey.fingerprint }\n算法：${ result.hostKey.algorithm }\n\n只有确认这是你的目标服务器时才信任。Portal 会保存该指纹，后续如果同一服务器指纹变化会阻止连接。`,
           { title: '确认 SSH 主机密钥', kind: 'warning', okLabel: '信任并继续', cancelLabel: '取消' }
         )
         if (!accepted) throw new Error('已取消主机密钥确认')
         if (!componentMountedRef.current) return
         await sftpManager.updateHostKey(connectionId, result.hostKey.fingerprint)
-        await updateProfile(connection.id, { hostKeyFingerprint: result.hostKey.fingerprint })
+        handshakeProfile = await updateProfile(handshakeProfile, { hostKeyFingerprint: result.hostKey.fingerprint })
         result = await sftpManager.connect(connectionId)
         if (!componentMountedRef.current) {
-          await sftpManager.disconnect(connectionId).catch(() => undefined)
+          await disconnectAttempt(result.connected ? result.generation : undefined)
           return
         }
       }
 
       if (!result.connected) throw new Error('服务器连接失败')
-      authenticated = true
-      // 认证已经成功；密码落盘失败不能撤销远程会话，只提示用户下次需要重新输入。
+      connectionSnapshot = { record: connectionRecord, generation: result.generation }
+      if (!sftpManager.isCurrentConnection(connectionId, connectionSnapshot)) {
+        throw new Error('连接已更改，请重新连接')
+      }
+      await requireCurrentProfile(handshakeProfile)
+      // 身份仍一致时，密码落盘失败不撤销已认证会话；身份改变则必须停止旧握手。
       try {
-        await persistConnectionPassword(connection.id, credentialsValue.password)
+        handshakeProfile = await persistConnectionPassword(handshakeProfile, credentialsValue.password)
         if (componentMountedRef.current) {
-          setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
+          setCredentials(previous => new Map(previous).set(connection.id, {
+            ...credentialsValue,
+            revision: handshakeProfile.revision
+          }))
         }
       } catch (credentialError) {
+        handshakeProfile = await requireCurrentProfile(handshakeProfile)
         if (componentMountedRef.current) {
           void notification.error(`密码持久化失败：${ normalizeError(credentialError) }`)
         }
       }
 
       updateSessionState({ status: 'connecting', phase: 'files', message: '正在准备远程文件目录...' })
+      if (!sftpManager.isCurrentConnection(connectionId, connectionSnapshot)) throw new Error('连接已更改，请重新连接')
       const home = await sftpManager.getRemoteUserHome(connectionId)
       if (!componentMountedRef.current) {
-        await sftpManager.disconnect(connectionId).catch(() => undefined)
+        await disconnectAttempt()
         return
       }
-      const profile = {
-        ...(connectionsRef.current.find(item => item.id === connection.id) || connection),
-        hostKeyFingerprint: result.hostKey?.fingerprint
-          || connectionsRef.current.find(item => item.id === connection.id)?.hostKeyFingerprint
-          || connection.hostKeyFingerprint
+      let profile = await requireCurrentProfile(handshakeProfile)
+      if (!componentMountedRef.current) {
+        await disconnectAttempt()
+        return
       }
+      if (!sftpManager.isCurrentConnection(connectionId, connectionSnapshot)) throw new Error('连接已更改，请重新连接')
       activeConnectionIdRef.current = connectionId
       setCurrentConnection(profile)
       setCurrentConnectionId(connectionId)
       setHomeDir(home || '/')
       setDrives(deriveRemoteDrives(home || '/'))
-      setCurrentPath(home || '/')
-      setPathInput(home || '/')
-      await loadRemoteDirectory(home || '/', connectionId)
-      if (
-        activeConnectionIdRef.current !== connectionId
-        || sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED
-      ) {
-        throw new Error('连接已断开')
+      currentPathRef.current = normalizeRemotePath(home || '/')
+      setCurrentPath(currentPathRef.current)
+      setPathInput(currentPathRef.current)
+      let directoryPromise = loadRemoteDirectory(home || '/', connectionId)
+      let directoryResult = await directoryPromise
+      while (true) {
+        if (!componentMountedRef.current) return
+        if (activeConnectionIdRef.current !== connectionId || !sftpManager.isCurrentConnection(connectionId, connectionSnapshot)) {
+          throw new Error('连接已断开或更改')
+        }
+        const latestRequest = latestDirectoryRequestRef.current
+        if (!latestRequest || latestRequest.connectionId !== connectionId
+          || latestRequest.connection.record !== connectionSnapshot.record
+          || latestRequest.connection.generation !== connectionSnapshot.generation) {
+          throw new Error('远程目录请求已取消')
+        }
+        if (latestRequest.promise !== directoryPromise) {
+          directoryPromise = latestRequest.promise
+          directoryResult = await directoryPromise
+          continue
+        }
+        if (directoryResult.status === 'failed') throw directoryResult.error
+        if (directoryResult.status !== 'success') throw new Error('远程目录请求已取消')
+        profile = await requireCurrentProfile(profile)
+        // 配置读取期间也可能发生新导航，必须等待最新目录的真实结果。
+        if (latestDirectoryRequestRef.current !== latestRequest) continue
+        if (!componentMountedRef.current) return
+        if (activeConnectionIdRef.current !== connectionId || !sftpManager.isCurrentConnection(connectionId, connectionSnapshot)) {
+          throw new Error('连接已断开或更改')
+        }
+        break
       }
-      setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
       setConnectionFailure('')
+      setCurrentConnection(profile)
       onSessionConnected?.({ ...profile, id: connectionId }, attemptId)
       updateSessionState({ status: 'connected', phase: 'files', message: '文件目录已就绪' })
       void notification.success('连接成功')
     } catch (error) {
       if (!componentMountedRef.current) {
-        if (connectionId) await sftpManager.disconnect(connectionId).catch(() => undefined)
+        await disconnectAttempt()
         return
       }
-      if (connectionId) {
+      if (connectionId && sftpManager.getConnectionInfo(connectionId) === connectionRecord
+        && (!connectionSnapshot || connectionRecord?.generation === connectionSnapshot.generation)) {
         await sftpManager.removeConnection(connectionId).catch(() => undefined)
-      } else {
-        await sftpManager.removeConnection(connection.id).catch(() => undefined)
       }
       ownedConnectionIdRef.current = null
       const readableError = getReadableConnectionError(error)
@@ -740,8 +848,6 @@ function FileBrowserPanel({
           updated.delete(connection.id)
           return updated
         })
-      } else if (authenticated) {
-        setCredentials(previous => new Map(previous).set(connection.id, credentialsValue))
       }
       retryMessage = credentialFailed ? readableError : ''
       resetRemoteView()
@@ -779,6 +885,7 @@ function FileBrowserPanel({
     updateSessionState({ status: 'connecting', phase: 'credentials', message: '正在读取连接配置...' })
     try {
       await connectionsReadyRef.current
+      await loadConnections()
     } catch (loadError) {
       const message = `读取连接配置失败：${ normalizeError(loadError) }`
       setConnectionFailure(message)
@@ -786,7 +893,14 @@ function FileBrowserPanel({
       void notification.error(message)
       return
     }
-    const latestConnection = connectionsRef.current.find(item => item.id === connection.id) || connection
+    const latestConnection = connectionsRef.current.find(item => item.id === connection.id)
+    if (!latestConnection) {
+      const message = '连接配置已删除，请重新选择连接'
+      setConnectionFailure(message)
+      updateSessionState({ status: 'error', phase: 'credentials', message })
+      void notification.error(message)
+      return
+    }
     if (workspaceMode === 'launcher' && onOpenConnection) {
       onOpenConnection(latestConnection)
       return
@@ -799,10 +913,11 @@ function FileBrowserPanel({
       return
     }
     let credentialsValue = credentials.get(latestConnection.id)
+    if (credentialsValue?.revision !== latestConnection.revision) credentialsValue = null
     if (!credentialsValue?.password && latestConnection.encryptedPassword) {
       try {
         const password = await decryptPassword(latestConnection.encryptedPassword)
-        credentialsValue = { password }
+        credentialsValue = { password, revision: latestConnection.revision }
         setCredentials(previous => new Map(previous).set(latestConnection.id, credentialsValue))
       } catch (error) {
         console.warn(`解密连接 ${ latestConnection.name } 的保存密码失败`, error)
@@ -877,16 +992,21 @@ function FileBrowserPanel({
    */
   const handleDisconnect = async ({ skipConfirm = false } = {}) => {
     if (currentConnectionId && !skipConfirm) {
-      const accepted = await confirm(
-        `确定断开与“${ currentConnection?.name || currentConnection?.host || '当前服务器' }”的连接吗？`,
-        {
-          title: '断开连接',
-          kind: 'warning',
-          okLabel: '断开',
-          cancelLabel: '取消'
-        }
-      )
-      if (!accepted) return
+      try {
+        const accepted = await confirm(
+          `确定断开与“${ currentConnection?.name || currentConnection?.host || '当前服务器' }”的连接吗？`,
+          {
+            title: '断开连接',
+            kind: 'warning',
+            okLabel: '断开',
+            cancelLabel: '取消'
+          }
+        )
+        if (!accepted) return
+      } catch (confirmError) {
+        void notification.error(`确认断开连接失败：${ normalizeError(confirmError) }`)
+        return
+      }
     }
     const connectionId = currentConnectionId
     // 用户主动断开时忽略正在传输中的连接事件；只有意外断开才显示重连提示。
@@ -918,35 +1038,64 @@ function FileBrowserPanel({
   }, [ onSessionDisconnectReady, workspaceMode ])
 
   /**
-   * 加载远程目录，并通过请求序号丢弃已经过期的响应。
+   * 加载远程目录；新导航同时取消旧请求并拒绝过期结果回写。
    *
    * @param {string} path - 要加载的远程目录路径。
    * @param {string|null} [connectionId=currentConnectionId] - 使用的 SSH 连接 ID。
-   * @returns {Promise<void>} 目录列表加载或错误状态更新完成后的 Promise。
+   * @param {{preservePathInput?: boolean}} [options={}] - 后台刷新时保留未提交的路径草稿。
+   * @returns {Promise<{status: 'success'|'failed'|'superseded', error?: unknown}>} 本次加载结果。
    */
-  const loadRemoteDirectory = useCallback(async (path, connectionId = currentConnectionId) => {
+  const loadRemoteDirectory = useCallback((path, connectionId = currentConnectionId, options = {}) => {
     if (!connectionId) {
       setError('尚未连接服务器')
-      return
+      return Promise.resolve({ status: 'failed', error: new Error('尚未连接服务器') })
     }
+    const record = sftpManager.getConnectionInfo(connectionId)
+    const connection = { record, generation: record?.generation }
     const normalizedPath = normalizeRemotePath(path)
     const currentRequest = ++requestId.current
+    if (!directoryRequestPrefixRef.current) {
+      directoryRequestPrefixRef.current = typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `${ Date.now() }-${ Math.random().toString(16).slice(2) }`
+    }
+    directoryAbortRef.current?.abort()
+    const controller = new window.AbortController()
+    directoryAbortRef.current = controller
+    directoryIntentRef.current = { connectionId, path: normalizedPath }
+    const directoryRequest = { connectionId, connection, promise: null }
+    latestDirectoryRequestRef.current = directoryRequest
     setLoading(true)
     setError(null)
     // 目录统计属于低优先级任务，切换和刷新目录时必须先让出同一条 SFTP 会话。
     sftpManager.cancelDirectorySizeRequests(connectionId, '正在切换目录')
-    try {
-      const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath, {
-        showHiddenFiles: includeHiddenFiles
-      })
-      if (currentRequest !== requestId.current) return
-      setFiles(result)
-      setCurrentPath(normalizedPath)
-      setPathInput(normalizedPath)
-    } catch (requestError) {
-      if (currentRequest === requestId.current) {
+    directoryRequest.promise = (async () => {
+      const superseded = () => controller.signal.aborted
+        || currentRequest !== requestId.current
+        || !componentMountedRef.current
+        || activeConnectionIdRef.current !== connectionId
+        || !sftpManager.isCurrentConnection(connectionId, connection)
+      try {
+        const result = await sftpManager.listRemoteDirectory(connectionId, normalizedPath, {
+          showHiddenFiles: includeHiddenFiles,
+          signal: controller.signal,
+          requestId: `directory-${ directoryRequestPrefixRef.current }-${ currentRequest }`
+        })
+        if (superseded()) return { status: 'superseded' }
+        currentPathRef.current = normalizedPath
+        setFiles(result)
+        setCurrentPath(normalizedPath)
+        if (!options.preservePathInput) setPathInput(normalizedPath)
+        return { status: 'success' }
+      } catch (requestError) {
+        if (controller.signal.aborted || currentRequest !== requestId.current || !componentMountedRef.current) {
+          return { status: 'superseded' }
+        }
+        directoryIntentRef.current = { connectionId, path: currentPathRef.current }
         setFiles([])
         const connectionStillActive = activeConnectionIdRef.current === connectionId
+          && sftpManager.getConnectionInfo(connectionId) === record
+          && record?.generation === connection.generation
         if (sftpManager.getConnectionStatus(connectionId) !== SftpConnectionStatus.CONNECTED) {
           if (connectionStillActive) {
             const message = normalizeError(requestError)
@@ -957,15 +1106,51 @@ function FileBrowserPanel({
           }
         } else if (!connectionStillActive) {
           // 连接丢失事件已经完成页面重置，忽略这次过期请求的错误。
-          return
+          return { status: 'superseded' }
         } else {
           setError(normalizeError(requestError))
         }
+        return { status: 'failed', error: requestError }
+      } finally {
+        if (currentRequest === requestId.current) {
+          directoryAbortRef.current = null
+          setLoading(false)
+        }
       }
-    } finally {
-      if (currentRequest === requestId.current) setLoading(false)
-    }
+    })()
+    return directoryRequest.promise
   }, [ currentConnectionId, includeHiddenFiles, resetRemoteView ])
+  loadRemoteDirectoryRef.current = loadRemoteDirectory
+
+  /** 捕获变更发起时的连接对象和代次，不让同 ID 的重连继承旧操作。 */
+  const captureOperationTarget = (connectionId, path) => {
+    const record = sftpManager.getConnectionInfo(connectionId)
+    const connection = { record, generation: record?.generation }
+    return { connectionId, path, connection }
+  }
+
+  const isCurrentOperationTarget = target => Boolean(target?.connectionId)
+    && sftpManager.isCurrentConnection(target.connectionId, target.connection)
+
+  /**
+   * 变更完成后失效目标目录的缓存，仅在仍显示该目录且没有前往别处的导航时刷新。
+   *
+   * @param {{connectionId: string, path: string, connection: Object}} target - 开始操作时捕获的远程连接和目录。
+   * @returns {Promise<void>} 必要的刷新完成后的 Promise。
+   */
+  const refreshDirectoryAfterMutation = async target => {
+    const { connectionId, path } = target
+    if (!isCurrentOperationTarget(target) || typeof path !== 'string') return
+    const normalizedPath = normalizeRemotePath(path)
+    sftpManager.invalidateDirectorySizeCache(connectionId, normalizedPath)
+    const intent = directoryIntentRef.current
+    if (
+      activeConnectionIdRef.current !== connectionId
+      || currentPathRef.current !== normalizedPath
+      || (intent && (intent.connectionId !== connectionId || intent.path !== normalizedPath))
+    ) return
+    await loadRemoteDirectoryRef.current?.(normalizedPath, connectionId, { preservePathInput: true })
+  }
 
   // 记录已经应用到远程列表的隐藏文件偏好，避免首次渲染重复刷新目录。
   const appliedHiddenFilesPreferenceRef = useRef(includeHiddenFiles)
@@ -975,9 +1160,11 @@ function FileBrowserPanel({
     appliedHiddenFilesPreferenceRef.current = includeHiddenFiles
     if (!preferenceChanged || !currentConnectionId) return
 
-    // 设置变更后重新读取当前目录；该调用也会取消旧视图的目录大小任务。
-    void loadRemoteDirectory(currentPath, currentConnectionId)
-  }, [ currentConnectionId, currentPath, includeHiddenFiles, loadRemoteDirectory ])
+    // 如果导航尚未完成，保留用户最后选择的目标而不是退回旧目录。
+    const intent = directoryIntentRef.current
+    const path = intent?.connectionId === currentConnectionId ? intent.path : currentPathRef.current
+    void loadRemoteDirectory(path, currentConnectionId)
+  }, [ currentConnectionId, includeHiddenFiles, loadRemoteDirectory ])
 
   /**
    * 处理远程路径输入框的回车提交。
@@ -1096,23 +1283,38 @@ function FileBrowserPanel({
   }
 
   /**
-   * 重新读取当前远程目录。
+   * 手动刷新当前目录，或在上传完成时仅刷新仍然显示的目标目录。
    *
-   * @returns {void}
+   * @param {{connectionId?: string, path?: string}|Object} [target] - 上传目标；按钮事件视为手动刷新。
+   * @returns {Promise<void>|undefined} 需要异步刷新时返回其 Promise。
    */
-  const handleRefresh = () => void loadRemoteDirectory(currentPath)
+  // FileBrowser 的异步上传队列保留发起时的回调，因此刷新也必须保留当时的会话代次。
+  const refreshRecord = sftpManager.getConnectionInfo(currentConnectionId)
+  const refreshConnection = { record: refreshRecord, generation: refreshRecord?.generation }
+  const handleRefresh = target => {
+    if (typeof target?.connectionId === 'string' && typeof target?.path === 'string') {
+      return refreshDirectoryAfterMutation({ ...target, connection: target.connection || refreshConnection })
+    }
+    const connectionId = activeConnectionIdRef.current
+    const intent = directoryIntentRef.current
+    const path = intent?.connectionId === connectionId ? intent.path : currentPathRef.current
+    return loadRemoteDirectoryRef.current?.(path, connectionId)
+  }
 
   /**
-   * 在当前远程目录创建子目录并刷新列表。
+   * 在发起操作的远程目录创建子目录，并按最新视图状态决定是否刷新。
    *
    * @param {string} name - 已通过界面校验的新目录名称。
-   * @returns {Promise<void>} 目录创建和当前列表刷新完成后的 Promise。
-   * @throws {Error} 当远程目录创建或列表刷新失败时抛出。
+   * @returns {Promise<void>} 目录创建和必要刷新完成后的 Promise。
+   * @throws {Error} 当远程目录创建失败时抛出。
    */
   const handleCreateDirectory = async (name) => {
-    const targetPath = joinRemotePath(currentPath, name)
-    await sftpManager.createRemoteDirectory(currentConnectionId, targetPath)
-    await loadRemoteDirectory(currentPath)
+    const target = captureOperationTarget(currentConnectionId, currentPath)
+    try {
+      await sftpManager.createRemoteDirectory(target.connectionId, joinRemotePath(target.path, name))
+    } finally {
+      await refreshDirectoryAfterMutation(target)
+    }
   }
 
   /**
@@ -1124,11 +1326,13 @@ function FileBrowserPanel({
    */
   const handleDownloadItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
+    const target = captureOperationTarget(currentConnectionId, currentPath)
+    if (!isCurrentOperationTarget(target)) return false
 
     let downloadPath
     try {
       downloadPath = await resolveDownloadPath()
-      if (!downloadPath) return false
+      if (!downloadPath || !isCurrentOperationTarget(target)) return false
     } catch (error) {
       void notification.error(`下载失败：${ normalizeError(error) }`)
       return false
@@ -1145,7 +1349,7 @@ function FileBrowserPanel({
         cancelLabel: '取消'
       }
     )
-    if (!accepted) return false
+    if (!accepted || !isCurrentOperationTarget(target)) return false
     onConfirmed?.()
 
     const failedEntries = []
@@ -1197,7 +1401,7 @@ function FileBrowserPanel({
      */
     const downloadOne = async (entry, queueIndex, overwrite) => {
       transferId = null
-      const remotePath = joinRemotePath(currentPath, entry.name)
+      const remotePath = joinRemotePath(target.path, entry.name)
       const localPath = joinLocalPath(downloadPath, entry.name)
       publishProgress(0, entry, queueIndex)
       try {
@@ -1205,7 +1409,7 @@ function FileBrowserPanel({
           ? sftpManager.downloadDirectory.bind(sftpManager)
           : sftpManager.downloadFile.bind(sftpManager)
         await download(
-          currentConnectionId,
+          target.connectionId,
           remotePath,
           localPath,
           (progress, payload) => publishProgress(progress, entry, queueIndex, payload),
@@ -1213,7 +1417,8 @@ function FileBrowserPanel({
           id => {
             transferId = id
             publishProgress(0, entry, queueIndex)
-          }
+          },
+          target.connection
         )
       } finally {
         transferId = null
@@ -1222,17 +1427,19 @@ function FileBrowserPanel({
 
     try {
       for (const [ queueIndex, entry ] of entries.entries()) {
-        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        if (!isCurrentOperationTarget(target)) break
         try {
           await downloadOne(entry, queueIndex, false)
           downloadedCount += 1
+          if (!isCurrentOperationTarget(target)) break
           continue
         } catch (downloadError) {
           const message = normalizeError(downloadError)
+          if (!isCurrentOperationTarget(target)) break
           if (!message.includes('已存在')) {
             failedEntries.push({ entry, error: message })
             cancelled = message.includes('传输已取消')
-            if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+            if (cancelled || !isCurrentOperationTarget(target)) break
             continue
           }
 
@@ -1246,6 +1453,7 @@ function FileBrowserPanel({
               cancelLabel: '跳过'
             }
           )
+          if (!isCurrentOperationTarget(target)) break
           if (!overwriteAccepted) {
             skippedCount += 1
             continue
@@ -1253,11 +1461,12 @@ function FileBrowserPanel({
           try {
             await downloadOne(entry, queueIndex, true)
             downloadedCount += 1
+            if (!isCurrentOperationTarget(target)) break
           } catch (retryError) {
             const retryMessage = normalizeError(retryError)
             failedEntries.push({ entry, error: retryMessage })
             cancelled = retryMessage.includes('传输已取消')
-            if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+            if (cancelled || !isCurrentOperationTarget(target)) break
           }
         }
       }
@@ -1269,7 +1478,7 @@ function FileBrowserPanel({
       })
     }
 
-    if (cancelled || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+    if (cancelled || !isCurrentOperationTarget(target)) {
       return false
     }
     if (failedEntries.length === 0 && skippedCount === 0 && downloadedCount === entries.length) {
@@ -1292,19 +1501,20 @@ function FileBrowserPanel({
    *
    * @param {RemoteEntry} entry - 要删除的远程文件或目录条目。
    * @param {OperationStatus} status - 发布删除进度的操作状态对象。
+   * @param {{connectionId: string, path: string, connection: Object}} target - 发起删除时捕获的远程目录和会话。
    * @param {{queueIndex?: number, queueTotal?: number, showBatchPosition?: boolean}} [options={}] - 批量删除进度配置。
    * @returns {Promise<void>} 远程删除任务完成后的 Promise。
    * @throws {Error} 当远程删除失败或连接不可用时抛出。
    */
-  const deleteRemoteEntry = async (entry, status, options = {}) => {
+  const deleteRemoteEntry = async (entry, status, target, options = {}) => {
     const {
       queueIndex = 0,
       queueTotal = 1,
       showBatchPosition = false
     } = options
     await sftpManager.deleteRemoteItem(
-      currentConnectionId,
-      joinRemotePath(currentPath, entry.name),
+      target.connectionId,
+      joinRemotePath(target.path, entry.name),
       entry.isDirectory,
       (progress, payload = {}) => {
         const itemTotal = Number(payload.itemTotal) || 0
@@ -1334,7 +1544,8 @@ function FileBrowserPanel({
               : (itemTotal > 0 ? Math.max(itemTotal - itemIndex - 1, 0) : 0)
           }
         )
-      }
+      },
+      target.connection
     )
   }
 
@@ -1345,29 +1556,43 @@ function FileBrowserPanel({
    * @returns {Promise<void>} 删除、刷新和通知处理完成后的 Promise。
    */
   const handleDeleteItem = async (entry) => {
+    const target = captureOperationTarget(currentConnectionId, currentPath)
     const description = entry.isDirectory
       ? `确定删除文件夹“${ entry.name }”及其所有内容吗？此操作无法撤销。`
       : `确定删除“${ entry.name }”吗？`
-    const accepted = await confirm(description, {
-      title: '删除远程项目',
-      kind: 'warning',
-      okLabel: '删除',
-      cancelLabel: '取消'
-    })
-    if (!accepted) return
+    try {
+      const accepted = await confirm(description, {
+        title: '删除远程项目',
+        kind: 'warning',
+        okLabel: '删除',
+        cancelLabel: '取消'
+      })
+      if (!accepted) return
+    } catch (confirmError) {
+      void notification.error(`确认删除失败：${ normalizeError(confirmError) }`)
+      return
+    }
 
     const status = createOperationStatus('delete', entry.name)
+    let refreshStarted = false
     status.start(entry.isDirectory ? '正在删除文件夹及其内容...' : '正在删除文件...')
     try {
-      await deleteRemoteEntry(entry, status)
+      await deleteRemoteEntry(entry, status, target)
+      if (!isCurrentOperationTarget(target)) return
       status.update(92, '正在刷新目录...', { phase: 'refreshing' })
-      await loadRemoteDirectory(currentPath)
+      refreshStarted = true
+      await refreshDirectoryAfterMutation(target)
+      if (!isCurrentOperationTarget(target)) return
       void notification.success('已删除')
     } catch (deleteError) {
       const message = normalizeError(deleteError)
       void notification.error(`删除失败：${ message }`)
     } finally {
-      status.dismiss()
+      try {
+        if (!refreshStarted) await refreshDirectoryAfterMutation(target)
+      } finally {
+        status.dismiss()
+      }
     }
   }
 
@@ -1380,6 +1605,7 @@ function FileBrowserPanel({
    */
   const handleDeleteItems = async (entries, onConfirmed) => {
     if (!Array.isArray(entries) || entries.length < 2) return false
+    const target = captureOperationTarget(currentConnectionId, currentPath)
     const previewNames = entries.slice(0, 3).map(entry => entry.name).join('、')
     const omittedCount = entries.length - Math.min(entries.length, 3)
     const accepted = await confirm(
@@ -1391,30 +1617,32 @@ function FileBrowserPanel({
         cancelLabel: '取消'
       }
     )
-    if (!accepted) return false
+    if (!accepted || !isCurrentOperationTarget(target)) return false
     onConfirmed?.()
 
     const status = createOperationStatus('delete', `${ entries.length } 个项目`)
     status.start(`正在删除 ${ entries.length } 个项目...`)
     const failedEntries = []
     let deletedCount = 0
+    let refreshStarted = false
     try {
       for (const [ queueIndex, entry ] of entries.entries()) {
-        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        if (!isCurrentOperationTarget(target)) break
         try {
-          await deleteRemoteEntry(entry, status, {
+          await deleteRemoteEntry(entry, status, target, {
             queueIndex,
             queueTotal: entries.length,
             showBatchPosition: true
           })
           deletedCount += 1
+          if (!isCurrentOperationTarget(target)) break
         } catch (deleteError) {
           failedEntries.push({ entry, error: normalizeError(deleteError) })
-          if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+          if (!isCurrentOperationTarget(target)) break
         }
       }
 
-      if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+      if (!isCurrentOperationTarget(target)) {
         return false
       }
       status.update(92, '正在刷新目录...', {
@@ -1423,7 +1651,9 @@ function FileBrowserPanel({
         queueTotal: entries.length,
         pendingCount: 0
       })
-      await loadRemoteDirectory(currentPath)
+      refreshStarted = true
+      await refreshDirectoryAfterMutation(target)
+      if (!isCurrentOperationTarget(target)) return false
       if (failedEntries.length === 0 && deletedCount === entries.length) {
         void notification.success(`已删除 ${ entries.length } 个项目`)
         return true
@@ -1432,7 +1662,11 @@ function FileBrowserPanel({
       void notification.error(`已删除 ${ deletedCount } 个项目，${ failedEntries.length } 个失败${ failedNames ? `：${ failedNames }` : '' }`)
       return false
     } finally {
-      status.dismiss()
+      try {
+        if (!refreshStarted) await refreshDirectoryAfterMutation(target)
+      } finally {
+        status.dismiss()
+      }
     }
   }
 
@@ -1447,22 +1681,29 @@ function FileBrowserPanel({
   const handleRenameItem = async (entry, name) => {
     const trimmedName = name.trim()
     if (!trimmedName || trimmedName === entry.name) return
+    const target = captureOperationTarget(currentConnectionId, currentPath)
     const status = createOperationStatus('rename', `${ entry.name } -> ${ trimmedName }`)
+    let refreshStarted = false
     status.start('正在重命名...')
     try {
       await sftpManager.renameRemoteItem(
-        currentConnectionId,
-        joinRemotePath(currentPath, entry.name),
-        joinRemotePath(currentPath, trimmedName)
+        target.connectionId,
+        joinRemotePath(target.path, entry.name),
+        joinRemotePath(target.path, trimmedName)
       )
       status.update(82, '正在刷新目录...')
-      await loadRemoteDirectory(currentPath)
+      refreshStarted = true
+      await refreshDirectoryAfterMutation(target)
       void notification.success('已重命名')
     } catch (renameError) {
       // 保持弹窗打开，让用户修正名称或重新尝试。
       throw renameError
     } finally {
-      status.dismiss()
+      try {
+        if (!refreshStarted) await refreshDirectoryAfterMutation(target)
+      } finally {
+        status.dismiss()
+      }
     }
   }
 

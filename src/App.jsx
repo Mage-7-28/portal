@@ -17,7 +17,6 @@ import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
 import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.js'
-import FileBrowserPanel from './components/FileBrowserPanel'
 import TransferProgressProvider from './components/TransferProgressProvider.jsx'
 import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
@@ -27,12 +26,14 @@ import {
   openServerWorkspaceWindow,
   updateServerWorkspaceWindow
 } from './utils/terminalWindow.js'
-import ServerWorkspaceWindow from './components/ServerWorkspaceWindow.jsx'
 import { getServerWorkspaceParams } from './utils/serverWorkspace.js'
 import packageInfo from '../package.json'
 
 // 终端依赖体积较大，只有用户打开终端标签或独立终端窗口时才加载。
 const LazyTerminalWindow = lazy(() => import('./components/TerminalWindow.jsx'))
+// 工作区和连接列表仅由各自窗口入口加载，避免独立终端引入文件浏览器。
+const LazyServerWorkspaceWindow = lazy(() => import('./components/ServerWorkspaceWindow.jsx'))
+const LazyFileBrowserPanel = lazy(() => import('./components/FileBrowserPanel.jsx'))
 
 /**
  * 终端异步模块加载期间的轻量占位，避免首屏同步引入 xterm。
@@ -431,13 +432,15 @@ function MainApp() {
       <div className="app-shell">
         <div className="app-frame">
           <div className="app-content">
-            <FileBrowserPanel
-              workspaceMode="launcher"
-              showHiddenFiles={showHiddenFiles}
-              onOpenConnection={openConnectionWorkspace}
-              onConnectionDeleted={closeConnectionWorkspace}
-              onConnectionSaved={updateWorkspaceConnection}
-            />
+            <Suspense fallback={null}>
+              <LazyFileBrowserPanel
+                workspaceMode="launcher"
+                showHiddenFiles={showHiddenFiles}
+                onOpenConnection={openConnectionWorkspace}
+                onConnectionDeleted={closeConnectionWorkspace}
+                onConnectionSaved={updateWorkspaceConnection}
+              />
+            </Suspense>
           </div>
           <div
             className="download-status"
@@ -532,7 +535,11 @@ function MainApp() {
 function App() {
   const serverWorkspaceParams = getServerWorkspaceParams()
   if (serverWorkspaceParams) {
-    return <ServerWorkspaceWindow {...serverWorkspaceParams} />
+    return (
+      <Suspense fallback={null}>
+        <LazyServerWorkspaceWindow {...serverWorkspaceParams} />
+      </Suspense>
+    )
   }
   const terminalWindowParams = getTerminalWindowParams()
   if (terminalWindowParams) {

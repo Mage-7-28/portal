@@ -12,7 +12,8 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { PubSubBusinessKeyEnum, SftpConnectionStatus } from '../utils/common'
+import { PubSubBusinessKeyEnum } from '../utils/common'
+import { normalizeError } from '../utils/constants.js'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
@@ -119,7 +120,7 @@ const joinRemotePath = (basePath, name) => `${ basePath.replace(/\/+$/, '') || '
  * @param {() => void} props.handleGoBack - 返回上级目录回调。
  * @param {(event: Object) => void} props.handlePathChange - 路径输入变更回调。
  * @param {(event: Object) => void} props.handlePathSubmit - 路径表单提交回调。
- * @param {() => Promise<void>} props.handleRefresh - 刷新当前目录回调。
+ * @param {(target?: {connectionId: string, path: string, connection: Object}) => Promise<void>|void} props.handleRefresh - 手动刷新或按上传时捕获的目录和会话刷新。
  * @param {(entry: Object) => void} props.handleItemClick - 进入目录或打开文件回调。
  * @param {(name: string) => Promise<void>} props.handleCreateDirectory - 创建目录回调。
  * @param {(entry: Object) => Promise<void>} props.handleDeleteItem - 删除单个项目回调。
@@ -176,6 +177,14 @@ const FileBrowser = ({
   // 当前目录中的多选结果和批量操作 loading 状态。
   const [ selectedKeys, setSelectedKeys ] = React.useState([])
   const selectedKeySet = React.useMemo(() => new Set(selectedKeys), [selectedKeys])
+  const fileIndexByKey = React.useMemo(() => {
+    const indexes = new Map()
+    files.forEach((entry, index) => {
+      const key = getEntryKey(entry)
+      if (!indexes.has(key)) indexes.set(key, index)
+    })
+    return indexes
+  }, [files])
   const [ batchDeleting, setBatchDeleting ] = React.useState(false)
   const [ batchDownloading, setBatchDownloading ] = React.useState(false)
   // 终端工作区打开状态，以及用于并发调用计数的引用。
@@ -187,13 +196,23 @@ const FileBrowser = ({
   const selectionAnchorRef = React.useRef(null)
   const selectionPathRef = React.useRef(currentPath)
   const filesRef = React.useRef(files)
+  const fileIndexByKeyRef = React.useRef(fileIndexByKey)
   const batchStateRef = React.useRef({ batchDeleting, batchDownloading })
   const itemActionRefs = React.useRef({ handleItemClick, handleDeleteItem, handleRenameItem })
   const uploadModalOpenRef = React.useRef(uploadModalOpen)
   const uploadSubmittingRef = React.useRef(uploadSubmitting)
   const uploadDropProcessingRef = React.useRef(uploadDropProcessing)
   const uploadSessionRef = React.useRef(0)
+  const uploadViewRef = React.useRef(null)
+  const uploadRecord = sftpManager.getConnectionInfo(currentConnectionId)
+  uploadViewRef.current = {
+    connectionId: currentConnectionId,
+    path: currentPath,
+    files,
+    connection: { record: uploadRecord, generation: uploadRecord?.generation }
+  }
   filesRef.current = files
+  fileIndexByKeyRef.current = fileIndexByKey
   batchStateRef.current = { batchDeleting, batchDownloading }
   itemActionRefs.current = { handleItemClick, handleDeleteItem, handleRenameItem }
   uploadModalOpenRef.current = uploadModalOpen
@@ -208,15 +227,14 @@ const FileBrowser = ({
       setSelectedKeys([])
       return
     }
-    const availableKeys = new Set(files.map(getEntryKey))
     setSelectedKeys(previous => {
-      const next = previous.filter(key => availableKeys.has(key))
+      const next = previous.filter(key => fileIndexByKey.has(key))
       return next.length === previous.length ? previous : next
     })
-    if (selectionAnchorRef.current && !availableKeys.has(selectionAnchorRef.current)) {
+    if (selectionAnchorRef.current && !fileIndexByKey.has(selectionAnchorRef.current)) {
       selectionAnchorRef.current = null
     }
-  }, [ currentPath, files ])
+  }, [ currentPath, fileIndexByKey ])
 
   /**
    * 处理单选、Command/Ctrl 多选和 Shift 范围选择，并维护键盘操作锚点。
@@ -231,8 +249,8 @@ const FileBrowser = ({
     if (isBatchDeleting || isBatchDownloading) return
     const key = getEntryKey(entry)
     if (!key) return
-    const currentIndex = currentFiles.findIndex(item => getEntryKey(item) === key)
-    const anchorIndex = currentFiles.findIndex(item => getEntryKey(item) === selectionAnchorRef.current)
+    const currentIndex = fileIndexByKeyRef.current.get(key) ?? -1
+    const anchorIndex = fileIndexByKeyRef.current.get(selectionAnchorRef.current) ?? -1
     const rangeSelection = event.shiftKey && anchorIndex >= 0 && currentIndex >= 0
       ? currentFiles
         .slice(Math.min(anchorIndex, currentIndex), Math.max(anchorIndex, currentIndex) + 1)
@@ -281,6 +299,8 @@ const FileBrowser = ({
         selectionAnchorRef.current = null
         setSelectedKeys([])
       })
+    } catch (error) {
+      void notification.error(`批量删除失败：${ normalizeError(error) }`)
     } finally {
       setBatchDeleting(false)
     }
@@ -329,6 +349,8 @@ const FileBrowser = ({
         selectionAnchorRef.current = null
         setSelectedKeys([])
       })
+    } catch (error) {
+      void notification.error(`批量下载失败：${ normalizeError(error) }`)
     } finally {
       setBatchDownloading(false)
     }
@@ -422,6 +444,7 @@ const FileBrowser = ({
     if (uploadSubmittingRef.current || uploadDropProcessingRef.current || !paths?.length) return
     const appendToQueue = uploadModalOpenRef.current
     const sessionId = uploadSessionRef.current
+    const target = uploadViewRef.current
     const dropOrigin = { appendToQueue, sessionId }
     uploadDropProcessingRef.current = true
     setUploadDropProcessing(true)
@@ -449,8 +472,9 @@ const FileBrowser = ({
           modalOpen: uploadModalOpenRef.current,
           submitting: uploadSubmittingRef.current
         }) ? mergeUploadItems(previous, items) : previous)
-      } else if (items.length > 0 && action === 'upload') {
-        await startUploadQueueRef.current?.(items, true)
+      } else if (items.length > 0 && action === 'upload'
+        && sftpManager.isCurrentConnection(target.connectionId, target.connection)) {
+        await startUploadQueueRef.current?.(items, true, target)
       }
     } catch (error) {
       const action = getUploadDropResultAction(dropOrigin, {
@@ -523,14 +547,16 @@ const FileBrowser = ({
    *
    * @param {Array<{localPath: string, fileName: string, kind: 'file'|'directory'}>} uploadQueue - 要提交的本地项目队列。
    * @param {boolean} [fromDrop=false] - 是否由已完成路径检查的直接拖放启动。
+   * @param {Object} [uploadTarget=uploadViewRef.current] - 整个队列共用的目录、条目和原始会话。
    * @returns {Promise<void>} 队列处理、目录刷新和状态清理完成后的 Promise。
    */
-  const startUploadQueue = async (uploadQueue, fromDrop = false) => {
+  const startUploadQueue = async (uploadQueue, fromDrop = false, uploadTarget = uploadViewRef.current) => {
     if (
       uploadSubmittingRef.current
       || (!fromDrop && uploadPicking !== null)
       || uploadQueue.length === 0
       || (uploadDropProcessingRef.current && !fromDrop)
+      || !sftpManager.isCurrentConnection(uploadTarget?.connectionId, uploadTarget?.connection)
     ) return
     const duplicateNames = uploadQueue
       .map(item => item.fileName)
@@ -552,10 +578,10 @@ const FileBrowser = ({
     try {
       for (const [ queueIndex, item ] of uploadQueue.entries()) {
         const { localPath, fileName, kind } = item
-        if (sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) break
+        if (!sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) break
         let transferId = null
         let overwrite = false
-        const existing = files.find(entry => entry.name === fileName)
+        const existing = uploadTarget.files.find(entry => entry.name === fileName)
         if (existing && ((kind === 'directory' && !existing.isDirectory)
           || (kind === 'file' && existing.isDirectory))) {
           notification.error(
@@ -578,7 +604,8 @@ const FileBrowser = ({
           )
           if (!overwrite) continue
         }
-        const remotePath = joinRemotePath(currentPath, fileName)
+        if (!sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) break
+        const remotePath = joinRemotePath(uploadTarget.path, fileName)
         /**
          * 发布队列及文件夹内部进度，并绑定当前传输的取消动作。
          *
@@ -613,7 +640,7 @@ const FileBrowser = ({
         try {
           if (kind === 'directory') {
             await sftpManager.uploadDirectory(
-              currentConnectionId,
+              uploadTarget.connectionId,
               localPath,
               remotePath,
               (progress, payload) => publishProgress(Math.round(progress), payload),
@@ -621,12 +648,13 @@ const FileBrowser = ({
               id => {
                 transferId = id
                 publishProgress(0)
-              }
+              },
+              uploadTarget.connection
             )
             notification.success('上传成功', `文件夹 ${ fileName } 上传成功`)
           } else {
             await sftpManager.uploadFile(
-              currentConnectionId,
+              uploadTarget.connectionId,
               localPath,
               remotePath,
               (progress, payload) => publishProgress(Math.round(progress), payload),
@@ -634,7 +662,8 @@ const FileBrowser = ({
               id => {
                 transferId = id
                 publishProgress(0)
-              }
+              },
+              uploadTarget.connection
             )
             notification.success('上传成功', `文件 ${ fileName } 上传成功`)
           }
@@ -644,14 +673,11 @@ const FileBrowser = ({
             `${ kind === 'directory' ? '文件夹' : '文件' } ${ fileName } 上传失败：${ error.message || error.toString() || '未知错误' }`
           )
           const errorMessage = error.message || error.toString() || ''
-          if (errorMessage.includes('传输已取消')
-            || sftpManager.getConnectionStatus(currentConnectionId) !== SftpConnectionStatus.CONNECTED) {
+          if (error.code === 'TransferCancelled' || (!error.code && errorMessage.includes('传输已取消'))
+            || !sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) {
             break
           }
         }
-      }
-      if (sftpManager.getConnectionStatus(currentConnectionId) === SftpConnectionStatus.CONNECTED) {
-        handleRefresh()
       }
     } catch (error) {
       notification.error('上传文件失败', error.message || error.toString() || '未知错误')
@@ -663,6 +689,13 @@ const FileBrowser = ({
         ...progressIds,
         event: PROGRESS_EVENT_END
       })
+      if (sftpManager.isCurrentConnection(uploadTarget.connectionId, uploadTarget.connection)) {
+        try {
+          await handleRefresh(uploadTarget)
+        } catch (error) {
+          notification.error('刷新目录失败', error.message || error.toString() || '未知错误')
+        }
+      }
     }
   }
 
@@ -849,7 +882,7 @@ const FileBrowser = ({
             className="file-list"
             itemLayout="horizontal"
             dataSource={files}
-            rowKey={entry => entry.path || entry.name}
+            rowKey={getEntryKey}
             renderItem={renderFileItem}
           />
         )}

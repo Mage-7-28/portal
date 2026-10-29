@@ -4,7 +4,7 @@
 //! 文件传输以及交互式 PTY 终端。耗时的扫描和传输会放到独立线程或 Tauri
 //! blocking runtime 中执行，并通过事件把进度和状态返回给前端。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 #[cfg(test)]
 use std::fs;
 use std::fs::File;
@@ -14,23 +14,30 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::local_transfer::{LocalDownload, LocalTransferRoot};
 use crate::remote_policy::{parse_remote_uid, RemoteMutationPolicy};
 use crate::scan_budget::ScanBudget;
+use crate::terminal_flow::{InputSequence, OutputFlow, PendingResize};
+use crate::transfer_tasks::{TaskSnapshot, TransferTasks};
+use crate::transfer_validation::{
+    validate_transfer, validate_upload_target, SourceStamp, UploadTargetStamp,
+};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use serde::Serialize;
 use serde_json::json;
 use ssh2::{Channel, ErrorCode, ExtendedData, HashType, RenameFlags, Session, Sftp};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, State, WebviewWindow};
+#[path = "transfer_pool.rs"]
+mod transfer_pool;
 use thiserror::Error;
+use transfer_pool::{IdleTransferSession, TransferSessionLease};
 
 // SSH 建连默认超时、文件传输缓冲、保活间隔和并发传输上限。
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const TRANSFER_BUFFER_SIZE: usize = 64 * 1024;
 const KEEPALIVE_INTERVAL_SECS: u32 = 30;
-const MAX_CONCURRENT_TRANSFERS: usize = 4;
 // 目录大小统计最多同时使用 4 个独立工作会话，兼顾速度与远端 SSH 会话压力。
 const MAX_CONCURRENT_DIRECTORY_SIZE_WORKERS: usize = 4;
 // 同一工作会话连续处理少量子目录，降低反复创建 SFTP 子会话的开销，同时保留调度公平性。
@@ -49,8 +56,6 @@ const MAX_TERMINAL_INPUT_BYTES: usize = 64 * 1024;
 const TERMINAL_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const TERMINAL_CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 const TERMINAL_POLL_INTERVAL: Duration = Duration::from_millis(12);
-const DEFAULT_TERMINAL_COLUMNS: u32 = 100;
-const DEFAULT_TERMINAL_ROWS: u32 = 30;
 const MAX_BLOCKING_COMMANDS: usize = 16;
 static ACTIVE_BLOCKING_COMMANDS: AtomicUsize = AtomicUsize::new(0);
 
@@ -68,9 +73,7 @@ fn blocking_command_slot() -> Result<BlockingCommandSlot, SshError> {
         .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
             (count < MAX_BLOCKING_COMMANDS).then_some(count + 1)
         })
-        .map_err(|_| {
-            SshError::FileOperationFailed("后台操作已达到并发上限，请稍后重试".to_string())
-        })?;
+        .map_err(|_| SshError::BackgroundBusy)?;
     Ok(BlockingCommandSlot)
 }
 
@@ -109,6 +112,15 @@ pub enum SshError {
     /// 请求的连接不存在，或尚未建立可用会话。
     #[error("连接不存在或未连接")]
     ConnectionNotFound,
+    /// 旧操作不可在同 ID 的新会话上重新登记。
+    #[error("连接会话已更新，请重新操作")]
+    ConnectionGenerationChanged,
+    /// 只限制启动登记等待，不限制已经运行的健康传输时长。
+    #[error("文件任务启动请求已过期，未执行该请求")]
+    TransferStartExpired,
+    /// 队列、窗口或请求校验在任务登记前拒绝；前端可安全结束等待。
+    #[error("文件任务未启动: {0}")]
+    TransferRejected(String),
     /// TCP 连接或会话创建失败。
     #[error("无法连接到服务器: {0}")]
     ConnectionFailed(String),
@@ -142,12 +154,21 @@ pub enum SshError {
     /// 读取远程目录或目录统计状态失败。
     #[error("读取目录失败: {0}")]
     ReadDirFailed(String),
-    /// 并发文件传输数量已达到保护上限。
-    #[error("传输任务数量已达到上限")]
-    TransferLimitReached,
     /// 文件传输在安全检查点收到取消请求。
     #[error("传输已取消")]
     TransferCancelled,
+    #[error("源文件发生变化: {0}")]
+    SourceChanged(String),
+    #[error("提交结果无法确认: {0}")]
+    CommitOutcomeUnknown(String),
+    #[error("服务器不支持安全覆盖")]
+    AtomicRenameUnsupported,
+    /// 操作尚未取得执行名额，重试不会重复发送用户数据。
+    #[error("后台操作已达到并发上限，请稍后重试")]
+    BackgroundBusy,
+    /// 原尺寸请求尚未完成，保留 libssh2 状态供下一次调用继续。
+    #[error("终端尺寸同步等待网络发送完成")]
+    TerminalResizePending,
     /// 递归目录大小统计收到取消请求。
     #[error("目录大小统计已取消")]
     DirectorySizeCancelled,
@@ -203,8 +224,19 @@ pub struct SshState {
     monitor_cpu_samples: Arc<Mutex<HashMap<String, (u64, u64)>>>,
     /// 用于向前端发送 Tauri 事件的应用句柄。
     pub app_handle: Arc<Mutex<Option<AppHandle>>>,
-    /// 已请求取消的文件传输 ID 集合。
-    pub cancelled_transfers: Arc<Mutex<HashSet<String>>>,
+    /// 原生任务表及独占文件传输会话，禁止与浏览连接混用。
+    tasks: Arc<TransferTasks>,
+    transfer_pool: Arc<Mutex<Vec<IdleTransferSession>>>,
+    connection_generations: Arc<Mutex<HashMap<String, u64>>>,
+    /// 专用文件连接使用主会话已经验证的对端，避免重复 DNS 和取消时阻塞解析。
+    connection_endpoints: Arc<Mutex<HashMap<String, SocketAddr>>>,
+    runtime_stop: Arc<AtomicBool>,
+    /// 文件工作线程错误仅影响独占会话，不重置主连接。
+    isolated_transport: bool,
+    directory_requests: Arc<crate::directory_requests::DirectoryRequests>,
+    terminal_openings: Arc<Mutex<HashMap<String, (String, String, String)>>>,
+    terminal_requests: Arc<crate::directory_requests::DirectoryRequests>,
+    window_generations: Arc<Mutex<HashMap<String, u64>>>,
     /// 连接 ID 到目录统计取消信号的映射。
     directory_size_cancellations: Arc<Mutex<HashMap<String, DirectorySizeCancellation>>>,
     /// 每条连接可复用的目录统计工作会话池。
@@ -216,8 +248,6 @@ pub struct SshState {
     active_directory_size_workers: Arc<AtomicUsize>,
     /// 工作会话达到上限时用于休眠和唤醒等待者的条件变量。
     directory_size_worker_wait: Arc<DirectorySizeWorkerWait>,
-    /// 当前占用传输并发名额的任务数。
-    pub active_transfers: Arc<AtomicUsize>,
     /// 终端 ID 到 PTY 会话的映射，独立于 SFTP 主连接池。
     terminal_sessions: Arc<RwLock<HashMap<String, Arc<TerminalSession>>>>,
 }
@@ -265,6 +295,8 @@ pub struct ConnectResult {
     pub requires_host_key_confirmation: bool,
     /// 本次握手取得的主机密钥信息。
     pub host_key: HostKeyInfo,
+    /// 主会话代次，用于拒绝重连前迟到的文件任务。
+    pub generation: u64,
 }
 
 /// 服务器进程列表中的单条进程数据。
@@ -504,6 +536,7 @@ struct FolderDownloadPlan {
     files: Vec<FolderDownloadFile>,
     /// 计划中所有文件的总字节数。
     total_bytes: u64,
+    total_known: bool,
     /// 预扫描时因权限或类型跳过的条目数量。
     skipped_entries: usize,
 }
@@ -523,6 +556,7 @@ struct FileTransferContext<'a> {
     state: &'a SshState,
     connection: &'a SshConnection,
     sftp: &'a Sftp,
+    session: &'a Arc<Mutex<Session>>,
     transfer_id: &'a str,
     overwrite: bool,
 }
@@ -536,15 +570,16 @@ struct FolderTransferProgress<'a> {
     file_index: usize,
     file_total: usize,
     current: u64,
-    total: u64,
+    total: Option<u64>,
     completed_bytes: u64,
-    total_bytes: u64,
+    total_bytes: Option<u64>,
 }
 
 /// 完成 TCP/SSH 握手后等待主机指纹确认的会话结果。
 struct OpenSession {
     session: Session,
     host_key: HostKeyInfo,
+    peer_addr: SocketAddr,
 }
 
 // 终端会话独立于文件传输会话，避免交互式读取阻塞 SFTP 通道。
@@ -557,7 +592,13 @@ struct TerminalSession {
     /// 读线程停止标记。
     stop: Arc<AtomicBool>,
     /// 串行化多个输入写入，避免交错破坏终端字节流。
-    write_lock: Mutex<()>,
+    write_lock: Mutex<InputSequence>,
+    resize_request: Mutex<PendingResize>,
+    owner: String,
+    generation: String,
+    output: tauri::ipc::Channel<serde_json::Value>,
+    output_flow: Mutex<OutputFlow>,
+    output_wake: Condvar,
 }
 
 // 统计任务使用独立 SSH 会话；保留所属连接标识，主连接关闭时可一并取消。
@@ -1088,7 +1129,9 @@ fn execute_monitor_command(
 /// 为当前配置创建或复用独立的只读监控 SSH 会话。
 fn monitor_session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshError> {
     let connection = connection_info(state, id, true)?;
-    if let Some(session) = state.monitor_sessions.lock().unwrap().get(id).cloned() {
+    // 先释放池锁再探测；if let 表达式里的临时 guard 在 Rust 2021 中会覆盖整个分支。
+    let cached = state.monitor_sessions.lock().unwrap().get(id).cloned();
+    if let Some(session) = cached {
         let healthy = session
             .lock()
             .map(|session| match session.keepalive_send() {
@@ -1459,15 +1502,21 @@ fn open_session_with_timeout(
     timeout: Duration,
 ) -> Result<OpenSession, SshError> {
     let tcp = connect_tcp(&connection.host, connection.port, timeout)?;
+    let peer_addr = tcp.peer_addr()?;
     let mut session =
         Session::new().map_err(|error| SshError::ConnectionFailed(error.to_string()))?;
     session.set_tcp_stream(tcp);
+    session.set_timeout(timeout.as_millis().min(u32::MAX as u128) as u32);
     session
         .handshake()
         .map_err(|error| SshError::HandshakeFailed(error.to_string()))?;
     session.set_keepalive(true, KEEPALIVE_INTERVAL_SECS);
     let host_key = host_key_info(&session)?;
-    Ok(OpenSession { session, host_key })
+    Ok(OpenSession {
+        session,
+        host_key,
+        peer_addr,
+    })
 }
 
 /// 使用默认超时打开一个待认证 SSH 会话。
@@ -1502,11 +1551,30 @@ fn verify_host_key(connection: &SshConnection, host_key: &HostKeyInfo) -> Result
         None | Some("") => Err(SshError::HostKeyVerificationRequired(
             host_key.fingerprint.clone(),
         )),
-        Some(expected) if expected.eq_ignore_ascii_case(&host_key.fingerprint) => Ok(()),
+        Some(expected) if fingerprint_matches(expected, &host_key.fingerprint) => Ok(()),
         Some(expected) => Err(SshError::HostKeyMismatch {
             expected: expected.to_string(),
             actual: host_key.fingerprint.clone(),
         }),
+    }
+}
+
+/// SHA-256 指纹的 Base64 大小写有意义；仅兼容可选的尾部填充。
+fn fingerprint_matches(expected: &str, actual: &str) -> bool {
+    fn decode(value: &str) -> Option<Vec<u8>> {
+        let encoded = value.strip_prefix("SHA256:")?;
+        if encoded.len() != 43 && !(encoded.len() == 44 && encoded.ends_with('=')) {
+            return None;
+        }
+        let unpadded = encoded.trim_end_matches('=');
+        base64::engine::general_purpose::STANDARD_NO_PAD
+            .decode(unpadded)
+            .ok()
+            .filter(|bytes| bytes.len() == 32)
+    }
+    match (decode(expected), decode(actual)) {
+        (Some(left), Some(right)) => left == right,
+        _ => false,
     }
 }
 
@@ -1537,17 +1605,7 @@ fn open_authenticated_session(connection: &SshConnection) -> Result<Session, Ssh
 
 /// 将前端终端尺寸限制在远端 PTY 可接受的范围内。
 fn normalize_terminal_dimensions(columns: u32, rows: u32) -> (u32, u32) {
-    let columns = if columns == 0 {
-        DEFAULT_TERMINAL_COLUMNS
-    } else {
-        columns.clamp(40, 240)
-    };
-    let rows = if rows == 0 {
-        DEFAULT_TERMINAL_ROWS
-    } else {
-        rows.clamp(10, 100)
-    };
-    (columns, rows)
+    crate::terminal_flow::normalize_dimensions(columns, rows)
 }
 
 /// 创建并启动 xterm PTY Shell，返回非阻塞的 SSH channel。
@@ -1595,6 +1653,8 @@ fn close_terminal_session(
     let session = terminal_sessions.write().unwrap().remove(terminal_id);
     if let Some(session) = session {
         session.stop.store(true, Ordering::Release);
+        session.output_flow.lock().unwrap().cancel();
+        session.output_wake.notify_all();
         if let Ok(mut channel) = session.channel.lock() {
             let _ = channel.close();
         }
@@ -1603,6 +1663,11 @@ fn close_terminal_session(
 
 /// 关闭某条连接下的全部 PTY，通常在断线或断开连接时调用。
 fn close_terminals_for_connection(state: &SshState, connection_id: &str) {
+    state
+        .terminal_openings
+        .lock()
+        .unwrap()
+        .retain(|_, (_, _, connection)| connection != connection_id);
     let terminal_ids: Vec<String> = state
         .terminal_sessions
         .read()
@@ -1616,211 +1681,189 @@ fn close_terminals_for_connection(state: &SshState, connection_id: &str) {
     }
 }
 
-/// 为终端事件补充终端 ID 后发送到前端。
-fn emit_terminal_event(
-    app_handle: &Arc<Mutex<Option<AppHandle>>>,
-    event: &str,
-    terminal_id: &str,
-    payload: serde_json::Value,
-) {
-    let mut payload = payload;
-    if let Some(object) = payload.as_object_mut() {
-        object.insert(
-            "terminalId".to_string(),
-            serde_json::Value::String(terminal_id.to_string()),
-        );
+/// 等待前端完成解析，期间不持有 SSH channel 或输入锁。
+fn wait_for_terminal_output(session: &TerminalSession) -> bool {
+    let mut flow = session.output_flow.lock().unwrap();
+    while flow.should_wait() && !session.stop.load(Ordering::Acquire) {
+        flow = session
+            .output_wake
+            .wait_timeout(flow, Duration::from_millis(100))
+            .unwrap()
+            .0;
     }
-    emit_event(app_handle, event, payload);
+    !session.stop.load(Ordering::Acquire) && !flow.is_cancelled()
 }
-
-/// 合并可能跨读取边界的 UTF-8 字节，并发送终端输出事件。
-fn emit_terminal_bytes(
-    app_handle: &Arc<Mutex<Option<AppHandle>>>,
+fn send_terminal_packet(
+    session: &TerminalSession,
+    terminal_id: &str,
+    event: &str,
+    text: &str,
+) -> bool {
+    if !wait_for_terminal_output(session) {
+        return false;
+    }
+    let sequence = session
+        .output_flow
+        .lock()
+        .unwrap()
+        .record_sent(if event == "data" { text.len() } else { 0 });
+    let Some(sequence) = sequence else {
+        return false;
+    };
+    let sent = session.output.send(json!({"terminalId": terminal_id, "generation": session.generation, "sequence": sequence, "event": event, "data": if event == "data" { Some(text) } else { None }, "message": if event == "data" { None } else { Some(text) }})).is_ok();
+    if !sent {
+        session.stop.store(true, Ordering::Release);
+    }
+    sent
+}
+fn send_terminal_text(session: &TerminalSession, terminal_id: &str, text: &str) -> bool {
+    let mut remaining = text;
+    while !remaining.is_empty() {
+        let mut end = remaining.len().min(32 * 1024);
+        while !remaining.is_char_boundary(end) {
+            end -= 1;
+        }
+        if !send_terminal_packet(session, terminal_id, "data", &remaining[..end]) {
+            return false;
+        }
+        remaining = &remaining[end..];
+    }
+    true
+}
+/// 保留跨读取边界的不完整 UTF-8 后缀，不重排 ANSI 或用户数据。
+fn send_terminal_bytes(
+    session: &TerminalSession,
     terminal_id: &str,
     pending: &mut Vec<u8>,
     bytes: &[u8],
-) {
-    pending.extend_from_slice(bytes);
-    let bytes = std::mem::take(pending);
-    match String::from_utf8(bytes) {
-        Ok(data) => emit_terminal_event(
-            app_handle,
-            "ssh-terminal-data",
-            terminal_id,
-            json!({ "data": data }),
-        ),
-        Err(error) => {
-            let utf8_error = error.utf8_error();
-            let bytes = error.into_bytes();
-            let valid_up_to = utf8_error.valid_up_to();
-            if valid_up_to > 0 {
-                let data = String::from_utf8_lossy(&bytes[..valid_up_to]).into_owned();
-                emit_terminal_event(
-                    app_handle,
-                    "ssh-terminal-data",
-                    terminal_id,
-                    json!({ "data": data }),
-                );
-            }
-            if utf8_error.error_len().is_some() {
-                // 非 UTF-8 输出通常来自二进制命令，使用替换字符避免卡住后续终端输出。
-                let data = String::from_utf8_lossy(&bytes[valid_up_to..]).into_owned();
-                emit_terminal_event(
-                    app_handle,
-                    "ssh-terminal-data",
-                    terminal_id,
-                    json!({ "data": data }),
-                );
-            } else {
-                pending.extend_from_slice(&bytes[valid_up_to..]);
-            }
-        }
-    }
+) -> bool {
+    let text = crate::terminal_flow::decode_output(pending, bytes);
+    send_terminal_text(session, terminal_id, &text)
 }
-
-/// 为终端启动后台读线程，转发输出并处理远程 Shell 退出。
-fn spawn_terminal_reader(state: SshState, terminal_id: String, session: Arc<TerminalSession>) {
-    let app_handle = Arc::clone(&state.app_handle);
-    let terminal_sessions = Arc::clone(&state.terminal_sessions);
-    thread::spawn(move || {
-        let mut buffer = vec![0_u8; TRANSFER_BUFFER_SIZE];
-        let mut pending_utf8 = Vec::new();
-        let mut close_reason = "远程 Shell 已退出".to_string();
-        let mut connection_error = None;
-
-        loop {
-            if session.stop.load(Ordering::Acquire) {
-                break;
-            }
-            let result = session
-                .channel
-                .lock()
-                .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))
-                .and_then(|mut channel| {
-                    channel
-                        .read(&mut buffer)
-                        .map_err(|error| SshError::TerminalFailed(error.to_string()))
-                });
-            match result {
-                Ok(0) => {
-                    close_reason = "远程 Shell 已退出".to_string();
+/// 有界读取线程；读取暂停不阻塞键盘输入，前端消费 ACK 唤醒线程。
+fn spawn_terminal_reader(
+    state: SshState,
+    terminal_id: String,
+    session: Arc<TerminalSession>,
+) -> Result<(), SshError> {
+    thread::Builder::new()
+        .name("terminal-reader".into())
+        .spawn(move || {
+            let mut buffer = vec![0_u8; 32 * 1024];
+            let mut pending_utf8 = Vec::new();
+            let mut failure = None;
+            loop {
+                if !wait_for_terminal_output(&session) {
                     break;
                 }
-                Ok(size) => {
-                    emit_terminal_bytes(
-                        &app_handle,
+                let result = session.channel.lock().unwrap().read(&mut buffer);
+                match result {
+                    Ok(0) => break,
+                    Ok(size) => {
+                        if !send_terminal_bytes(
+                            &session,
+                            &terminal_id,
+                            &mut pending_utf8,
+                            &buffer[..size],
+                        ) {
+                            break;
+                        }
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(TERMINAL_POLL_INTERVAL)
+                    }
+                    Err(error) => {
+                        failure = Some(error.to_string());
+                        break;
+                    }
+                }
+            }
+            if !session.stop.load(Ordering::Acquire) {
+                if !pending_utf8.is_empty() {
+                    send_terminal_text(
+                        &session,
                         &terminal_id,
-                        &mut pending_utf8,
-                        &buffer[..size],
+                        &String::from_utf8_lossy(&pending_utf8),
                     );
                 }
-                Err(error) => {
-                    let message = error.to_string();
-                    if message.to_ascii_lowercase().contains("would block") {
-                        thread::sleep(TERMINAL_POLL_INTERVAL);
-                        continue;
-                    }
-                    close_reason = "终端连接已断开".to_string();
-                    connection_error = Some(message);
-                    break;
+                if let Some(error) = failure {
+                    send_terminal_packet(&session, &terminal_id, "error", &error);
+                } else {
+                    send_terminal_packet(&session, &terminal_id, "exit", "远程 Shell 已退出");
                 }
             }
-        }
-
-        if !pending_utf8.is_empty() {
-            let data = String::from_utf8_lossy(&pending_utf8).into_owned();
-            emit_terminal_event(
-                &app_handle,
-                "ssh-terminal-data",
-                &terminal_id,
-                json!({ "data": data }),
-            );
-        }
-        let was_stopped = session.stop.load(Ordering::Acquire);
-        if let Some(message) = connection_error {
-            emit_terminal_event(
-                &app_handle,
-                "ssh-terminal-error",
-                &terminal_id,
-                json!({ "message": message.clone() }),
-            );
-            if !was_stopped && is_terminal_connection_loss(&message) {
-                mark_connection_disconnected(&state, &session.connection_id, close_reason.clone());
+            session.stop.store(true, Ordering::Release);
+            let mut sessions = state.terminal_sessions.write().unwrap();
+            if sessions
+                .get(&terminal_id)
+                .is_some_and(|current| Arc::ptr_eq(current, &session))
+            {
+                sessions.remove(&terminal_id);
             }
-        }
-        emit_terminal_event(
-            &app_handle,
-            "ssh-terminal-closed",
-            &terminal_id,
-            json!({ "reason": close_reason, "expected": was_stopped }),
-        );
-
-        let mut sessions = terminal_sessions.write().unwrap();
-        if sessions
-            .get(&terminal_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &session))
-        {
-            sessions.remove(&terminal_id);
-        }
-    });
+        })
+        .map(|_| ())
+        .map_err(|error| SshError::TerminalFailed(format!("无法创建终端读取线程: {error}")))
 }
 
 /// 在非阻塞 channel 上可靠写入终端输入，带有取消和超时保护。
-fn write_terminal_input(session: &Arc<TerminalSession>, data: &[u8]) -> Result<(), SshError> {
-    let _write_guard = session
+fn write_terminal_input(
+    session: &Arc<TerminalSession>,
+    data: &[u8],
+    sequence: u64,
+) -> Result<(), SshError> {
+    let mut write_guard = session
         .write_lock
         .lock()
         .map_err(|_| SshError::TerminalFailed("终端输入锁已损坏".to_string()))?;
-    let started_at = Instant::now();
+    if !write_guard.accept(sequence) {
+        return Err(SshError::TerminalFailed("终端输入序号不连续".into()));
+    }
+    write_terminal_bytes(
+        data,
+        || session.stop.load(Ordering::Acquire),
+        |bytes| {
+            session
+                .channel
+                .lock()
+                .map_err(|_| std::io::Error::other("终端会话锁已损坏"))?
+                .write(bytes)
+        },
+        thread::sleep,
+        TERMINAL_WRITE_TIMEOUT,
+    )
+}
+
+/// 保留 IO 错误种类；EAGAIN 的错误文本并不保证包含 would block。
+fn write_terminal_bytes(
+    data: &[u8],
+    stopped: impl Fn() -> bool,
+    mut write: impl FnMut(&[u8]) -> std::io::Result<usize>,
+    mut pause: impl FnMut(Duration),
+    timeout: Duration,
+) -> Result<(), SshError> {
+    let mut last_progress = Instant::now();
     let mut offset = 0;
     while offset < data.len() {
-        if session.stop.load(Ordering::Acquire) {
+        if stopped() {
             return Err(SshError::TerminalNotFound);
         }
-        let result = session
-            .channel
-            .lock()
-            .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))
-            .and_then(|mut channel| {
-                channel
-                    .write(&data[offset..])
-                    .map_err(|error| SshError::TerminalFailed(error.to_string()))
-            });
-        match result {
-            Ok(0) => return Err(SshError::TerminalFailed("终端输入通道已关闭".to_string())),
-            Ok(size) => offset += size,
-            Err(error)
-                if error
-                    .to_string()
-                    .to_ascii_lowercase()
-                    .contains("would block") =>
-            {
-                if started_at.elapsed() >= TERMINAL_WRITE_TIMEOUT {
-                    return Err(SshError::TerminalFailed("终端输入发送超时".to_string()));
-                }
-                thread::sleep(TERMINAL_POLL_INTERVAL);
+        match write(&data[offset..]) {
+            Ok(0) => return Err(SshError::TerminalFailed("终端输入通道已关闭".into())),
+            Ok(size) => {
+                offset += size;
+                last_progress = Instant::now();
             }
-            Err(error) => return Err(error),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                if last_progress.elapsed() >= timeout {
+                    return Err(SshError::TerminalFailed("终端输入发送超时".into()));
+                }
+                pause(TERMINAL_POLL_INTERVAL);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(SshError::TerminalFailed(error.to_string())),
         }
     }
     Ok(())
-}
-
-/// 判断终端输出错误文本是否表示底层 SSH 连接已经失效。
-///
-/// # Arguments
-///
-/// * `message` - 终端读写路径返回的错误文本。
-///
-/// # Returns
-///
-/// 若文本匹配连接关闭、网络或超时关键词则返回 `true`。
-fn is_terminal_connection_loss(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("socket")
-        || message.contains("connection")
-        || message.contains("network")
-        || message.contains("timed out")
 }
 
 /// 向远程 PTY 发送尺寸更新，在 libssh2 EAGAIN 时短暂重试。
@@ -1830,21 +1873,33 @@ fn resize_terminal(
     rows: u32,
 ) -> Result<(), SshError> {
     let started_at = Instant::now();
+    let requested = (columns, rows);
+    let mut pending = session
+        .resize_request
+        .lock()
+        .map_err(|_| SshError::TerminalFailed("终端尺寸锁已损坏".into()))?;
     loop {
         if session.stop.load(Ordering::Acquire) {
             return Err(SshError::TerminalNotFound);
         }
+        let (columns, rows) = pending.next(requested);
         let result = session
             .channel
             .lock()
-            .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".to_string()))?
+            .map_err(|_| SshError::TerminalFailed("终端会话锁已损坏".into()))?
             .request_pty_size(columns, rows, None, None);
         match result {
-            Ok(()) => return Ok(()),
-            Err(error)
-                if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN))
-                    && started_at.elapsed() < TERMINAL_CONTROL_TIMEOUT =>
-            {
+            Ok(()) => {
+                pending.complete();
+                if (columns, rows) == requested {
+                    return Ok(());
+                }
+            }
+            Err(error) if matches!(error.code(), ErrorCode::Session(LIBSSH2_ERROR_EAGAIN)) => {
+                if started_at.elapsed() >= TERMINAL_CONTROL_TIMEOUT {
+                    // 保留缓存中的尺寸 A；下一次调用必须先完成 A，再提交最新尺寸 B。
+                    return Err(SshError::TerminalResizePending);
+                }
                 thread::sleep(TERMINAL_POLL_INTERVAL);
             }
             Err(error) => {
@@ -1917,17 +1972,8 @@ fn is_io_connection_loss(error: &std::io::Error) -> bool {
 
 /// 集中处理连接断线：清理会话、统计任务、终端并发送前端事件。
 fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
-    let was_connected = state
-        .connections
-        .write()
-        .unwrap()
-        .get_mut(id)
-        .map(|connection| {
-            let was_connected = connection.connected;
-            connection.connected = false;
-            was_connected
-        })
-        .unwrap_or(false);
+    let generation = connection_generation(state, id);
+    let was_connected = invalidate_file_sessions(state, id);
 
     // 丢弃缓存会话即可关闭已损坏的传输连接；正在进行的传输任务可能仍会持有
     // 自己的 Arc，直到任务结束。
@@ -1941,7 +1987,7 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
         emit_event(
             &state.app_handle,
             "ssh-disconnected",
-            json!({ "id": id, "reason": reason }),
+            json!({ "id": id, "reason": reason, "generation": generation }),
         );
     }
 }
@@ -1954,7 +2000,7 @@ fn mark_connection_disconnected(state: &SshState, id: &str, reason: String) {
 /// * `id` - 发生错误的连接 ID。
 /// * `error` - libssh2 返回的原始错误。
 fn mark_ssh_error_if_connection_lost(state: &SshState, id: &str, error: &ssh2::Error) {
-    if is_connection_loss(error) {
+    if !state.isolated_transport && is_connection_loss(error) {
         mark_connection_disconnected(state, id, error.to_string());
     }
 }
@@ -1967,7 +2013,7 @@ fn mark_ssh_error_if_connection_lost(state: &SshState, id: &str, error: &ssh2::E
 /// * `id` - 发生错误的连接 ID。
 /// * `error` - 本地 socket 或通道的 IO 错误。
 fn mark_io_error_if_connection_lost(state: &SshState, id: &str, error: &std::io::Error) {
-    if is_io_connection_loss(error) {
+    if !state.isolated_transport && is_io_connection_loss(error) {
         mark_connection_disconnected(state, id, error.to_string());
     }
 }
@@ -2092,6 +2138,7 @@ fn display_relative_path(relative_path: &Path) -> String {
 fn collect_folder_upload_plan(
     local_root: &LocalTransferRoot,
     cancelled: impl Fn() -> bool,
+    progressed: impl Fn(),
 ) -> Result<FolderUploadPlan, SshError> {
     let mut plan = FolderUploadPlan {
         directories: Vec::new(),
@@ -2100,7 +2147,7 @@ fn collect_folder_upload_plan(
         skipped_entries: 0,
     };
     let mut pending_directories = vec![PathBuf::new()];
-    let mut budget = ScanBudget::default();
+    let mut budget = ScanBudget::for_transfer();
 
     while let Some(directory) = pending_directories.pop() {
         if cancelled() {
@@ -2113,6 +2160,7 @@ fn collect_folder_upload_plan(
                 return Err(SshError::TransferCancelled);
             }
             let entry = entry?;
+            progressed();
             budget
                 .record(&directory.join(entry.file_name()))
                 .map_err(SshError::ReadDirFailed)?;
@@ -2132,6 +2180,7 @@ fn collect_folder_upload_plan(
                     relative_path.display()
                 ))
             })?;
+            progressed();
             budget.check().map_err(SshError::ReadDirFailed)?;
 
             if metadata.file_type().is_symlink() {
@@ -2167,6 +2216,16 @@ fn bounded_remote_entries(
     budget: &Mutex<ScanBudget>,
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<(PathBuf, ssh2::FileStat)>, ssh2::Error> {
+    bounded_remote_entries_with_progress(sftp, path, budget, cancelled, || {})
+}
+
+fn bounded_remote_entries_with_progress(
+    sftp: &Sftp,
+    path: &Path,
+    budget: &Mutex<ScanBudget>,
+    cancelled: impl Fn() -> bool,
+    progressed: impl Fn(),
+) -> Result<Vec<(PathBuf, ssh2::FileStat)>, ssh2::Error> {
     // 使用客户端本地错误码，避免被目录统计当作可忽略的 SFTP 权限错误。
     let failure = |message: &'static str| ssh2::Error::new(ErrorCode::Session(-34), message);
     let mut directory = sftp.opendir(path)?;
@@ -2182,6 +2241,7 @@ fn bounded_remote_entries(
             .map_err(|_| failure("目录扫描超过120秒总时限，请缩小操作范围"))?;
         match directory.readdir() {
             Ok((name, stat)) => {
+                progressed();
                 if name == Path::new(".") || name == Path::new("..") {
                     continue;
                 }
@@ -2266,20 +2326,25 @@ fn collect_folder_download_plan(
         directories: Vec::new(),
         files: Vec::new(),
         total_bytes: 0,
+        total_known: true,
         skipped_entries: 0,
     };
     let mut pending = vec![(normalized_root, PathBuf::new())];
-    let budget = Mutex::new(ScanBudget::default());
+    let budget = Mutex::new(ScanBudget::for_transfer());
 
     while let Some((directory, relative_directory)) = pending.pop() {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
-        let entries = bounded_remote_entries(sftp, Path::new(&directory), &budget, || {
-            is_cancelled(&state.cancelled_transfers, transfer_id)
-        })
+        let entries = bounded_remote_entries_with_progress(
+            sftp,
+            Path::new(&directory),
+            &budget,
+            || is_cancelled(state, transfer_id),
+            || state.tasks.heartbeat(transfer_id),
+        )
         .map_err(|error| {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            if is_cancelled(state, transfer_id) {
                 return SshError::TransferCancelled;
             }
             mark_ssh_error_if_connection_lost(state, connection_id, &error);
@@ -2287,7 +2352,7 @@ fn collect_folder_download_plan(
         })?;
 
         for (listed_path, _) in entries {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            if is_cancelled(state, transfer_id) {
                 return Err(SshError::TransferCancelled);
             }
             budget
@@ -2322,6 +2387,7 @@ fn collect_folder_download_plan(
                     )));
                 }
             };
+            state.tasks.heartbeat(transfer_id);
             budget
                 .lock()
                 .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
@@ -2338,6 +2404,7 @@ fn collect_folder_download_plan(
                 plan.directories.push(relative_path.clone());
                 pending.push((child_remote_path, relative_path));
             } else if child_stat.is_file() {
+                plan.total_known &= child_stat.size.is_some();
                 let size = child_stat.size.unwrap_or(0);
                 plan.total_bytes = plan.total_bytes.saturating_add(size);
                 plan.files.push(FolderDownloadFile {
@@ -2361,33 +2428,87 @@ fn collect_folder_download_plan(
     Ok(plan)
 }
 
-/// 仅通过服务器重命名提交；不删除旧目标来模拟覆盖。
+/// 不使用本机 PathBuf::join，避免 Windows 将协议路径拼成反斜杠。
+fn append_remote_leaf(parent: &Path, name: &std::ffi::OsStr) -> PathBuf {
+    let mut path = parent.as_os_str().to_os_string();
+    if !parent.to_string_lossy().ends_with('/') {
+        path.push("/");
+    }
+    path.push(name);
+    PathBuf::from(path)
+}
+
+/// 不删除旧目标；v3 安全覆盖通过服务器宣告的 POSIX 扩展完成。
 fn rename_remote_file(
     sftp: &Sftp,
+    session: &Session,
     source_path: &Path,
     target_path: &Path,
     overwrite: bool,
-) -> Result<(), ssh2::Error> {
-    let required = if overwrite {
-        RenameFlags::OVERWRITE
-    } else {
-        RenameFlags::empty()
-    };
-    match sftp.rename(
-        source_path,
-        target_path,
-        Some(required | RenameFlags::ATOMIC | RenameFlags::NATIVE),
-    ) {
-        Ok(()) => Ok(()),
-        Err(error) if is_rename_compatibility_error(&error) => {
-            // 不支持安全覆盖时直接失败，保留原目标；不能 unlink 后再试。
-            sftp.rename(source_path, target_path, Some(required))
+    cancelled: impl Fn() -> bool,
+    begin_commit: impl Fn() -> Result<(), crate::sftp_commit::CommitError>,
+) -> Result<(), SshError> {
+    if cancelled() {
+        return Err(SshError::TransferCancelled);
+    }
+    if overwrite {
+        fn absolute(sftp: &Sftp, path: &Path) -> Result<PathBuf, SshError> {
+            let name = path
+                .file_name()
+                .ok_or_else(|| SshError::FileOperationFailed("重命名路径缺少文件名".into()))?;
+            let parent = path
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let parent = sftp
+                .realpath(parent)
+                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            Ok(append_remote_leaf(&parent, name))
         }
-        Err(error) => Err(error),
+        let source = absolute(sftp, source_path)?;
+        let target = absolute(sftp, target_path)?;
+        let deadline = Instant::now() + Duration::from_secs(60);
+        crate::sftp_commit::posix_rename(
+            session,
+            &source,
+            &target,
+            || cancelled() || Instant::now() >= deadline,
+            begin_commit,
+        )
+        .map_err(|error| match error {
+            crate::sftp_commit::CommitError::Unsupported => SshError::AtomicRenameUnsupported,
+            crate::sftp_commit::CommitError::Cancelled => SshError::TransferCancelled,
+            crate::sftp_commit::CommitError::OutcomeUnknown(message) => {
+                SshError::CommitOutcomeUnknown(message)
+            }
+            other => SshError::FileOperationFailed(other.to_string()),
+        })
+    } else {
+        begin_commit().map_err(|error| match error {
+            crate::sftp_commit::CommitError::Cancelled => SshError::TransferCancelled,
+            other => SshError::FileOperationFailed(other.to_string()),
+        })?;
+        sftp.rename(
+            source_path,
+            target_path,
+            Some(RenameFlags::ATOMIC | RenameFlags::NATIVE),
+        )
+        .or_else(|error| {
+            if is_rename_compatibility_error(&error) {
+                sftp.rename(source_path, target_path, Some(RenameFlags::empty()))
+            } else {
+                Err(error)
+            }
+        })
+        .map_err(|error| match error.code() {
+            ErrorCode::SFTP(code) if code > 0 && !is_connection_loss(&error) => {
+                SshError::FileOperationFailed(error.to_string())
+            }
+            _ => SshError::CommitOutcomeUnknown(error.to_string()),
+        })
     }
 }
 
-/// 获取指定连接的已认证 SSH 会话。
 fn session_for(state: &SshState, id: &str) -> Result<Arc<Mutex<Session>>, SshError> {
     let _ = connection_info(state, id, true)?;
     state
@@ -2755,6 +2876,7 @@ fn collect_remote_delete_plan(
     sftp: &Sftp,
     policy: &RemoteMutationPolicy,
     remote_path: &Path,
+    operation_id: Option<&str>,
 ) -> Result<Vec<RemoteDeleteTarget>, SshError> {
     // lstat 不递归扫描当时的链接；实际操作前仍需核验路径和共享目录策略。
     let mut pending = vec![(
@@ -2763,9 +2885,12 @@ fn collect_remote_delete_plan(
     )];
     let mut files = Vec::new();
     let mut directories = Vec::new();
-    let budget = Mutex::new(ScanBudget::default());
+    let budget = Mutex::new(ScanBudget::for_transfer());
 
     while let Some((path, display_path)) = pending.pop() {
+        if operation_id.is_some_and(|id| is_cancelled(state, id)) {
+            return Err(SshError::TransferCancelled);
+        }
         budget
             .lock()
             .map_err(|_| SshError::ReadDirFailed("扫描预算锁已损坏".to_string()))?
@@ -2788,6 +2913,9 @@ fn collect_remote_delete_plan(
             }
         };
 
+        if let Some(id) = operation_id {
+            state.tasks.heartbeat(id);
+        }
         if !stat.is_dir() {
             files.push(RemoteDeleteTarget {
                 path,
@@ -2806,7 +2934,18 @@ fn collect_remote_delete_plan(
             display_path: display_path.clone(),
             is_directory: true,
         });
-        let entries = bounded_remote_entries(sftp, &path, &budget, || false).map_err(|error| {
+        let entries = bounded_remote_entries_with_progress(
+            sftp,
+            &path,
+            &budget,
+            || operation_id.is_some_and(|id| is_cancelled(state, id)),
+            || {
+                if let Some(id) = operation_id {
+                    state.tasks.heartbeat(id);
+                }
+            },
+        )
+        .map_err(|error| {
             mark_ssh_error_if_connection_lost(state, connection_id, &error);
             SshError::FileOperationFailed(format!(
                 "读取远程文件夹“{}”失败: {error}",
@@ -2859,8 +2998,17 @@ fn delete_progress(
     } else {
         percentage_with_empty_value(item_index.saturating_add(1) as u64, item_total as u64, 0)
     };
-    emit_event(
-        &state.app_handle,
+    if !state.tasks.progress(
+        operation_id,
+        item_index as u64,
+        Some(item_total as u64),
+        &format!("{phase}:{file_name}"),
+    ) {
+        return;
+    }
+    emit_task_event(
+        state,
+        operation_id,
         "delete-progress",
         json!({
             "id": connection_id,
@@ -2893,15 +3041,28 @@ fn delete_remote_path(
         0,
         "scanning",
     );
-    let plan = collect_remote_delete_plan(state, connection_id, sftp, policy, remote_path)?;
+    let plan = collect_remote_delete_plan(
+        state,
+        connection_id,
+        sftp,
+        policy,
+        remote_path,
+        operation_id,
+    )?;
     let file_total = plan.iter().filter(|target| !target.is_directory).count();
     let mut file_index = 0usize;
     let mut cleaning_started = false;
 
     for target in plan.iter() {
+        if operation_id.is_some_and(|id| is_cancelled(state, id)) {
+            return Err(SshError::TransferCancelled);
+        }
         match sftp.lstat(&target.path) {
             // 已由其他客户端删除的子树，无需再检查不存在的父目录。
             Err(error) if is_sftp_missing_path(&error) => {
+                if let Some(id) = operation_id {
+                    state.tasks.heartbeat(id);
+                }
                 if !target.is_directory {
                     delete_progress(
                         state,
@@ -2921,6 +3082,9 @@ fn delete_remote_path(
                 return Err(SshError::FileOperationFailed(error.to_string()));
             }
             Ok(_) => {}
+        }
+        if let Some(id) = operation_id {
+            state.tasks.heartbeat(id);
         }
         // 扫描和删除之间可能有其他客户端操作；不能仅信任预扫描的父路径。
         policy
@@ -2950,6 +3114,9 @@ fn delete_remote_path(
         };
         if let Err(error) = result {
             if is_sftp_missing_path(&error) {
+                if let Some(id) = operation_id {
+                    state.tasks.heartbeat(id);
+                }
                 if !target.is_directory {
                     delete_progress(
                         state,
@@ -2974,6 +3141,9 @@ fn delete_remote_path(
                 "{action}“{}”失败: {error}",
                 target.path.display()
             )));
+        }
+        if let Some(id) = operation_id {
+            state.tasks.heartbeat(id);
         }
         if !target.is_directory {
             delete_progress(
@@ -3074,23 +3244,6 @@ fn ensure_remote_directory(
     }
 }
 
-/// 原子申请文件传输并发名额。
-fn transfer_slot(state: &SshState) -> Result<(), SshError> {
-    loop {
-        let current = state.active_transfers.load(Ordering::Acquire);
-        if current >= MAX_CONCURRENT_TRANSFERS {
-            return Err(SshError::TransferLimitReached);
-        }
-        if state
-            .active_transfers
-            .compare_exchange(current, current + 1, Ordering::AcqRel, Ordering::Relaxed)
-            .is_ok()
-        {
-            return Ok(());
-        }
-    }
-}
-
 /// 原子申请目录统计工作线程名额，达到上限时返回可重试错误。
 fn try_directory_size_worker_slot(state: &SshState) -> Result<DirectorySizeWorkerSlot, SshError> {
     loop {
@@ -3162,19 +3315,9 @@ fn cancel_directory_size_tasks_for_connection(state: &SshState, connection_id: &
     state.directory_size_worker_wait.wake.notify_all();
 }
 
-/// 查询传输任务是否已收到前端取消请求。
-fn is_cancelled(cancelled: &Arc<Mutex<HashSet<String>>>, transfer_id: &str) -> bool {
-    cancelled.lock().unwrap().contains(transfer_id)
-}
-
-/// 清理传输取消标记并归还并发名额。
-fn finish_transfer(state: &SshState, transfer_id: &str) {
-    state
-        .cancelled_transfers
-        .lock()
-        .unwrap()
-        .remove(transfer_id);
-    state.active_transfers.fetch_sub(1, Ordering::AcqRel);
+/// 查询任务取消及连接代次，提交阶段由实际提交返回值决定结果。
+fn is_cancelled(state: &SshState, transfer_id: &str) -> bool {
+    state.tasks.cancelled(transfer_id)
 }
 
 /// 测试 SSH/SFTP 连接、主机指纹和账户认证，不写入连接池。
@@ -3288,8 +3431,8 @@ fn test_sftp_connection_blocking(
 #[tauri::command]
 // 参数名称与前端既有 IPC 契约保持一致；此处有意保留较长签名，避免破坏旧版本调用方。
 #[allow(clippy::too_many_arguments)]
-pub fn add_ssh_connection(
-    state: State<SshState>,
+pub async fn add_ssh_connection(
+    state: State<'_, SshState>,
     id: String,
     host: String,
     port: u16,
@@ -3298,8 +3441,7 @@ pub fn add_ssh_connection(
     auth_method: Option<String>,
     host_key_fingerprint: Option<String>,
 ) -> Result<String, SshError> {
-    let operation_lock = connection_operation_lock(&state, &id);
-    let _operation = operation_lock.lock().unwrap();
+    let state = state.inner().clone();
     let connection = SshConnection {
         id: id.clone(),
         host,
@@ -3311,7 +3453,12 @@ pub fn add_ssh_connection(
         connected: false,
     };
 
-    save_ssh_connection(&state, connection)
+    run_blocking_command(move || {
+        let operation_lock = connection_operation_lock(&state, &id);
+        let _operation = operation_lock.lock().unwrap();
+        save_ssh_connection(&state, connection)
+    })
+    .await
 }
 
 /// 更新连接配置中的已确认主机指纹。
@@ -3330,19 +3477,29 @@ pub fn add_ssh_connection(
 ///
 /// 当指纹为空或连接配置不存在时返回错误。
 #[tauri::command]
-pub fn set_ssh_host_key(
-    state: State<SshState>,
+pub async fn set_ssh_host_key(
+    state: State<'_, SshState>,
+    id: String,
+    fingerprint: String,
+) -> Result<bool, SshError> {
+    let state = state.inner().clone();
+    run_blocking_command(move || set_ssh_host_key_blocking(state, id, fingerprint)).await
+}
+
+fn set_ssh_host_key_blocking(
+    state: SshState,
     id: String,
     fingerprint: String,
 ) -> Result<bool, SshError> {
     if fingerprint.trim().is_empty() {
         return Err(SshError::HandshakeFailed("主机指纹不能为空".to_string()));
     }
-    let mut connections = state.connections.write().unwrap();
-    let connection = connections
-        .get_mut(&id)
-        .ok_or(SshError::ConnectionNotFound)?;
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
+    let mut connection = connection_info(&state, &id, false)?;
     connection.host_key_fingerprint = Some(fingerprint);
+    connection.connected = false;
+    save_ssh_connection(&state, connection)?;
     Ok(true)
 }
 
@@ -3398,7 +3555,9 @@ fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, Ss
     let _operation = operation_lock.lock().unwrap();
     let connection = connection_info(&state, &id, false)?;
     validate_connection(&connection)?;
-    if let Some(session) = state.connection_pool.read().unwrap().get(&id).cloned() {
+    // 失效分支会重新写池，不能让临时读锁延续到该分支内。
+    let cached = state.connection_pool.read().unwrap().get(&id).cloned();
+    if let Some(session) = cached {
         let healthy = session
             .lock()
             .map(|session| session.keepalive_send().is_ok())
@@ -3419,6 +3578,7 @@ fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, Ss
                 connected: true,
                 requires_host_key_confirmation: false,
                 host_key,
+                generation: connection_generation(&state, &id),
             });
         }
         remove_cached_session(&state, &id);
@@ -3429,11 +3589,17 @@ fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, Ss
             connected: false,
             requires_host_key_confirmation: true,
             host_key: opened.host_key,
+            generation: connection_generation(&state, &id),
         });
     }
     verify_host_key(&connection, &opened.host_key)?;
     authenticate(&opened.session, &connection)?;
 
+    state
+        .connection_endpoints
+        .lock()
+        .unwrap()
+        .insert(id.clone(), opened.peer_addr);
     state
         .connection_pool
         .write()
@@ -3448,10 +3614,12 @@ fn connect_ssh_blocking(state: SshState, id: String) -> Result<ConnectResult, Ss
         connected: true,
         requires_host_key_confirmation: false,
         host_key: opened.host_key,
+        generation: connection_generation(&state, &id),
     })
 }
 
 fn remove_cached_session(state: &SshState, id: &str) {
+    invalidate_file_sessions(state, id);
     cancel_directory_size_tasks_for_connection(state, id);
     remove_directory_size_worker_pool(state, id);
     // 池锁必须在等待会话锁之前释放；错误路径可能持有会话锁并清理连接池。
@@ -3521,6 +3689,9 @@ pub async fn check_ssh_connection(
 }
 
 fn check_ssh_connection_blocking(state: SshState, id: String) -> Result<bool, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let session = session_for(&state, &id)?;
     let result = session
         .lock()
@@ -3580,6 +3751,16 @@ fn remove_ssh_connection_blocking(state: SshState, id: String) -> Result<bool, S
     Ok(state.connections.write().unwrap().remove(&id).is_some())
 }
 
+/// 已持久化的服务器身份发生变化或被删除后，撤销所有旧身份的运行态资源。
+pub(crate) fn invalidate_profile_runtime(state: &SshState, id: &str) {
+    let operation_lock = connection_operation_lock(state, id);
+    let _operation = operation_lock.lock().unwrap();
+    close_terminals_for_connection(state, id);
+    remove_cached_session(state, id);
+    remove_monitor_session(state, id);
+    clear_monitor_cache(state, id);
+}
+
 // SFTP 没有跨服务器统一的“隐藏属性”字段，使用以点开头的名称是 Windows、macOS、Linux
 // 服务器之间唯一可稳定复用的判断方式；当前目录项 . 和 .. 始终不应展示或计入统计。
 fn should_skip_remote_entry(name: &str, show_hidden_files: bool) -> bool {
@@ -3605,34 +3786,70 @@ fn should_skip_remote_entry(name: &str, show_hidden_files: bool) -> bool {
 #[tauri::command]
 pub async fn list_sftp_directory(
     state: State<'_, SshState>,
+    window: WebviewWindow,
     id: String,
     remote_path: String,
     show_hidden_files: bool,
+    request_id: Option<String>,
 ) -> Result<Vec<RemoteEntry>, SshError> {
-    let state = state.inner().clone();
-    run_blocking_command(move || {
-        list_sftp_directory_blocking(state, id, remote_path, show_hidden_files)
+    let request_id = request_id.unwrap_or_else(uuid_fallback);
+    let cancellation = state
+        .directory_requests
+        .begin(window.label(), &id, &request_id)
+        .map_err(SshError::ReadDirFailed)?;
+    let state_handle = state.inner().clone();
+    let signal = cancellation.clone();
+    let result = run_blocking_command(move || {
+        list_sftp_directory_blocking(state_handle, id, remote_path, show_hidden_files, signal)
     })
-    .await
+    .await;
+    state
+        .directory_requests
+        .finish(window.label(), &request_id, &cancellation);
+    result
 }
-
+/// 只取消调用窗口自己的目录读取，不关闭共享的浏览会话。
+#[tauri::command]
+pub fn cancel_sftp_directory_request(
+    state: State<SshState>,
+    window: WebviewWindow,
+    id: String,
+    request_id: String,
+) -> bool {
+    state
+        .directory_requests
+        .cancel(window.label(), &id, &request_id)
+}
 fn list_sftp_directory_blocking(
     state: SshState,
     id: String,
     remote_path: String,
     show_hidden_files: bool,
+    cancellation: Arc<AtomicBool>,
 ) -> Result<Vec<RemoteEntry>, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
     let sftp = sftp_for(&state, &id)?;
     let entries = bounded_remote_entries(
         &sftp,
         Path::new(&remote_path),
         &Mutex::new(ScanBudget::default()),
-        || false,
+        || cancellation.load(Ordering::Acquire),
     )
     .map_err(|error| {
+        if cancellation.load(Ordering::Acquire) {
+            return SshError::DirectorySizeCancelled;
+        }
         mark_ssh_error_if_connection_lost(&state, &id, &error);
         SshError::ReadDirFailed(error.to_string())
     })?;
+    if cancellation.load(Ordering::Acquire) {
+        return Err(SshError::DirectorySizeCancelled);
+    }
 
     let mut files = Vec::with_capacity(entries.len());
     for (path, stat) in entries {
@@ -3971,7 +4188,8 @@ pub async fn get_sftp_directory_size(
         ));
     }
 
-    let state = state.inner().clone();
+    let mut state = state.inner().clone();
+    state.isolated_transport = true;
     let connection = connection_info(&state, &id, true)?;
     let cancellation = Arc::new(AtomicBool::new(false));
     let wake = Arc::new(Condvar::new());
@@ -4090,6 +4308,9 @@ fn read_sftp_file_content(
     remote_path: String,
     preview_id: Option<String>,
 ) -> Result<Vec<u8>, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let sftp = sftp_for(state, &id)?;
     let mut file = sftp.open(Path::new(&remote_path)).map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &id, &error);
@@ -4178,12 +4399,25 @@ pub async fn sftp_mkdir(
     state: State<'_, SshState>,
     id: String,
     remote_path: String,
+    expected_generation: u64,
 ) -> Result<bool, SshError> {
     let state = state.inner().clone();
-    run_blocking_command(move || sftp_mkdir_blocking(state, id, remote_path)).await
+    run_blocking_command(move || sftp_mkdir_blocking(state, id, remote_path, expected_generation))
+        .await
 }
 
-fn sftp_mkdir_blocking(state: SshState, id: String, remote_path: String) -> Result<bool, SshError> {
+fn sftp_mkdir_blocking(
+    state: SshState,
+    id: String,
+    remote_path: String,
+    expected_generation: u64,
+) -> Result<bool, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
+    if connection_generation(&state, &id) != expected_generation {
+        return Err(SshError::ConnectionGenerationChanged);
+    }
     let policy = remote_mutation_policy(&state, &id, &session_for(&state, &id)?)?;
     let sftp = sftp_for(&state, &id)?;
     ensure_remote_directory(&state, &id, &sftp, &policy, &remote_path, false)?;
@@ -4202,7 +4436,7 @@ fn sftp_mkdir_blocking(state: SshState, id: String, remote_path: String) -> Resu
 ///
 /// # Returns
 ///
-/// 删除线程成功启动时返回 `Ok(true)`；最终结果通过 `delete-complete` 事件报告。
+/// 返回已登记的任务快照；最终结果可通过事件通知或任务状态查询取得。
 ///
 /// # Errors
 ///
@@ -4210,46 +4444,25 @@ fn sftp_mkdir_blocking(state: SshState, id: String, remote_path: String) -> Resu
 #[tauri::command]
 pub fn sftp_delete(
     state: State<SshState>,
+    window: WebviewWindow,
     id: String,
+    expected_generation: u64,
+    expires_at: u64,
     remote_path: String,
     is_directory: bool,
     operation_id: Option<String>,
-) -> Result<bool, SshError> {
+) -> Result<TaskSnapshot, SshError> {
     let _ = is_directory;
-    let session = session_for(&state, &id)?;
-    let operation_id = operation_id.unwrap_or_else(|| format!("delete-{}", uuid_fallback()));
-    let state_handle = state.inner().clone();
-    let connection_id = id.clone();
-    let operation_id_for_thread = operation_id.clone();
-    let slot = blocking_command_slot()?;
-    thread::Builder::new()
-        .name("sftp-delete".to_string())
-        .spawn(move || {
-            let _slot = slot;
-            let result = run_delete(
-                &state_handle,
-                &session,
-                &connection_id,
-                &remote_path,
-                &operation_id_for_thread,
-            );
-            let (success, message) = match result {
-                Ok(()) => (true, "删除成功".to_string()),
-                Err(error) => (false, error.to_string()),
-            };
-            emit_event(
-                &state_handle.app_handle,
-                "delete-complete",
-                json!({
-                    "id": connection_id,
-                    "operationId": operation_id_for_thread,
-                    "success": success,
-                    "message": message
-                }),
-            );
-        })
-        .map_err(|error| SshError::FileOperationFailed(format!("无法创建删除任务: {error}")))?;
-    Ok(true)
+    launch_file_task(
+        state.inner(),
+        window.label(),
+        id,
+        operation_id,
+        "delete",
+        expected_generation,
+        expires_at,
+        FileTaskOperation::Delete(remote_path),
+    )
 }
 
 /// 重命名远程文件或目录，可选择覆盖已有目标。
@@ -4276,10 +4489,18 @@ pub async fn sftp_rename(
     source_path: String,
     target_path: String,
     overwrite: Option<bool>,
+    expected_generation: u64,
 ) -> Result<bool, SshError> {
     let state = state.inner().clone();
     run_blocking_command(move || {
-        sftp_rename_blocking(state, id, source_path, target_path, overwrite)
+        sftp_rename_blocking(
+            state,
+            id,
+            source_path,
+            target_path,
+            overwrite,
+            expected_generation,
+        )
     })
     .await
 }
@@ -4290,7 +4511,14 @@ fn sftp_rename_blocking(
     source_path: String,
     target_path: String,
     overwrite: Option<bool>,
+    expected_generation: u64,
 ) -> Result<bool, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
+    if connection_generation(&state, &id) != expected_generation {
+        return Err(SshError::ConnectionGenerationChanged);
+    }
     let policy = remote_mutation_policy(&state, &id, &session_for(&state, &id)?)?;
     let sftp = sftp_for(&state, &id)?;
     policy
@@ -4299,16 +4527,19 @@ fn sftp_rename_blocking(
     policy
         .validate_parent(&sftp, Path::new(&target_path))
         .map_err(SshError::FileOperationFailed)?;
+    let session = session_for(&state, &id)?;
+    let session = session
+        .lock()
+        .map_err(|_| SshError::SftpFailed("会话锁已损坏".into()))?;
     rename_remote_file(
         &sftp,
+        &session,
         Path::new(&source_path),
         Path::new(&target_path),
         overwrite.unwrap_or(false),
-    )
-    .map_err(|error| {
-        mark_ssh_error_if_connection_lost(&state, &id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
+        || false,
+        || Ok(()),
+    )?;
     Ok(true)
 }
 
@@ -4336,6 +4567,9 @@ pub async fn get_sftp_user_home(
 }
 
 fn get_sftp_user_home_blocking(state: SshState, id: String) -> Result<String, SshError> {
+    // 主会话错误清理必须先于同 ID 重连完成，不能由迟到错误撤销新会话。
+    let operation_lock = connection_operation_lock(&state, &id);
+    let _operation = operation_lock.lock().unwrap();
     let sftp = sftp_for(&state, &id)?;
     Ok(sftp
         .realpath(Path::new("."))
@@ -4359,7 +4593,7 @@ fn get_sftp_user_home_blocking(state: SshState, id: String) -> Result<String, Ss
 ///
 /// # Returns
 ///
-/// PTY 创建并开始读取时返回 `Ok(true)`。
+/// PTY 创建并开始读取时返回实际使用的行列数。
 ///
 /// # Errors
 ///
@@ -4367,115 +4601,250 @@ fn get_sftp_user_home_blocking(state: SshState, id: String) -> Result<String, Ss
 #[tauri::command]
 pub async fn open_ssh_terminal(
     state: State<'_, SshState>,
+    window: WebviewWindow,
     id: String,
     terminal_id: String,
     columns: u32,
     rows: u32,
-) -> Result<bool, SshError> {
-    if terminal_id.trim().is_empty() {
-        return Err(SshError::TerminalFailed("终端标识不能为空".to_string()));
+    generation: String,
+    on_output: tauri::ipc::Channel<serde_json::Value>,
+) -> Result<serde_json::Value, SshError> {
+    if terminal_id.is_empty()
+        || terminal_id.len() > 256
+        || generation.is_empty()
+        || generation.len() > 128
+    {
+        return Err(SshError::TerminalFailed("终端标识无效".into()));
     }
-    let connection = connection_info(state.inner(), &id, true)?;
+    let owner = window.label().to_string();
+    let window_generation = state
+        .window_generations
+        .lock()
+        .unwrap()
+        .get(&owner)
+        .copied()
+        .unwrap_or(0);
+    let (connection, connection_generation) = {
+        let generations = state.connection_generations.lock().unwrap();
+        (
+            connection_info(state.inner(), &id, true)?,
+            generations.get(&id).copied().unwrap_or(0),
+        )
+    };
+    {
+        let mut openings = state.terminal_openings.lock().unwrap();
+        if state
+            .window_generations
+            .lock()
+            .unwrap()
+            .get(&owner)
+            .copied()
+            .unwrap_or(0)
+            != window_generation
+        {
+            return Err(SshError::TerminalNotFound);
+        }
+        if openings
+            .get(&terminal_id)
+            .is_some_and(|entry| entry.0 != owner)
+            || state
+                .terminal_sessions
+                .read()
+                .unwrap()
+                .get(&terminal_id)
+                .is_some_and(|entry| entry.owner != owner)
+        {
+            return Err(SshError::TerminalNotFound);
+        }
+        openings.insert(
+            terminal_id.clone(),
+            (owner.clone(), generation.clone(), id.clone()),
+        );
+    }
     close_terminal_session(&state.terminal_sessions, &terminal_id);
-    let channel = tauri::async_runtime::spawn_blocking(move || {
-        open_terminal_channel(&connection, columns, rows)
-    })
-    .await
-    .map_err(|error| SshError::TerminalFailed(format!("终端启动任务失败: {error}")))??;
+    let (columns, rows) = normalize_terminal_dimensions(columns, rows);
+    let cancellation = match state
+        .terminal_requests
+        .begin(&owner, &terminal_id, &generation)
+    {
+        Ok(cancellation) => cancellation,
+        Err(error) => {
+            let mut openings = state.terminal_openings.lock().unwrap();
+            if openings
+                .get(&terminal_id)
+                .is_some_and(|entry| entry.0 == owner && entry.1 == generation)
+            {
+                openings.remove(&terminal_id);
+            }
+            return Err(SshError::TerminalFailed(error));
+        }
+    };
+    let result = if cancellation.load(Ordering::Acquire) {
+        Err(SshError::TerminalNotFound)
+    } else {
+        run_blocking_command(move || open_terminal_channel(&connection, columns, rows)).await
+    };
+    state
+        .terminal_requests
+        .finish(&owner, &generation, &cancellation);
+    let mut openings = state.terminal_openings.lock().unwrap();
+    let current = openings
+        .get(&terminal_id)
+        .is_some_and(|entry| entry.0 == owner && entry.1 == generation);
+    if current {
+        openings.remove(&terminal_id);
+    }
+    let current_window_generation = state
+        .window_generations
+        .lock()
+        .unwrap()
+        .get(&owner)
+        .copied()
+        .unwrap_or(0);
+    let current_connection_generation = state
+        .connection_generations
+        .lock()
+        .unwrap()
+        .get(&id)
+        .copied()
+        .unwrap_or(0);
+    if !current
+        || cancellation.load(Ordering::Acquire)
+        || state.runtime_stop.load(Ordering::Acquire)
+        || current_window_generation != window_generation
+        || current_connection_generation != connection_generation
+    {
+        return Err(SshError::TerminalNotFound);
+    }
+    let channel = result?;
     let terminal = Arc::new(TerminalSession {
         connection_id: id,
+        owner,
+        generation,
         channel: Arc::new(Mutex::new(channel)),
         stop: Arc::new(AtomicBool::new(false)),
-        write_lock: Mutex::new(()),
+        write_lock: Mutex::new(InputSequence::default()),
+        resize_request: Mutex::new(PendingResize::default()),
+        output: on_output,
+        output_flow: Mutex::new(OutputFlow::default()),
+        output_wake: Condvar::new(),
     });
     state
         .terminal_sessions
         .write()
         .unwrap()
-        .insert(terminal_id.clone(), Arc::clone(&terminal));
-    spawn_terminal_reader(state.inner().clone(), terminal_id, terminal);
-    Ok(true)
+        .insert(terminal_id.clone(), terminal.clone());
+    drop(openings);
+    if let Err(error) = spawn_terminal_reader(state.inner().clone(), terminal_id.clone(), terminal)
+    {
+        close_terminal_session(&state.terminal_sessions, &terminal_id);
+        return Err(error);
+    }
+    Ok(json!({"columns":columns,"rows":rows}))
 }
-
-/// 向远程 PTY 写入用户输入，超过单次上限时拒绝请求。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `terminal_id` - 目标终端会话 ID。
-/// * `data` - 要写入远程 PTY 的用户输入文本。
-///
-/// # Returns
-///
-/// 输入写入成功时返回 `Ok(true)`。
-///
-/// # Errors
-///
-/// 当输入超过大小限制、终端不存在或远程写入失败时返回错误。
+fn owned_terminal(
+    state: &SshState,
+    owner: &str,
+    terminal_id: &str,
+    generation: &str,
+) -> Result<Arc<TerminalSession>, SshError> {
+    let terminal = terminal_session_for(state, terminal_id)?;
+    if terminal.owner != owner || terminal.generation != generation {
+        return Err(SshError::TerminalNotFound);
+    }
+    Ok(terminal)
+}
+/// 输入序号在写锁内校验，前端顺序队列仍是正常输入的唯一生产者。
 #[tauri::command]
 pub async fn write_ssh_terminal(
     state: State<'_, SshState>,
+    window: WebviewWindow,
     terminal_id: String,
     data: String,
+    generation: String,
+    sequence: u64,
 ) -> Result<bool, SshError> {
     if data.len() > MAX_TERMINAL_INPUT_BYTES {
         return Err(SshError::TerminalInputTooLong);
     }
-    let terminal = terminal_session_for(state.inner(), &terminal_id)?;
-    tauri::async_runtime::spawn_blocking(move || write_terminal_input(&terminal, data.as_bytes()))
-        .await
-        .map_err(|error| SshError::TerminalFailed(format!("终端输入任务失败: {error}")))??;
+    let terminal = owned_terminal(&state, window.label(), &terminal_id, &generation)?;
+    let writing_terminal = terminal.clone();
+    let result = run_blocking_command(move || {
+        write_terminal_input(&writing_terminal, data.as_bytes(), sequence)
+    })
+    .await;
+    if result
+        .as_ref()
+        .is_err_and(|error| !matches!(error, SshError::BackgroundBusy | SshError::TerminalNotFound))
+    {
+        let _openings = state.terminal_openings.lock().unwrap();
+        if state
+            .terminal_sessions
+            .read()
+            .unwrap()
+            .get(&terminal_id)
+            .is_some_and(|entry| Arc::ptr_eq(entry, &terminal))
+        {
+            close_terminal_session(&state.terminal_sessions, &terminal_id);
+        }
+    }
+    result?;
     Ok(true)
 }
-
-/// 调整远程 PTY 的行列尺寸。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `terminal_id` - 目标终端会话 ID。
-/// * `columns` - 请求的终端列数。
-/// * `rows` - 请求的终端行数。
-///
-/// # Returns
-///
-/// 尺寸调整成功时返回 `Ok(true)`。
-///
-/// # Errors
-///
-/// 当终端不存在或远程 PTY 控制请求失败时返回错误。
+/// ACK 为累计确认，非法的超前序号不会释放背压预算。
+#[tauri::command]
+pub fn ack_ssh_terminal_output(
+    state: State<SshState>,
+    window: WebviewWindow,
+    terminal_id: String,
+    generation: String,
+    sequence: u64,
+) -> Result<bool, SshError> {
+    let terminal = owned_terminal(&state, window.label(), &terminal_id, &generation)?;
+    let accepted = terminal.output_flow.lock().unwrap().acknowledge(sequence);
+    terminal.output_wake.notify_all();
+    Ok(accepted)
+}
 #[tauri::command]
 pub async fn resize_ssh_terminal(
     state: State<'_, SshState>,
+    window: WebviewWindow,
     terminal_id: String,
+    generation: String,
     columns: u32,
     rows: u32,
-) -> Result<bool, SshError> {
-    let terminal = terminal_session_for(state.inner(), &terminal_id)?;
+) -> Result<serde_json::Value, SshError> {
+    let terminal = owned_terminal(&state, window.label(), &terminal_id, &generation)?;
     let (columns, rows) = normalize_terminal_dimensions(columns, rows);
-    tauri::async_runtime::spawn_blocking(move || resize_terminal(&terminal, columns, rows))
-        .await
-        .map_err(|error| SshError::TerminalFailed(format!("终端调整任务失败: {error}")))??;
-    Ok(true)
+    run_blocking_command(move || resize_terminal(&terminal, columns, rows)).await?;
+    Ok(json!({"columns":columns,"rows":rows}))
 }
-
-/// 关闭远程 PTY 会话；重复关闭保持成功。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `terminal_id` - 要关闭的终端会话 ID。
-///
-/// # Returns
-///
-/// 始终返回 `Ok(true)`，保证关闭操作幂等。
-///
-/// # Errors
-///
-/// 当终端会话表锁不可用时返回错误。
 #[tauri::command]
-pub fn close_ssh_terminal(state: State<SshState>, terminal_id: String) -> Result<bool, SshError> {
-    close_terminal_session(&state.terminal_sessions, &terminal_id);
+pub fn close_ssh_terminal(
+    state: State<SshState>,
+    window: WebviewWindow,
+    terminal_id: String,
+    generation: String,
+) -> Result<bool, SshError> {
+    state
+        .terminal_requests
+        .cancel(window.label(), &terminal_id, &generation);
+    let mut openings = state.terminal_openings.lock().unwrap();
+    if openings
+        .get(&terminal_id)
+        .is_some_and(|entry| entry.0 == window.label() && entry.1 == generation)
+    {
+        openings.remove(&terminal_id);
+    }
+    if state
+        .terminal_sessions
+        .read()
+        .unwrap()
+        .get(&terminal_id)
+        .is_some_and(|entry| entry.owner == window.label() && entry.generation == generation)
+    {
+        close_terminal_session(&state.terminal_sessions, &terminal_id);
+    }
     Ok(true)
 }
 
@@ -4486,11 +4855,18 @@ fn transfer_progress(
     transfer_id: &str,
     connection_id: &str,
     current: u64,
-    total: u64,
+    total: Option<u64>,
 ) {
-    let progress = percentage(current, total);
-    emit_event(
-        &state.app_handle,
+    let progress = total
+        .map(|total| percentage(current, total))
+        .unwrap_or(0)
+        .min(99);
+    if !state.tasks.progress(transfer_id, current, total, "") {
+        return;
+    }
+    emit_task_event(
+        state,
+        transfer_id,
         event,
         json!({
             "id": connection_id,
@@ -4504,8 +4880,11 @@ fn transfer_progress(
 
 /// 发送文件夹传输的当前文件和整体进度事件。
 fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'_>) {
-    let progress = percentage(details.current, details.total);
-    let overall_progress = if details.total_bytes == 0 {
+    let progress = details
+        .total
+        .map(|total| percentage(details.current, total))
+        .unwrap_or(0);
+    let overall_progress = if details.total_bytes == Some(0) {
         percentage(
             details.file_index.saturating_add(1) as u64,
             details.file_total as u64,
@@ -4513,11 +4892,21 @@ fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'
     } else {
         percentage(
             details.completed_bytes.saturating_add(details.current),
-            details.total_bytes,
+            details.total_bytes.unwrap_or(u64::MAX),
         )
     };
-    emit_event(
-        &state.app_handle,
+    let current = details.completed_bytes.saturating_add(details.current);
+    if !state.tasks.progress(
+        details.transfer_id,
+        current,
+        details.total_bytes,
+        details.file_name,
+    ) {
+        return;
+    }
+    emit_task_event(
+        state,
+        details.transfer_id,
         details.event,
         json!({
             "id": details.connection_id,
@@ -4528,7 +4917,7 @@ fn folder_transfer_progress(state: &SshState, details: &FolderTransferProgress<'
             "fileName": details.file_name,
             "fileIndex": details.file_index,
             "fileTotal": details.file_total,
-            "overallProgress": overall_progress,
+            "overallProgress": overall_progress.min(99),
             "completedBytes": details.completed_bytes.saturating_add(details.current),
             "totalBytes": details.total_bytes
         }),
@@ -4557,7 +4946,160 @@ fn prepare_local_download(path: &Path, overwrite: bool) -> Result<LocalDownload,
     Ok(LocalTransferRoot::open(parent)?.prepare_download(Path::new(name), overwrite)?)
 }
 
-/// 以私有且排他创建的远端临时文件上传，成功后再提交。
+fn upload_target_stamp(sftp: &Sftp, path: &Path) -> Result<Option<UploadTargetStamp>, SshError> {
+    match sftp.lstat(path) {
+        Ok(stat) => UploadTargetStamp::from_stat(&stat)
+            .map(Some)
+            .map_err(|message| SshError::FileOperationFailed(message.into())),
+        Err(error) if is_sftp_missing_path(&error) => Ok(None),
+        Err(error) => Err(SshError::FileOperationFailed(error.to_string())),
+    }
+}
+
+/// 清理连接独占的截止时间守卫；提前结束会唤醒并回收线程，不留下延迟关 socket 的任务。
+struct CleanupSocketGuard {
+    completed: Arc<(Mutex<bool>, Condvar)>,
+    worker: Option<thread::JoinHandle<()>>,
+}
+
+impl CleanupSocketGuard {
+    fn new(
+        socket: TcpStream,
+        timeout: Duration,
+        abort: impl Fn() -> bool + Send + 'static,
+    ) -> std::io::Result<Self> {
+        let completed = Arc::new((Mutex::new(false), Condvar::new()));
+        let signal = completed.clone();
+        let deadline = Instant::now() + timeout;
+        let worker = thread::Builder::new()
+            .name("file-cleanup-deadline".into())
+            .spawn(move || {
+                let (lock, wake) = &*signal;
+                let mut done = lock.lock().unwrap();
+                while !*done {
+                    if Instant::now() >= deadline || abort() {
+                        drop(done);
+                        let _ = socket.shutdown(std::net::Shutdown::Both);
+                        return;
+                    }
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    done = wake
+                        .wait_timeout(done, remaining.min(Duration::from_millis(25)))
+                        .unwrap()
+                        .0;
+                }
+            })?;
+        Ok(Self {
+            completed,
+            worker: Some(worker),
+        })
+    }
+}
+
+impl Drop for CleanupSocketGuard {
+    fn drop(&mut self) {
+        let (lock, wake) = &*self.completed;
+        *lock.lock().unwrap() = true;
+        wake.notify_all();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
+/// 用户取消允许清理自己的临时文件，但配置换代、断开和退出均禁止新建清理连接。
+fn upload_cleanup_endpoint(
+    state: &SshState,
+    connection: &SshConnection,
+    generation: u64,
+) -> Option<SocketAddr> {
+    if state.runtime_stop.load(Ordering::Acquire) {
+        return None;
+    }
+    let generations = state.connection_generations.lock().unwrap();
+    if generations.get(&connection.id).copied().unwrap_or(0) != generation {
+        return None;
+    }
+    let connections = state.connections.read().unwrap();
+    let current = connections.get(&connection.id)?;
+    if !current.connected || !same_connection_configuration(current, connection) {
+        return None;
+    }
+    state
+        .connection_endpoints
+        .lock()
+        .unwrap()
+        .get(&connection.id)
+        .copied()
+}
+
+/// 仅清理本次排他创建的随机临时叶子，不接触目标，也不重试原上传。
+///
+/// 被取消的传输 socket 已关闭时，最多用五秒独立清理连接重新验证主机指纹、
+/// 登录身份及父目录。网络不可达、身份换代或应用退出时只能尽力清理，不能
+/// 据此宣称远端残留一定已移除；始终保留原任务的取消或失败结果。
+fn cleanup_upload_temporary(
+    context: &FileTransferContext<'_>,
+    policy: &RemoteMutationPolicy,
+    path: &Path,
+) {
+    fn unlink(sftp: &Sftp, policy: &RemoteMutationPolicy, path: &Path) -> Result<(), SshError> {
+        policy
+            .validate_parent(sftp, path)
+            .map_err(SshError::FileOperationFailed)?;
+        match sftp.unlink(path) {
+            Ok(()) => Ok(()),
+            Err(error) if is_sftp_missing_path(&error) => Ok(()),
+            Err(error) => Err(SshError::FileOperationFailed(error.to_string())),
+        }
+    }
+    if unlink(context.sftp, policy, path).is_ok() {
+        return;
+    }
+    let state = context.state;
+    let connection = context.connection;
+    let Some(generation) = state.tasks.generation(context.transfer_id) else {
+        return;
+    };
+    let Some(endpoint) = upload_cleanup_endpoint(state, connection, generation) else {
+        return;
+    };
+    let cleanup_state = state.clone();
+    let cleanup_connection = connection.clone();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let aborted =
+        move || upload_cleanup_endpoint(&cleanup_state, &cleanup_connection, generation).is_none();
+    let result = (|| -> Result<(), SshError> {
+        let tcp = crate::transfer_connect::connect(endpoint, Duration::from_secs(3), || {
+            aborted() || Instant::now() >= deadline
+        })?;
+        // libssh2 保持阻塞 API，但底层 socket 必须非阻塞才能应用协议超时。
+        tcp.set_nonblocking(true)?;
+        let _deadline_guard = CleanupSocketGuard::new(
+            tcp.try_clone()?,
+            deadline.saturating_duration_since(Instant::now()),
+            aborted,
+        )?;
+        let mut session =
+            Session::new().map_err(|error| SshError::ConnectionFailed(error.to_string()))?;
+        session.set_tcp_stream(tcp);
+        session.set_timeout(2_000);
+        session.handshake()?;
+        verify_host_key(connection, &host_key_info(&session)?)?;
+        authenticate(&session, connection)?;
+        let session = Arc::new(Mutex::new(session));
+        let cleanup_policy = remote_mutation_policy(state, &connection.id, &session)?;
+        let sftp = session.lock().unwrap().sftp()?;
+        if upload_cleanup_endpoint(state, connection, generation).is_none() {
+            return Err(SshError::TransferCancelled);
+        }
+        unlink(&sftp, &cleanup_policy, path)
+    })();
+    // 清理失败不能改变提交结果，也不能掩盖源变化或取消；下次不重试原操作。
+    let _ = result;
+}
+
+/// 源文件长度和元数据验证通过、远端 CLOSE 成功后才提交同目录临时文件。
 fn upload_file_to_sftp<F>(
     context: &FileTransferContext<'_>,
     policy: &RemoteMutationPolicy,
@@ -4566,21 +5108,25 @@ fn upload_file_to_sftp<F>(
     mut report_progress: F,
 ) -> Result<u64, SshError>
 where
-    F: FnMut(u64, u64),
+    F: FnMut(u64, Option<u64>),
 {
     let state = context.state;
-    let connection = context.connection;
     let sftp = context.sftp;
     let transfer_id = context.transfer_id;
-    let overwrite = context.overwrite;
+    state.tasks.running(transfer_id);
+    if is_cancelled(state, transfer_id) {
+        return Err(SshError::TransferCancelled);
+    }
     policy
         .validate_parent(sftp, Path::new(remote_path))
         .map_err(SshError::FileOperationFailed)?;
-    let total = local_file
-        .metadata()
-        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?
-        .len();
-    // 临时名不拼接原文件名，避免合法的长文件名超过服务器单个组件长度限制。
+    let target_before = upload_target_stamp(sftp, Path::new(remote_path))?;
+    if target_before.is_some() && !context.overwrite {
+        return Err(SshError::FileOperationFailed(format!(
+            "远程文件已存在: {remote_path}"
+        )));
+    }
+    let before = SourceStamp::from_local_metadata(&local_file.metadata()?)?;
     let temporary_name = format!(".portal-part-{:032x}", rand::random::<u128>());
     let temporary_path = match remote_path.rsplit_once('/') {
         Some((parent, _)) => format!("{parent}/{temporary_name}"),
@@ -4593,71 +5139,93 @@ where
             0o600,
             ssh2::OpenType::File,
         )
-        .map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?;
+        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
     let mut reader = BufReader::new(local_file);
     let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0u64;
-    report_progress(current, total);
-
-    let write_result = (|| -> Result<(), SshError> {
+    report_progress(0, before.size);
+    let result = (|| -> Result<(), SshError> {
         loop {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            if is_cancelled(state, transfer_id) {
                 return Err(SshError::TransferCancelled);
             }
-            let count = reader
-                .read(&mut buffer)
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            let count = reader.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
-            remote_file.write_all(&buffer[..count]).map_err(|error| {
-                mark_io_error_if_connection_lost(state, &connection.id, &error);
-                SshError::FileOperationFailed(error.to_string())
-            })?;
-            current += count as u64;
-            report_progress(current, total);
+            if before
+                .size
+                .is_some_and(|size| current.saturating_add(count as u64) > size)
+            {
+                return Err(SshError::SourceChanged("源文件长度增加".into()));
+            }
+            remote_file.write_all(&buffer[..count])?;
+            current = current.saturating_add(count as u64);
+            report_progress(current, before.size);
         }
-        // ssh2::File::flush 是空操作；必须确认远端 CLOSE 成功后才能提交临时文件。
-        remote_file.close().map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?;
+        let after = SourceStamp::from_local_metadata(&reader.get_ref().metadata()?)?;
+        validate_transfer(&before, &after, current)
+            .map_err(|error| SshError::SourceChanged(error.to_string()))?;
+        remote_file
+            .close()
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
         Ok(())
     })();
     drop(remote_file);
-
-    let result = write_result.and_then(|_| {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+    let result = result.and_then(|_| {
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
         policy
             .validate_parent(sftp, Path::new(remote_path))
             .map_err(SshError::FileOperationFailed)?;
+        let mode = validate_upload_target(
+            target_before,
+            upload_target_stamp(sftp, Path::new(remote_path))?,
+        )
+        .map_err(|message| SshError::FileOperationFailed(message.into()))?;
+        sftp.setstat(
+            Path::new(&temporary_path),
+            ssh2::FileStat {
+                size: None,
+                uid: None,
+                gid: None,
+                perm: Some(mode),
+                atime: None,
+                mtime: None,
+            },
+        )
+        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+        let session = context
+            .session
+            .lock()
+            .map_err(|_| SshError::SftpFailed("会话锁已损坏".into()))?;
         rename_remote_file(
             sftp,
+            &session,
             Path::new(&temporary_path),
             Path::new(remote_path),
-            overwrite,
+            context.overwrite,
+            || is_cancelled(state, transfer_id),
+            || {
+                // 扩展协商可能耗时，在真正发送替换前再次检查目标，不能恢复旧权限。
+                let current =
+                    upload_target_stamp(sftp, Path::new(remote_path)).map_err(|error| {
+                        crate::sftp_commit::CommitError::Protocol(error.to_string())
+                    })?;
+                validate_upload_target(target_before, current)
+                    .map_err(|message| crate::sftp_commit::CommitError::Protocol(message.into()))?;
+                state
+                    .tasks
+                    .committing(transfer_id)
+                    .map_err(|_| crate::sftp_commit::CommitError::Cancelled)
+            },
         )
-        .map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })
     });
-
     if result.is_err() {
-        // 父路径变得不可信时不按字符串清理，避免误删重定向后的其他目录。
-        if policy
-            .validate_parent(sftp, Path::new(&temporary_path))
-            .is_ok()
-        {
-            let _ = sftp.unlink(Path::new(&temporary_path));
-        }
+        cleanup_upload_temporary(context, policy, Path::new(&temporary_path));
     }
-    result.map(|_| total)
+    result.map(|_| current)
 }
 
 /// 创建 SFTP 会话并执行单文件上传。
@@ -4671,19 +5239,20 @@ fn run_upload(
     overwrite: bool,
 ) -> Result<String, SshError> {
     let policy = remote_mutation_policy(state, &connection.id, session)?;
-    let session = session
+    let session_guard = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session.sftp().map_err(|error| {
+    let sftp = session_guard.sftp().map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &connection.id, &error);
         SshError::SftpFailed(error.to_string())
     })?;
-    drop(session);
+    drop(session_guard);
 
     let transfer_context = FileTransferContext {
         state,
         connection,
         sftp: &sftp,
+        session,
         transfer_id,
         overwrite,
     };
@@ -4706,6 +5275,17 @@ fn run_upload(
     .map(|_| "上传成功".to_string())
 }
 
+/// 保留调用方需要判定的传输领域错误码；普通失败补充文件上下文。
+fn file_transfer_error_context(error: SshError, operation: &str, path: &str) -> SshError {
+    match error {
+        error @ (SshError::TransferCancelled
+        | SshError::SourceChanged(_)
+        | SshError::CommitOutcomeUnknown(_)
+        | SshError::AtomicRenameUnsupported) => error,
+        other => SshError::FileOperationFailed(format!("{operation}“{path}”失败: {other}")),
+    }
+}
+
 /// 按预扫描计划创建远程目录并递归上传本地文件夹。
 fn run_upload_directory(
     state: &SshState,
@@ -4717,22 +5297,24 @@ fn run_upload_directory(
     overwrite: bool,
 ) -> Result<String, SshError> {
     let local_root = LocalTransferRoot::open(Path::new(local_path))?;
-    let plan = collect_folder_upload_plan(&local_root, || {
-        is_cancelled(&state.cancelled_transfers, transfer_id)
-    })?;
-    if is_cancelled(&state.cancelled_transfers, transfer_id) {
+    let plan = collect_folder_upload_plan(
+        &local_root,
+        || is_cancelled(state, transfer_id),
+        || state.tasks.heartbeat(transfer_id),
+    )?;
+    if is_cancelled(state, transfer_id) {
         return Err(SshError::TransferCancelled);
     }
 
     let policy = remote_mutation_policy(state, &connection.id, session)?;
-    let session = session
+    let session_guard = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session.sftp().map_err(|error| {
+    let sftp = session_guard.sftp().map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &connection.id, &error);
         SshError::SftpFailed(error.to_string())
     })?;
-    drop(session);
+    drop(session_guard);
 
     ensure_remote_directory(
         state,
@@ -4742,15 +5324,17 @@ fn run_upload_directory(
         remote_path,
         overwrite,
     )?;
+    state.tasks.heartbeat(transfer_id);
     let transfer_context = FileTransferContext {
         state,
         connection,
         sftp: &sftp,
+        session,
         transfer_id,
         overwrite,
     };
     for relative_path in &plan.directories {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
         let remote_directory = join_remote_path(remote_path, relative_path)?;
@@ -4768,12 +5352,14 @@ fn run_upload_directory(
                 display_relative_path(relative_path)
             ))
         })?;
+        state.tasks.heartbeat(transfer_id);
     }
 
     let file_total = plan.files.len();
     let mut completed_bytes = 0u64;
     for (file_index, file) in plan.files.iter().enumerate() {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        state.tasks.running(transfer_id);
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
         let remote_file_path = join_remote_path(remote_path, &file.relative_path)?;
@@ -4796,18 +5382,12 @@ fn run_upload_directory(
                         current,
                         total,
                         completed_bytes,
-                        total_bytes: plan.total_bytes,
+                        total_bytes: Some(plan.total_bytes),
                     },
                 );
             },
         )
-        .map_err(|error| {
-            if matches!(&error, SshError::TransferCancelled) {
-                error
-            } else {
-                SshError::FileOperationFailed(format!("上传“{display_path}”失败: {error}"))
-            }
-        })?;
+        .map_err(|error| file_transfer_error_context(error, "上传", &display_path))?;
         completed_bytes = completed_bytes.saturating_add(uploaded_size);
     }
 
@@ -4830,7 +5410,18 @@ fn run_upload_directory(
     }
 }
 
-/// 下载到私有临时文件；成功后通过同一父目录句柄提交，失败保留旧目标。
+fn remote_source_stamp(stat: &ssh2::FileStat) -> Result<SourceStamp, SshError> {
+    let modified = stat
+        .mtime
+        .map(|time| {
+            std::time::UNIX_EPOCH
+                .checked_add(Duration::from_secs(time))
+                .ok_or_else(|| SshError::FileOperationFailed("远端文件修改时间超出范围".into()))
+        })
+        .transpose()?;
+    Ok(SourceStamp::new(stat.size, modified))
+}
+/// 已知长度、元数据和远端关闭均验证通过后，才同步并提交本地临时文件。
 fn download_file_to_local<F>(
     context: &FileTransferContext<'_>,
     remote_path: &str,
@@ -4838,60 +5429,64 @@ fn download_file_to_local<F>(
     mut report_progress: F,
 ) -> Result<u64, SshError>
 where
-    F: FnMut(u64, u64),
+    F: FnMut(u64, Option<u64>),
 {
     let state = context.state;
-    let connection = context.connection;
-    let sftp = context.sftp;
     let transfer_id = context.transfer_id;
-
-    let mut remote_file = sftp.open(Path::new(remote_path)).map_err(|error| {
-        mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-        SshError::FileOperationFailed(error.to_string())
-    })?;
-    let total = remote_file
-        .stat()
-        .map_err(|error| {
-            mark_ssh_error_if_connection_lost(state, &connection.id, &error);
-            SshError::FileOperationFailed(error.to_string())
-        })?
-        .size
-        .unwrap_or(0);
+    state.tasks.running(transfer_id);
+    if is_cancelled(state, transfer_id) {
+        return Err(SshError::TransferCancelled);
+    }
+    let mut remote_file = context
+        .sftp
+        .open(Path::new(remote_path))
+        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    let before = remote_source_stamp(
+        &remote_file
+            .stat()
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?,
+    )?;
     let mut buffer = vec![0u8; TRANSFER_BUFFER_SIZE];
     let mut current = 0u64;
-    report_progress(current, total);
-
-    let result = (|| -> Result<(), SshError> {
+    report_progress(0, before.size);
+    {
         let mut writer = BufWriter::new(target.file_mut());
         loop {
-            if is_cancelled(&state.cancelled_transfers, transfer_id) {
+            if is_cancelled(state, transfer_id) {
                 return Err(SshError::TransferCancelled);
             }
-            let count = remote_file.read(&mut buffer).map_err(|error| {
-                mark_io_error_if_connection_lost(state, &connection.id, &error);
-                SshError::FileOperationFailed(error.to_string())
-            })?;
+            let count = remote_file.read(&mut buffer)?;
             if count == 0 {
                 break;
             }
-            writer
-                .write_all(&buffer[..count])
-                .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+            if before
+                .size
+                .is_some_and(|size| current.saturating_add(count as u64) > size)
+            {
+                return Err(SshError::SourceChanged("源文件长度增加".into()));
+            }
+            writer.write_all(&buffer[..count])?;
             current = current.saturating_add(count as u64);
-            report_progress(current, total);
+            report_progress(current, before.size);
         }
-        writer
-            .flush()
-            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
-        drop(writer);
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
-            return Err(SshError::TransferCancelled);
-        }
-        target.commit()?;
-        Ok(())
-    })();
-
-    result.map(|_| total)
+        writer.flush()?;
+    }
+    let after = remote_source_stamp(
+        &remote_file
+            .stat()
+            .map_err(|error| SshError::FileOperationFailed(error.to_string()))?,
+    )?;
+    validate_transfer(&before, &after, current)
+        .map_err(|error| SshError::SourceChanged(error.to_string()))?;
+    remote_file
+        .close()
+        .map_err(|error| SshError::FileOperationFailed(error.to_string()))?;
+    state
+        .tasks
+        .committing(transfer_id)
+        .map_err(|_| SshError::TransferCancelled)?;
+    target.commit()?;
+    Ok(current)
 }
 
 /// 创建 SFTP 会话并执行单文件下载。
@@ -4904,18 +5499,19 @@ fn run_download(
     local_path: &str,
     overwrite: bool,
 ) -> Result<String, SshError> {
-    let session = session
+    let session_guard = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session.sftp().map_err(|error| {
+    let sftp = session_guard.sftp().map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &connection.id, &error);
         SshError::SftpFailed(error.to_string())
     })?;
-    drop(session);
+    drop(session_guard);
     let transfer_context = FileTransferContext {
         state,
         connection,
         sftp: &sftp,
+        session,
         transfer_id,
         overwrite,
     };
@@ -4954,29 +5550,30 @@ fn run_download_directory(
             ))
         })?;
 
-    let session = session
+    let session_guard = session
         .lock()
         .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session.sftp().map_err(|error| {
+    let sftp = session_guard.sftp().map_err(|error| {
         mark_ssh_error_if_connection_lost(state, &connection.id, &error);
         SshError::SftpFailed(error.to_string())
     })?;
-    drop(session);
+    drop(session_guard);
 
     let plan =
         collect_folder_download_plan(state, &connection.id, &sftp, remote_path, transfer_id)?;
-    if is_cancelled(&state.cancelled_transfers, transfer_id) {
+    if is_cancelled(state, transfer_id) {
         return Err(SshError::TransferCancelled);
     }
     let transfer_context = FileTransferContext {
         state,
         connection,
         sftp: &sftp,
+        session,
         transfer_id,
         overwrite,
     };
     for relative_path in &plan.directories {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
         target_root.create_dir_all(relative_path).map_err(|error| {
@@ -4985,12 +5582,14 @@ fn run_download_directory(
                 display_relative_path(relative_path)
             ))
         })?;
+        state.tasks.heartbeat(transfer_id);
     }
 
     let file_total = plan.files.len();
     let mut completed_bytes = 0u64;
     for (file_index, file) in plan.files.iter().enumerate() {
-        if is_cancelled(&state.cancelled_transfers, transfer_id) {
+        state.tasks.running(transfer_id);
+        if is_cancelled(state, transfer_id) {
             return Err(SshError::TransferCancelled);
         }
         let display_path = display_relative_path(&file.relative_path);
@@ -5012,18 +5611,12 @@ fn run_download_directory(
                         current,
                         total,
                         completed_bytes,
-                        total_bytes: plan.total_bytes,
+                        total_bytes: plan.total_known.then_some(plan.total_bytes),
                     },
                 );
             },
         )
-        .map_err(|error| {
-            if matches!(&error, SshError::TransferCancelled) {
-                error
-            } else {
-                SshError::FileOperationFailed(format!("下载“{display_path}”失败: {error}"))
-            }
-        })?;
+        .map_err(|error| file_transfer_error_context(error, "下载", &display_path))?;
         completed_bytes = completed_bytes.saturating_add(downloaded_size);
     }
 
@@ -5046,271 +5639,433 @@ fn run_download_directory(
     }
 }
 
-/// 后台上传单个文件，并通过 `upload-progress`/`upload-complete` 事件报告状态。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `id` - 已建立会话的连接 ID。
-/// * `local_path` - 要上传的本地文件路径。
-/// * `remote_path` - 目标远程文件路径。
-/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
-/// * `overwrite` - 是否覆盖已有远程文件；省略时为 `false`。
-///
-/// # Returns
-///
-/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
-///
-/// # Errors
-///
-/// 当连接不可用、传输并发达到上限或后台上传任务无法启动时返回错误。
+/// 在独占会话中排队执行文件操作；原生状态保留最终结果供丢失事件后查询。
 #[tauri::command]
 pub fn scp_upload(
     state: State<SshState>,
+    window: WebviewWindow,
     id: String,
+    expected_generation: u64,
+    expires_at: u64,
     local_path: String,
     remote_path: String,
     transfer_id: Option<String>,
     overwrite: Option<bool>,
-) -> Result<String, SshError> {
-    let transfer_id = transfer_id.unwrap_or_else(|| format!("upload-{}", uuid_fallback()));
-    let connection = connection_info(&state, &id, true)?;
-    let session = session_for(&state, &id)?;
-    transfer_slot(&state)?;
-    let state_handle = state.inner().clone();
-    let transfer_id_for_thread = transfer_id.clone();
-    thread::spawn(move || {
-        let result = run_upload(
-            &state_handle,
-            &connection,
-            &session,
-            &transfer_id_for_thread,
-            &local_path,
-            &remote_path,
-            overwrite.unwrap_or(false),
-        );
-        let cancelled = matches!(result, Err(SshError::TransferCancelled));
-        emit_event(
-            &state_handle.app_handle,
-            "upload-complete",
-            json!({
-                "id": connection.id,
-                "transferId": transfer_id_for_thread,
-                "success": result.is_ok(),
-                "cancelled": cancelled,
-                "message": result.unwrap_or_else(|error| error.to_string())
-            }),
-        );
-        finish_transfer(&state_handle, &transfer_id_for_thread);
-    });
-    Ok("上传已开始".to_string())
+) -> Result<TaskSnapshot, SshError> {
+    launch_file_task(
+        state.inner(),
+        window.label(),
+        id,
+        transfer_id,
+        "upload",
+        expected_generation,
+        expires_at,
+        FileTaskOperation::Upload(local_path, remote_path, overwrite.unwrap_or(false)),
+    )
 }
-
-/// 后台递归上传目录，按文件和总字节数报告进度。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `id` - 已建立会话的连接 ID。
-/// * `local_path` - 要上传的本地目录路径。
-/// * `remote_path` - 目标远程目录路径。
-/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
-/// * `overwrite` - 是否覆盖已有远程文件；省略时为 `false`。
-///
-/// # Returns
-///
-/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
-///
-/// # Errors
-///
-/// 当连接不可用、本地目录无法读取、传输并发达到上限或后台任务无法启动时返回错误。
 #[tauri::command]
 pub fn sftp_upload_directory(
     state: State<SshState>,
+    window: WebviewWindow,
     id: String,
+    expected_generation: u64,
+    expires_at: u64,
     local_path: String,
     remote_path: String,
     transfer_id: Option<String>,
     overwrite: Option<bool>,
-) -> Result<String, SshError> {
-    let transfer_id = transfer_id.unwrap_or_else(|| format!("folder-upload-{}", uuid_fallback()));
-    let connection = connection_info(&state, &id, true)?;
-    let session = session_for(&state, &id)?;
-    transfer_slot(&state)?;
-    let state_handle = state.inner().clone();
-    let transfer_id_for_thread = transfer_id.clone();
-    let overwrite = overwrite.unwrap_or(false);
-    thread::spawn(move || {
-        let result = run_upload_directory(
-            &state_handle,
-            &connection,
-            &session,
-            &transfer_id_for_thread,
-            &local_path,
-            &remote_path,
-            overwrite,
-        );
-        let cancelled = matches!(result, Err(SshError::TransferCancelled));
-        emit_event(
-            &state_handle.app_handle,
-            "upload-complete",
-            json!({
-                "id": connection.id,
-                "transferId": transfer_id_for_thread,
-                "success": result.is_ok(),
-                "cancelled": cancelled,
-                "message": result.unwrap_or_else(|error| error.to_string())
-            }),
-        );
-        finish_transfer(&state_handle, &transfer_id_for_thread);
-    });
-    Ok("文件夹上传已开始".to_string())
+) -> Result<TaskSnapshot, SshError> {
+    launch_file_task(
+        state.inner(),
+        window.label(),
+        id,
+        transfer_id,
+        "upload",
+        expected_generation,
+        expires_at,
+        FileTaskOperation::UploadDirectory(local_path, remote_path, overwrite.unwrap_or(false)),
+    )
 }
-
-/// 后台下载单个文件，并通过 `download-progress`/`download-complete` 事件报告状态。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `id` - 已建立会话的连接 ID。
-/// * `remote_path` - 要下载的远程文件路径。
-/// * `local_path` - 目标本地文件路径。
-/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
-/// * `overwrite` - 是否覆盖已有本地文件；省略时为 `false`。
-///
-/// # Returns
-///
-/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
-///
-/// # Errors
-///
-/// 当连接不可用、传输并发达到上限或后台下载任务无法启动时返回错误。
 #[tauri::command]
 pub fn scp_download(
     state: State<SshState>,
+    window: WebviewWindow,
     id: String,
-    remote_path: String,
+    expected_generation: u64,
+    expires_at: u64,
     local_path: String,
+    remote_path: String,
     transfer_id: Option<String>,
     overwrite: Option<bool>,
-) -> Result<String, SshError> {
-    let transfer_id = transfer_id.unwrap_or_else(|| format!("download-{}", uuid_fallback()));
-    let connection = connection_info(&state, &id, true)?;
-    let session = session_for(&state, &id)?;
-    transfer_slot(&state)?;
-    let state_handle = state.inner().clone();
-    let transfer_id_for_thread = transfer_id.clone();
-    let overwrite = overwrite.unwrap_or(false);
-    thread::spawn(move || {
-        let result = run_download(
-            &state_handle,
-            &connection,
-            &session,
-            &transfer_id_for_thread,
-            &remote_path,
-            &local_path,
-            overwrite,
-        );
-        let cancelled = matches!(result, Err(SshError::TransferCancelled));
-        emit_event(
-            &state_handle.app_handle,
-            "download-complete",
-            json!({
-                "id": connection.id,
-                "transferId": transfer_id_for_thread,
-                "success": result.is_ok(),
-                "cancelled": cancelled,
-                "message": result.unwrap_or_else(|error| error.to_string())
-            }),
-        );
-        finish_transfer(&state_handle, &transfer_id_for_thread);
-    });
-    Ok("下载已开始".to_string())
+) -> Result<TaskSnapshot, SshError> {
+    launch_file_task(
+        state.inner(),
+        window.label(),
+        id,
+        transfer_id,
+        "download",
+        expected_generation,
+        expires_at,
+        FileTaskOperation::Download(remote_path, local_path, overwrite.unwrap_or(false)),
+    )
 }
-
-/// 后台递归下载远程目录，必要时创建本地目录结构。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `id` - 已建立会话的连接 ID。
-/// * `remote_path` - 要下载的远程目录路径。
-/// * `local_path` - 目标本地目录路径。
-/// * `transfer_id` - 可选的传输任务 ID；省略时由后端生成。
-/// * `overwrite` - 是否覆盖已有本地文件；省略时为 `false`。
-///
-/// # Returns
-///
-/// 返回表示后台任务已经启动的消息；实际结果通过传输事件报告。
-///
-/// # Errors
-///
-/// 当连接不可用、远程目录无法读取、本地目录无法创建、传输并发达到上限或后台任务无法启动时返回错误。
 #[tauri::command]
 pub fn sftp_download_directory(
     state: State<SshState>,
+    window: WebviewWindow,
     id: String,
-    remote_path: String,
+    expected_generation: u64,
+    expires_at: u64,
     local_path: String,
+    remote_path: String,
     transfer_id: Option<String>,
     overwrite: Option<bool>,
-) -> Result<String, SshError> {
-    let transfer_id = transfer_id.unwrap_or_else(|| format!("folder-download-{}", uuid_fallback()));
-    let connection = connection_info(&state, &id, true)?;
-    let session = session_for(&state, &id)?;
-    transfer_slot(&state)?;
-    let state_handle = state.inner().clone();
-    let transfer_id_for_thread = transfer_id.clone();
-    let overwrite = overwrite.unwrap_or(false);
-    thread::spawn(move || {
-        let result = run_download_directory(
-            &state_handle,
-            &connection,
-            &session,
-            &transfer_id_for_thread,
-            &remote_path,
-            &local_path,
-            overwrite,
-        );
-        let cancelled = matches!(result, Err(SshError::TransferCancelled));
-        emit_event(
-            &state_handle.app_handle,
-            "download-complete",
-            json!({
-                "id": connection.id,
-                "transferId": transfer_id_for_thread,
-                "success": result.is_ok(),
-                "cancelled": cancelled,
-                "message": result.unwrap_or_else(|error| error.to_string())
-            }),
-        );
-        finish_transfer(&state_handle, &transfer_id_for_thread);
-    });
-    Ok("文件夹下载已开始".to_string())
+) -> Result<TaskSnapshot, SshError> {
+    launch_file_task(
+        state.inner(),
+        window.label(),
+        id,
+        transfer_id,
+        "download",
+        expected_generation,
+        expires_at,
+        FileTaskOperation::DownloadDirectory(remote_path, local_path, overwrite.unwrap_or(false)),
+    )
+}
+/// 只允许任务所属窗口查询；已经结束的任务保留有界缓存。
+#[tauri::command]
+pub fn get_transfer_statuses(
+    state: State<SshState>,
+    window: WebviewWindow,
+    transfer_ids: Vec<String>,
+) -> Vec<TaskSnapshot> {
+    state.tasks.snapshots(window.label(), &transfer_ids)
+}
+/// 取消为幂等请求，不将接收请求误报为已经取消完成。
+#[tauri::command]
+pub fn cancel_transfer(
+    state: State<SshState>,
+    window: WebviewWindow,
+    transfer_id: String,
+) -> Option<TaskSnapshot> {
+    state.tasks.cancel(window.label(), &transfer_id)
 }
 
-/// 标记传输任务取消；实际线程在下一个安全检查点退出。
-///
-/// # Arguments
-///
-/// * `state` - Tauri 管理的共享 SSH 状态。
-/// * `transfer_id` - 要取消的上传或下载任务 ID。
-///
-/// # Returns
-///
-/// 取消标记写入成功时返回 `Ok(true)`；任务是否已经结束由传输完成事件决定。
-///
-/// # Errors
-///
-/// 当取消状态锁不可用时返回错误。
-#[tauri::command]
-pub fn cancel_transfer(state: State<SshState>, transfer_id: String) -> Result<bool, SshError> {
+enum FileTaskOperation {
+    Upload(String, String, bool),
+    UploadDirectory(String, String, bool),
+    Download(String, String, bool),
+    DownloadDirectory(String, String, bool),
+    Delete(String),
+}
+fn connection_generation(state: &SshState, id: &str) -> u64 {
     state
-        .cancelled_transfers
+        .connection_generations
         .lock()
         .unwrap()
-        .insert(transfer_id);
-    Ok(true)
+        .get(id)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// 与身份捕获及登记共用代次锁，迟到 IPC 不能改用已重连的会话。
+fn validate_file_task_start(
+    current: u64,
+    expected: u64,
+    expires_at: u64,
+    now: u64,
+) -> Result<(), SshError> {
+    if current != expected {
+        return Err(SshError::ConnectionGenerationChanged);
+    }
+    if expires_at <= now || expires_at.saturating_sub(now) > 60_000 {
+        return Err(SshError::TransferStartExpired);
+    }
+    Ok(())
+}
+
+fn launch_file_task(
+    state: &SshState,
+    owner: &str,
+    id: String,
+    task_id: Option<String>,
+    kind: &'static str,
+    expected_generation: u64,
+    expires_at: u64,
+    operation: FileTaskOperation,
+) -> Result<TaskSnapshot, SshError> {
+    let window_generation = state
+        .window_generations
+        .lock()
+        .unwrap()
+        .get(owner)
+        .copied()
+        .unwrap_or(0);
+    // 只持有身份/代次的短锁；不要在主线程等待可能包含网络 IO 的连接生命周期锁。
+    let generations = state.connection_generations.lock().unwrap();
+    let connection = connection_info(state, &id, true)?;
+    let task_id = task_id.unwrap_or_else(|| format!("{kind}-{}", uuid_fallback()));
+    let generation = generations.get(&id).copied().unwrap_or(0);
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| SshError::TransferStartExpired)?
+        .as_millis();
+    validate_file_task_start(
+        generation,
+        expected_generation,
+        expires_at,
+        now.min(u64::MAX as u128) as u64,
+    )?;
+    let endpoint = state
+        .connection_endpoints
+        .lock()
+        .unwrap()
+        .get(&id)
+        .copied()
+        .ok_or(SshError::ConnectionNotFound)?;
+    let windows = state.window_generations.lock().unwrap();
+    if state.runtime_stop.load(Ordering::Acquire)
+        || windows.get(owner).copied().unwrap_or(0) != window_generation
+    {
+        return Err(SshError::TransferRejected(
+            "窗口已关闭，未启动文件任务".into(),
+        ));
+    }
+    let snapshot = state
+        .tasks
+        .register(
+            owner,
+            &task_id,
+            &id,
+            generation,
+            &transfer_pool::server_key(endpoint),
+        )
+        .map_err(|error| {
+            if error == "传输已取消" {
+                SshError::TransferCancelled
+            } else {
+                SshError::TransferRejected(error)
+            }
+        })?;
+    drop(windows);
+    drop(generations);
+    let mut worker_state = state.clone();
+    worker_state.isolated_transport = true;
+    let thread_id = task_id.clone();
+    let event_owner = owner.to_string();
+    let started = thread::Builder::new()
+        .name(format!("file-{kind}"))
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || -> Result<String, SshError> {
+                    let _slot = worker_state
+                        .tasks
+                        .acquire(&thread_id)
+                        .map_err(|_| SshError::TransferCancelled)?;
+                    let mut lease =
+                        TransferSessionLease::checkout(&worker_state, &connection, &thread_id)?;
+                    if is_cancelled(&worker_state, &thread_id) {
+                        return Err(SshError::TransferCancelled);
+                    }
+                    worker_state.tasks.running(&thread_id);
+                    let session = lease.session();
+                    let result = match operation {
+                        FileTaskOperation::Upload(local, remote, overwrite) => run_upload(
+                            &worker_state,
+                            &connection,
+                            &session,
+                            &thread_id,
+                            &local,
+                            &remote,
+                            overwrite,
+                        ),
+                        FileTaskOperation::UploadDirectory(local, remote, overwrite) => {
+                            run_upload_directory(
+                                &worker_state,
+                                &connection,
+                                &session,
+                                &thread_id,
+                                &local,
+                                &remote,
+                                overwrite,
+                            )
+                        }
+                        FileTaskOperation::Download(remote, local, overwrite) => run_download(
+                            &worker_state,
+                            &connection,
+                            &session,
+                            &thread_id,
+                            &remote,
+                            &local,
+                            overwrite,
+                        ),
+                        FileTaskOperation::DownloadDirectory(remote, local, overwrite) => {
+                            run_download_directory(
+                                &worker_state,
+                                &connection,
+                                &session,
+                                &thread_id,
+                                &remote,
+                                &local,
+                                overwrite,
+                            )
+                        }
+                        FileTaskOperation::Delete(remote) => {
+                            run_delete(&worker_state, &session, &connection.id, &remote, &thread_id)
+                                .map(|_| "删除成功".into())
+                        }
+                    };
+                    if result.is_ok() && !is_cancelled(&worker_state, &thread_id) {
+                        lease.reuse_on_success();
+                    }
+                    result
+                },
+            ))
+            .unwrap_or_else(|_| Err(SshError::FileOperationFailed("文件任务异常退出".into())));
+            let result = result.map_err(|error| {
+                let message = error.to_string();
+                let mut error = if worker_state.tasks.cancelled(&thread_id) {
+                    serde_json::to_value(SshError::TransferCancelled).unwrap()
+                } else {
+                    serde_json::to_value(error).unwrap()
+                };
+                if !error.get("message").is_some_and(|value| value.is_string()) {
+                    error["message"] = json!(if error["code"] == "TransferCancelled" {
+                        "传输已取消".to_string()
+                    } else {
+                        message
+                    });
+                }
+                error["scope"] = json!("transfer");
+                error
+            });
+            if let Some(snapshot) = worker_state.tasks.finish(&thread_id, result) {
+                let mut payload = serde_json::to_value(&snapshot).unwrap();
+                payload["success"] = json!(snapshot.status == "succeeded");
+                payload["cancelled"] = json!(snapshot.status == "cancelled");
+                payload["operationId"] = json!(snapshot.transfer_id);
+                // 不再根据可淘汰、可重新登记的 ID 查找其他窗口的 owner。
+                let handle = worker_state.app_handle.lock().unwrap().clone();
+                if let Some(handle) = handle.filter(|_| {
+                    worker_state
+                        .window_generations
+                        .lock()
+                        .unwrap()
+                        .get(&event_owner)
+                        .copied()
+                        .unwrap_or(0)
+                        == window_generation
+                }) {
+                    let _ = handle.emit_to(
+                        tauri::EventTarget::WebviewWindow { label: event_owner },
+                        &format!("{kind}-complete"),
+                        payload,
+                    );
+                }
+            }
+        });
+    if let Err(error) = started {
+        state.tasks.finish(
+            &task_id,
+            Err(json!({"code":"TaskStartFailed","message":error.to_string(),"scope":"transfer"})),
+        );
+        return Err(SshError::FileOperationFailed("无法启动文件任务".into()));
+    }
+    Ok(snapshot)
+}
+fn emit_task_event(state: &SshState, task_id: &str, event: &str, mut payload: serde_json::Value) {
+    let handle = state.app_handle.lock().unwrap().clone();
+    if let (Some(handle), Some(owner)) = (handle, state.tasks.owner(task_id)) {
+        payload["generation"] = json!(state.tasks.generation(task_id));
+        let _ = handle.emit_to(
+            tauri::EventTarget::WebviewWindow { label: owner },
+            event,
+            payload,
+        );
+    }
+}
+fn invalidate_file_sessions(state: &SshState, id: &str) -> bool {
+    // 与任务的配置/代次捕获使用同一把短锁，不能组合旧身份和新代次。
+    let mut generations = state.connection_generations.lock().unwrap();
+    let was_connected = state
+        .connections
+        .write()
+        .unwrap()
+        .get_mut(id)
+        .map(|connection| {
+            let connected = connection.connected;
+            connection.connected = false;
+            connected
+        })
+        .unwrap_or(false);
+    *generations.entry(id.into()).or_default() += 1;
+    state.connection_endpoints.lock().unwrap().remove(id);
+    state.tasks.cancel_matching(None, Some(id));
+    state
+        .transfer_pool
+        .lock()
+        .unwrap()
+        .retain(|entry| entry.connection_id() != id);
+    state.directory_requests.cancel_matching(None, Some(id));
+    was_connected
+}
+/// 原生维护线程不依赖窗口存活；退出时由 shutdown_background_tasks 停止。
+pub fn start_background_maintenance(state: SshState) {
+    thread::spawn(move || {
+        while !state.runtime_stop.load(Ordering::Acquire) {
+            state.tasks.expire_stalled();
+            state
+                .transfer_pool
+                .lock()
+                .unwrap()
+                .retain(|entry| entry.is_fresh());
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
+pub fn cleanup_window(state: &SshState, owner: &str) {
+    *state
+        .window_generations
+        .lock()
+        .unwrap()
+        .entry(owner.into())
+        .or_default() += 1;
+    state.terminal_requests.cancel_matching(Some(owner), None);
+    state
+        .terminal_openings
+        .lock()
+        .unwrap()
+        .retain(|_, entry| entry.0 != owner);
+    let terminal_ids: Vec<_> = state
+        .terminal_sessions
+        .read()
+        .unwrap()
+        .iter()
+        .filter(|(_, entry)| entry.owner == owner)
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in terminal_ids {
+        close_terminal_session(&state.terminal_sessions, &id);
+    }
+    state.tasks.cancel_matching(Some(owner), None);
+    state.directory_requests.cancel_matching(Some(owner), None);
+}
+pub fn shutdown_background_tasks(state: &SshState) {
+    state.runtime_stop.store(true, Ordering::Release);
+    state.tasks.cancel_matching(None, None);
+    state.directory_requests.cancel_matching(None, None);
+    state.terminal_requests.cancel_matching(None, None);
+    state.transfer_pool.lock().unwrap().clear();
+    let owners: Vec<_> = state
+        .terminal_sessions
+        .read()
+        .unwrap()
+        .values()
+        .map(|entry| entry.owner.clone())
+        .collect();
+    for owner in owners {
+        cleanup_window(state, &owner);
+    }
 }
 
 fn uuid_fallback() -> String {
@@ -5324,6 +6079,388 @@ fn uuid_fallback() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn remote_commit_leaf_uses_posix_separators_and_keeps_root() {
+        let name = std::ffi::OsStr::new(".portal-part-unit");
+        assert_eq!(
+            append_remote_leaf(Path::new("/home/user"), name).as_os_str(),
+            std::ffi::OsStr::new("/home/user/.portal-part-unit")
+        );
+        assert_eq!(
+            append_remote_leaf(Path::new("/"), name).as_os_str(),
+            std::ffi::OsStr::new("/.portal-part-unit")
+        );
+        assert_eq!(
+            append_remote_leaf(Path::new("/home/user/"), name).as_os_str(),
+            std::ffi::OsStr::new("/home/user/.portal-part-unit")
+        );
+    }
+
+    #[test]
+    fn late_file_task_start_rejects_expired_or_changed_session_before_registration() {
+        assert!(validate_file_task_start(3, 3, 1_030_000, 1_000_000).is_ok());
+        assert!(matches!(
+            validate_file_task_start(4, 3, 1_030_000, 1_000_000),
+            Err(SshError::ConnectionGenerationChanged)
+        ));
+        assert!(matches!(
+            validate_file_task_start(3, 3, 1_000_000, 1_000_000),
+            Err(SshError::TransferStartExpired)
+        ));
+        assert!(matches!(
+            validate_file_task_start(3, 3, 1_060_001, 1_000_000),
+            Err(SshError::TransferStartExpired)
+        ));
+    }
+
+    #[test]
+    fn late_main_session_mutations_reject_the_previous_generation_without_network_io() {
+        let state = SshState::default();
+        state
+            .connection_generations
+            .lock()
+            .unwrap()
+            .insert("mutation".into(), 2);
+        assert!(matches!(
+            sftp_mkdir_blocking(state.clone(), "mutation".into(), "/unit".into(), 1),
+            Err(SshError::ConnectionGenerationChanged)
+        ));
+        assert!(matches!(
+            sftp_rename_blocking(
+                state,
+                "mutation".into(),
+                "/old".into(),
+                "/new".into(),
+                Some(true),
+                1
+            ),
+            Err(SshError::ConnectionGenerationChanged)
+        ));
+    }
+
+    #[test]
+    fn cleanup_deadline_closes_only_its_owned_socket_and_joins_promptly() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let started = Instant::now();
+        let guard = CleanupSocketGuard::new(
+            client.try_clone().unwrap(),
+            Duration::from_millis(30),
+            || false,
+        )
+        .unwrap();
+        let outcome = client.read(&mut [0]);
+        assert!(matches!(outcome, Ok(0)) || outcome.is_err());
+        drop(guard);
+        assert!(started.elapsed() < Duration::from_secs(1));
+
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (_peer, _) = listener.accept().unwrap();
+        let started = Instant::now();
+        drop(CleanupSocketGuard::new(client, Duration::from_secs(5), || false).unwrap());
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn cleanup_reconnect_requires_the_same_live_identity_but_not_an_uncancelled_task() {
+        let state = SshState::default();
+        let connection = SshConnection {
+            id: "cleanup-unit".into(),
+            host: "example.invalid".into(),
+            port: 22,
+            username: "unit".into(),
+            auth_method: "password".into(),
+            host_key_fingerprint: Some("unit-fingerprint".into()),
+            password: String::new(),
+            connected: true,
+        };
+        let endpoint: SocketAddr = "192.0.2.10:22".parse().unwrap();
+        state
+            .connections
+            .write()
+            .unwrap()
+            .insert(connection.id.clone(), connection.clone());
+        state
+            .connection_endpoints
+            .lock()
+            .unwrap()
+            .insert(connection.id.clone(), endpoint);
+        state
+            .tasks
+            .register("window", "cleanup-task", &connection.id, 0, "unit-host")
+            .unwrap();
+        state.tasks.cancel("window", "cleanup-task");
+        assert!(state.tasks.cancelled("cleanup-task"));
+        assert_eq!(
+            upload_cleanup_endpoint(&state, &connection, 0),
+            Some(endpoint)
+        );
+        state
+            .connections
+            .write()
+            .unwrap()
+            .get_mut(&connection.id)
+            .unwrap()
+            .host = "changed.invalid".into();
+        assert_eq!(upload_cleanup_endpoint(&state, &connection, 0), None);
+        state
+            .connections
+            .write()
+            .unwrap()
+            .insert(connection.id.clone(), connection.clone());
+        state
+            .connection_generations
+            .lock()
+            .unwrap()
+            .insert(connection.id.clone(), 1);
+        assert_eq!(upload_cleanup_endpoint(&state, &connection, 0), None);
+        state
+            .connection_generations
+            .lock()
+            .unwrap()
+            .insert(connection.id.clone(), 0);
+        state.runtime_stop.store(true, Ordering::Release);
+        assert_eq!(upload_cleanup_endpoint(&state, &connection, 0), None);
+    }
+
+    fn assert_unhealthy_cache_cleanup_completes(monitor: bool) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let address = listener.local_addr().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let server_stop = Arc::clone(&stop);
+        let server = thread::spawn(move || {
+            while !server_stop.load(Ordering::Acquire) {
+                match listener.accept() {
+                    Ok((socket, _)) => {
+                        drop(socket);
+                        break;
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+        let state = SshState::default();
+        state.connections.write().unwrap().insert(
+            "cached".into(),
+            SshConnection {
+                id: "cached".into(),
+                host: "127.0.0.1".into(),
+                port: address.port(),
+                username: "user".into(),
+                auth_method: "password".into(),
+                host_key_fingerprint: Some("unused".into()),
+                password: String::new(),
+                connected: true,
+            },
+        );
+        let cached = Arc::new(Mutex::new(Session::new().unwrap()));
+        let unhealthy = Arc::clone(&cached);
+        let _ = thread::spawn(move || {
+            let _guard = unhealthy.lock().unwrap();
+            panic!("模拟不可复用的会话锁");
+        })
+        .join();
+        if monitor {
+            state
+                .monitor_sessions
+                .lock()
+                .unwrap()
+                .insert("cached".into(), cached);
+        } else {
+            state
+                .connection_pool
+                .write()
+                .unwrap()
+                .insert("cached".into(), cached);
+        }
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = thread::spawn(move || {
+            let failed = if monitor {
+                monitor_session_for(&state, "cached").is_err()
+            } else {
+                connect_ssh_blocking(state, "cached".into()).is_err()
+            };
+            let _ = send.send(failed);
+        });
+        let result = receive.recv_timeout(Duration::from_secs(2));
+        stop.store(true, Ordering::Release);
+        server.join().unwrap();
+        assert_eq!(
+            result.ok(),
+            Some(true),
+            "失效缓存清理不能再次等待自身持有的池锁"
+        );
+        worker.join().unwrap();
+    }
+
+    #[test]
+    fn unhealthy_main_cache_cleanup_does_not_reenter_the_pool_read_lock() {
+        assert_unhealthy_cache_cleanup_completes(false);
+    }
+
+    #[test]
+    fn unhealthy_monitor_cache_cleanup_does_not_reenter_the_pool_mutex() {
+        assert_unhealthy_cache_cleanup_completes(true);
+    }
+
+    #[test]
+    fn invalidation_revokes_the_identity_generation_and_verified_endpoint_together() {
+        let state = SshState::default();
+        let connection = SshConnection {
+            id: "revoked".into(),
+            host: "example.invalid".into(),
+            port: 22,
+            username: "user".into(),
+            auth_method: "password".into(),
+            host_key_fingerprint: None,
+            password: String::new(),
+            connected: true,
+        };
+        state
+            .connections
+            .write()
+            .unwrap()
+            .insert(connection.id.clone(), connection);
+        state
+            .connection_generations
+            .lock()
+            .unwrap()
+            .insert("revoked".into(), 7);
+        state
+            .connection_endpoints
+            .lock()
+            .unwrap()
+            .insert("revoked".into(), "127.0.0.1:22".parse().unwrap());
+        state
+            .tasks
+            .register("window", "old-task", "revoked", 7, "example.invalid:22")
+            .unwrap();
+        assert!(invalidate_file_sessions(&state, "revoked"));
+        assert!(matches!(
+            connection_info(&state, "revoked", true),
+            Err(SshError::ConnectionNotFound)
+        ));
+        assert_eq!(state.connection_generations.lock().unwrap()["revoked"], 8);
+        assert!(!state
+            .connection_endpoints
+            .lock()
+            .unwrap()
+            .contains_key("revoked"));
+        assert!(state.tasks.cancelled("old-task"));
+        assert!(!invalidate_file_sessions(&state, "revoked"));
+    }
+
+    #[test]
+    fn window_cleanup_cancels_pending_terminal_open_and_advances_its_instance() {
+        let state = SshState::default();
+        let token = state
+            .terminal_requests
+            .begin("old-window", "terminal", "generation")
+            .unwrap();
+        cleanup_window(&state, "old-window");
+        assert!(token.load(Ordering::Acquire));
+        assert_eq!(state.window_generations.lock().unwrap()["old-window"], 1);
+        state
+            .terminal_requests
+            .finish("old-window", "generation", &token);
+        let next = state
+            .terminal_requests
+            .begin("old-window", "terminal", "new-generation")
+            .unwrap();
+        assert!(!next.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn terminal_write_retries_would_block_without_matching_error_text() {
+        let mut attempts = 0;
+        let mut received = Vec::new();
+        write_terminal_bytes(
+            b"hello",
+            || false,
+            |bytes| {
+                attempts += 1;
+                if attempts == 1 {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::WouldBlock,
+                        "Unable to send channel data",
+                    ));
+                }
+                let size = bytes.len().min(2);
+                received.extend_from_slice(&bytes[..size]);
+                Ok(size)
+            },
+            |_| {},
+            TERMINAL_WRITE_TIMEOUT,
+        )
+        .unwrap();
+        assert_eq!(received, b"hello");
+        assert_eq!(attempts, 4);
+    }
+
+    #[test]
+    fn terminal_write_stops_on_cancellation_and_definitive_failure() {
+        assert!(matches!(
+            write_terminal_bytes(
+                b"hello",
+                || true,
+                |_| panic!("取消后不能写入"),
+                |_| {},
+                TERMINAL_WRITE_TIMEOUT
+            ),
+            Err(SshError::TerminalNotFound)
+        ));
+        let error = write_terminal_bytes(
+            b"hello",
+            || false,
+            |_| Err(std::io::Error::from(std::io::ErrorKind::BrokenPipe)),
+            |_| {},
+            TERMINAL_WRITE_TIMEOUT,
+        )
+        .unwrap_err();
+        assert!(matches!(error, SshError::TerminalFailed(_)));
+    }
+
+    #[test]
+    fn folder_error_context_preserves_transfer_error_codes() {
+        for error in [
+            SshError::TransferCancelled,
+            SshError::SourceChanged("源文件被修改".into()),
+            SshError::CommitOutcomeUnknown("应核对目标文件".into()),
+            SshError::AtomicRenameUnsupported,
+        ] {
+            let code = serde_json::to_value(&error).unwrap()["code"].clone();
+            let contextual = file_transfer_error_context(error, "上传", "example.txt");
+            assert_eq!(serde_json::to_value(&contextual).unwrap()["code"], code);
+        }
+        let error = file_transfer_error_context(
+            SshError::FileOperationFailed("拒绝访问".into()),
+            "下载",
+            "example.txt",
+        );
+        assert!(error.to_string().contains("example.txt"));
+        assert!(error.to_string().contains("拒绝访问"));
+    }
+
+    #[test]
+    fn fingerprints_preserve_base64_case_and_allow_padding_only() {
+        let original = format!("SHA256:{}", base64_encode(&[0u8; 32]));
+        let changed = format!("SHA256:a{}", &original[8..]);
+        assert!(fingerprint_matches(&original, &original));
+        assert!(fingerprint_matches(&format!("{original}="), &original));
+        assert!(!fingerprint_matches(&changed, &original));
+        assert!(!fingerprint_matches("sha256:AAAA", &original));
+        assert!(!fingerprint_matches("SHA256:!", &original));
+        assert!(!fingerprint_matches(&format!("{original}=="), &original));
+    }
 
     #[test]
     fn removes_monitor_session_when_connection_is_marked_disconnected() {
@@ -5850,7 +6987,8 @@ mod tests {
         fs::write(root.join("nested").join("child.txt"), b"hello").unwrap();
 
         let plan =
-            collect_folder_upload_plan(&LocalTransferRoot::open(&root).unwrap(), || false).unwrap();
+            collect_folder_upload_plan(&LocalTransferRoot::open(&root).unwrap(), || false, || {})
+                .unwrap();
         let directories = plan
             .directories
             .iter()

@@ -1,11 +1,11 @@
 /**
  * SFTP/SSH 前端适配层。
  *
- * 统一封装 Tauri IPC 调用、连接状态、终端会话、文件传输事件以及远程目录
- * 大小统计任务，供文件浏览器和终端组件共享同一套连接生命周期。
+ * 统一封装 Tauri IPC 调用、连接状态、文件传输事件以及远程目录大小统计任务。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, normalizeError } from './constants.js'
 
 /**
@@ -38,6 +38,7 @@ import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, normalizeErr
  * @property {boolean} connected - 是否已建立可用的 SSH 会话。
  * @property {boolean} requiresHostKeyConfirmation - 是否需要先确认服务器指纹。
  * @property {HostKeyInfo} hostKey - 本次握手读取到的主机密钥信息。
+ * @property {number} [generation] - 已认证会话的原生代次。
  */
 
 /**
@@ -46,6 +47,13 @@ import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, normalizeErr
  * @property {string} status - 当前连接状态。
  * @property {string|null} lastError - 最近一次失败的标准化错误信息。
  * @property {number} lastActivity - 最近一次成功远程操作的 Unix 时间戳（毫秒）。
+ * @property {number|null} generation - 已认证会话的原生代次。
+ */
+
+/**
+ * @typedef {Object} ConnectionSnapshot
+ * @property {ConnectionInfo} record - 捕获的连接记录。
+ * @property {number} generation - 捕获时的原生会话代次。
  */
 
 /**
@@ -120,6 +128,46 @@ const DIRECTORY_SIZE_CACHE_TTL_MS = 45 * 1000
 const MAX_DIRECTORY_SIZE_CACHE_ENTRIES = 500
 // 调用方取消或连接清理时使用的统一错误文案。
 const DIRECTORY_SIZE_CANCELLED_MESSAGE = '目录大小统计已取消'
+// 多个后台任务共享一次状态查询；原生层负责启动和停滞超时。
+const TRANSFER_STATUS_POLL_INTERVAL_MS = 2000
+// 限制单次状态 IPC 的等待，不取消或限制原生文件任务本身。
+const TRANSFER_STATUS_QUERY_TIMEOUT_MS = 10000
+// 仅限制未确认登记的启动请求，不限制已经登记的文件任务运行时间。
+const TRANSFER_START_TIMEOUT_MS = 30000
+const TRANSFER_STATUSES = new Set([ 'queued', 'starting', 'running', 'committing', 'succeeded', 'failed', 'cancelled' ])
+// 原生契约保证这些启动拒绝均发生在任务登记之前。
+const TRANSFER_START_REJECTION_CODES = new Set([
+  'ConnectionGenerationChanged', 'TransferStartExpired', 'TransferCancelled', 'TransferRejected', 'ConnectionNotFound'
+])
+const REMOTE_NAME_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' })
+
+/**
+ * 将任务快照或事件中的结构化错误转换为可供现有调用方使用的 Error。
+ *
+ * @param {Object} payload - 任务快照或完成事件。
+ * @param {string} fallback - 没有错误消息时使用的默认提示。
+ * @returns {Error} 保留错误码和作用域的异常。
+ */
+const createTaskError = (payload, fallback) => {
+  const details = payload.error && typeof payload.error === 'object' ? payload.error : {}
+  // 旧调用方仍用这条提示识别取消；原生端的单位错误码未必带有 message。
+  const message = payload.status === 'cancelled' ? '传输已取消' : details.message || payload.message || fallback
+  const error = new Error(message)
+  error.code = details.code || payload.code || (payload.status === 'cancelled' ? 'TransferCancelled' : '')
+  if (details.scope || payload.scope) error.scope = details.scope || payload.scope
+  return error
+}
+
+/**
+ * 为调用方取消的目录请求创建可识别的标准中止异常。
+ *
+ * @returns {Error} 名称为 AbortError 的异常。
+ */
+const createDirectoryAbortError = () => {
+  const error = new Error('目录读取已取消')
+  error.name = 'AbortError'
+  return error
+}
 
 /**
  * 兼容旧调用方式：可直接传入 AbortSignal 或完整选项对象。
@@ -172,6 +220,10 @@ class SftpManager {
     this.directorySizeCacheEpochs = new Map()
     this.activeDirectorySizeRequests = 0
     this.maxDirectorySizeRequests = 4
+    // transferId -> 当前窗口内已启动的传输或递归删除任务。
+    this.activeTransfers = new Map()
+    this.transferStatusTimer = null
+    this.pollingTransferStatuses = false
     void this.listenForConnectionLoss()
   }
 
@@ -208,13 +260,23 @@ class SftpManager {
   /**
    * 将 Rust 端的断线事件转换为本地连接状态变化。
    *
-   * @param {{id?: string, reason?: string}} [payload={}] - Rust 端 `ssh-disconnected` 事件负载。
+   * @param {{id?: string, reason?: string, generation?: number}} [payload={}] - 被断开会话的代次和原因。
    * @returns {void}
    */
   handleConnectionLoss(payload = {}) {
     const connectionId = payload.id
-    if (!connectionId) return
-    this.markConnectionLost(connectionId, payload.reason || 'SSH 连接已断开')
+    if (!connectionId || !Number.isSafeInteger(payload.generation) || payload.generation < 0) return
+    const info = this.connections.get(connectionId)
+    if (!info) return
+    if (info.status === SftpConnectionStatus.CONNECTING && info.pendingDisconnectedGenerations) {
+      // 新会话可能在 connect 回执之前断开；暂存代次，待回执核对，不能把旧事件当作新会话断线。
+      info.pendingDisconnectedGenerations.add(payload.generation)
+      return
+    }
+    this.markConnectionLost(connectionId, payload.reason || 'SSH 连接已断开', {
+      record: info,
+      generation: payload.generation
+    })
   }
 
   /**
@@ -222,11 +284,13 @@ class SftpManager {
    *
    * @param {string} connectionId - 需要标记为断开的连接 ID。
    * @param {unknown} reason - 原始错误或用户可读断线原因。
+   * @param {{record: ConnectionInfo, generation: number}} [expected] - 仅允许标记捕获的会话。
    * @returns {boolean} 连接此前处于活动状态时返回 true，否则返回 false。
    */
-  markConnectionLost(connectionId, reason) {
+  markConnectionLost(connectionId, reason, expected) {
     const info = this.connections.get(connectionId)
     if (!info) return false
+    if (expected && (info !== expected.record || info.generation !== expected.generation)) return false
     const wasActive = info.status === SftpConnectionStatus.CONNECTED
       || info.status === SftpConnectionStatus.CONNECTING
       || info.status === SftpConnectionStatus.RECONNECTING
@@ -249,11 +313,23 @@ class SftpManager {
    * 判断错误是否代表传输层断线，而不是路径或权限等可恢复错误。
    *
    * @param {unknown} error - IPC、网络或普通 JavaScript 错误。
-   * @returns {boolean} 错误属于 socket、连接关闭、网络或超时场景时返回 true。
+   * @returns {boolean} 结构化错误或固定旧消息明确表示主连接失效时返回 true。
    */
   isConnectionLossError(error) {
-    const message = normalizeError(error).toLowerCase()
-    return /(socket|broken pipe|connection (?:lost|reset|aborted|closed|not connected)|network|timed out|timeout|连接(?:不存在|未建立|已断开|已关闭|丢失|超时)|套接字|网络)/i.test(message)
+    let details = error
+    if (typeof details === 'string') {
+      try {
+        details = JSON.parse(details)
+      } catch {
+        // 无结构的旧错误只匹配完整的固定消息，不能把路径中的词当作断线。
+      }
+    }
+    if (details?.scope && details.scope !== 'main') return false
+    const code = getErrorCode(details)
+    if (code) {
+      return /^(ConnectionNotFound|ConnectionFailed|ConnectionLost|ConnectionClosed|Disconnected)$/i.test(code)
+    }
+    return /^(?:连接不存在(?:或未连接)?|连接未建立|连接已断开|连接已关闭|SSH 连接已断开|broken pipe|connection (?:lost|reset|aborted|closed|not connected))$/i.test(normalizeError(details))
   }
 
   /**
@@ -265,23 +341,43 @@ class SftpManager {
    * @param {string} connectionId - 命令关联的连接 ID。
    * @param {string} command - 要调用的 Tauri 命令名称。
    * @param {Record<string, unknown>} args - 传递给 Tauri 命令的参数。
-   * @param {{suppressHealthCheck?: () => boolean, suppressConnectionLoss?: boolean}} [options={}] - 远程任务错误的连接状态处理策略。
+   * @param {{suppressHealthCheck?: () => boolean, suppressConnectionLoss?: boolean|(() => boolean)}} [options={}] - 远程任务错误的连接状态处理策略。
    * @returns {Promise<unknown>} Rust 命令返回的原始结果。
    * @throws {unknown} 当远程命令失败时原样抛出；连接异常会先同步本地状态。
    */
   async invokeRemote(connectionId, command, args, options = {}) {
+    const record = this.connections.get(connectionId)
+    const generation = record?.generation
+    const expected = { record, generation }
+    const guardsGeneration = command === 'sftp_mkdir' || command === 'sftp_rename'
+    if (guardsGeneration && !this.isCurrentConnection(connectionId, expected)) {
+      const error = new Error('连接已更改，未发送远程操作')
+      error.code = 'ConnectionGenerationChanged'
+      throw error
+    }
     try {
-      return await invoke(command, args)
+      const result = await invoke(command, guardsGeneration ? { ...args, expectedGeneration: generation } : args)
+      if (guardsGeneration && !this.isCurrentConnection(connectionId, expected)) {
+        // 操作可能已在旧会话完成，不能把迟到的成功回执当作新会话的操作结果。
+        const error = new Error('连接已更改，远程操作可能已完成，请核对结果')
+        error.code = 'ConnectionResultStale'
+        throw error
+      }
+      return result
     } catch (error) {
-      if (this.isConnectionLossError(error) && !options.suppressConnectionLoss) {
-        this.markConnectionLost(connectionId, error)
+      if (!this.isCurrentConnection(connectionId, expected)) throw error
+      const suppressConnectionLoss = typeof options.suppressConnectionLoss === 'function'
+        ? options.suppressConnectionLoss()
+        : options.suppressConnectionLoss
+      if (this.isConnectionLossError(error) && !suppressConnectionLoss) {
+        this.markConnectionLost(connectionId, error, expected)
       } else if (!getErrorCode(error) && !options.suppressHealthCheck?.()) {
         // 旧版或非结构化错误无法由原生层分类时，再用保活探测区分断线和业务错误。
         try {
           const alive = await this.checkConnection(connectionId)
-          if (!alive) this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+          if (!alive) this.markConnectionLost(connectionId, '服务器无响应或网络已断开', expected)
         } catch {
-          this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+          this.markConnectionLost(connectionId, '服务器无响应或网络已断开', expected)
         }
       }
       throw error
@@ -372,6 +468,7 @@ class SftpManager {
     this.connections.set(id, {
       config: normalized,
       status: SftpConnectionStatus.DISCONNECTED,
+      generation: null,
       lastError: null,
       lastActivity: Date.now()
     })
@@ -407,10 +504,19 @@ class SftpManager {
   async connect(connectionId) {
     const info = this.requireConnection(connectionId)
     info.status = SftpConnectionStatus.CONNECTING
+    info.generation = null
+    const disconnectedGenerations = new Set()
+    info.pendingDisconnectedGenerations = disconnectedGenerations
     info.lastError = null
 
     try {
       const result = await invoke('connect_ssh', { id: connectionId })
+      if (this.connections.get(connectionId) !== info || info.pendingDisconnectedGenerations !== disconnectedGenerations
+        || info.status !== SftpConnectionStatus.CONNECTING) {
+        const error = new Error('连接已更改，请重新连接')
+        error.code = 'ConnectionGenerationChanged'
+        throw error
+      }
       if (result.requiresHostKeyConfirmation) {
         info.status = SftpConnectionStatus.DISCONNECTED
         return result
@@ -418,14 +524,26 @@ class SftpManager {
       if (!result.connected) {
         throw new Error('服务器拒绝连接')
       }
+      if (!Number.isSafeInteger(result.generation) || result.generation < 0) {
+        throw new Error('服务器连接代次无效，请重新连接')
+      }
+      if (disconnectedGenerations.has(result.generation)) {
+        throw new Error('SSH 连接已断开，请重新连接')
+      }
+      info.generation = result.generation
       info.status = SftpConnectionStatus.CONNECTED
       info.lastActivity = Date.now()
       this.invalidateDirectorySizeCache(connectionId)
       return result
     } catch (error) {
-      info.status = SftpConnectionStatus.ERROR
-      info.lastError = normalizeError(error)
+      if (this.connections.get(connectionId) === info && info.pendingDisconnectedGenerations === disconnectedGenerations
+        && info.status === SftpConnectionStatus.CONNECTING) {
+        info.status = SftpConnectionStatus.ERROR
+        info.lastError = normalizeError(error)
+      }
       throw error
+    } finally {
+      if (info.pendingDisconnectedGenerations === disconnectedGenerations) delete info.pendingDisconnectedGenerations
     }
   }
 
@@ -485,73 +603,6 @@ class SftpManager {
   }
 
   /**
-   * 为已连接的远程服务器创建一个 PTY 终端会话。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {string} terminalId - 前端为该终端生成的唯一会话 ID。
-   * @param {number} columns - 终端初始列数。
-   * @param {number} rows - 终端初始行数。
-   * @returns {Promise<boolean>} Rust 端成功创建远程 PTY 时返回 true。
-   * @throws {Error} 当连接不存在、未建立或远程 PTY 无法创建时抛出。
-   */
-  async openTerminal(connectionId, terminalId, columns, rows) {
-    this.requireConnected(connectionId)
-    return invoke('open_ssh_terminal', {
-      id: connectionId,
-      terminalId,
-      columns,
-      rows
-    })
-  }
-
-  /**
-   * 向已打开的远程终端写入键盘输入。
-   *
-   * @param {string} terminalId - 目标 PTY 会话 ID。
-   * @param {string} data - 待发送的原始键盘输入。
-   * @returns {Promise<boolean>} Rust 端接收输入后返回 true。
-   * @throws {Error} 当终端会话不存在或写入失败时抛出。
-   */
-  async writeTerminal(terminalId, data) {
-    return invoke('write_ssh_terminal', {
-      terminalId,
-      data
-    })
-  }
-
-  /**
-   * 更新远程 PTY 的行列尺寸。
-   *
-   * @param {string} terminalId - 目标 PTY 会话 ID。
-   * @param {number} columns - 新的终端列数。
-   * @param {number} rows - 新的终端行数。
-   * @returns {Promise<boolean>} Rust 端应用新尺寸后返回 true。
-   * @throws {Error} 当终端会话不存在或尺寸更新失败时抛出。
-   */
-  async resizeTerminal(terminalId, columns, rows) {
-    return invoke('resize_ssh_terminal', {
-      terminalId,
-      columns,
-      rows
-    })
-  }
-
-  /**
-   * 关闭远程终端；连接已断开时允许 Rust 端会话已经不存在。
-   *
-   * @param {string} terminalId - 要关闭的 PTY 会话 ID。
-   * @returns {Promise<boolean>} 成功关闭时返回 true；会话已被后端清理时返回 false。
-   */
-  async closeTerminal(terminalId) {
-    try {
-      return await invoke('close_ssh_terminal', { terminalId })
-    } catch {
-      // 连接断开后 Rust 端可能已经清理会话，关闭操作可以安全忽略。
-      return false
-    }
-  }
-
-  /**
    * 上传单个本地文件，并通过回调报告传输进度。
    *
    * @param {string} connectionId - 已建立的 SSH 连接 ID。
@@ -559,17 +610,19 @@ class SftpManager {
    * @param {string} remotePath - 远程目标文件路径。
    * @param {TransferProgressCallback} [onProgress] - 接收传输进度事件的回调。
    * @param {boolean} [overwrite=false] - 目标存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 任务创建后接收可取消传输 ID 的回调。
+   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
+   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
    * @returns {Promise<string>} Rust 端发出的成功完成消息。
    * @throws {Error} 当连接无效、传输失败或被取消时抛出。
    */
-  async uploadFile(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId) {
+  async uploadFile(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId, connection) {
     return this.transfer('upload', connectionId, {
       localPath,
       remotePath,
       onProgress,
       overwrite,
-      onTransferId
+      onTransferId,
+      connection
     })
   }
 
@@ -581,17 +634,19 @@ class SftpManager {
    * @param {string} remotePath - 远程目标目录路径。
    * @param {TransferProgressCallback} [onProgress] - 接收单文件和整体进度事件的回调。
    * @param {boolean} [overwrite=false] - 目标目录或文件存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 任务创建后接收可取消传输 ID 的回调。
+   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
+   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
    * @returns {Promise<string>} Rust 端发出的成功完成消息。
    * @throws {Error} 当连接无效、目录扫描失败、传输失败或被取消时抛出。
    */
-  async uploadDirectory(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId) {
+  async uploadDirectory(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId, connection) {
     return this.transfer('upload-directory', connectionId, {
       localPath,
       remotePath,
       onProgress,
       overwrite,
-      onTransferId
+      onTransferId,
+      connection
     })
   }
 
@@ -603,17 +658,19 @@ class SftpManager {
    * @param {string} localPath - 本机目标文件绝对路径。
    * @param {TransferProgressCallback} [onProgress] - 接收传输进度事件的回调。
    * @param {boolean} [overwrite=false] - 本机目标已存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 任务创建后接收可取消传输 ID 的回调。
+   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
+   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
    * @returns {Promise<string>} Rust 端发出的成功完成消息。
    * @throws {Error} 当连接无效、传输失败或被取消时抛出。
    */
-  async downloadFile(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId) {
+  async downloadFile(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId, connection) {
     return this.transfer('download', connectionId, {
       remotePath,
       localPath,
       onProgress,
       overwrite,
-      onTransferId
+      onTransferId,
+      connection
     })
   }
 
@@ -625,18 +682,286 @@ class SftpManager {
    * @param {string} localPath - 本机目标目录绝对路径。
    * @param {TransferProgressCallback} [onProgress] - 接收单文件和整体进度事件的回调。
    * @param {boolean} [overwrite=false] - 本机目录或文件存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 任务创建后接收可取消传输 ID 的回调。
+   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
+   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
    * @returns {Promise<string>} Rust 端发出的成功完成消息。
    * @throws {Error} 当连接无效、目录扫描失败、传输失败或被取消时抛出。
    */
-  async downloadDirectory(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId) {
+  async downloadDirectory(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId, connection) {
     return this.transfer('download-directory', connectionId, {
       remotePath,
       localPath,
       onProgress,
       overwrite,
-      onTransferId
+      onTransferId,
+      connection
     })
+  }
+
+  /**
+   * 从活动任务表移除已完成的任务，并在空闲时停止共享轮询。
+   *
+   * @param {Object} task - 当前窗口持有的后台任务。
+   * @returns {void}
+   */
+  removeActiveTransfer(task) {
+    if (this.activeTransfers.get(task.transferId) === task) this.activeTransfers.delete(task.transferId)
+    if (task.startTimer != null) {
+      window.clearTimeout(task.startTimer)
+      task.startTimer = null
+    }
+    if (this.activeTransfers.size === 0 && this.transferStatusTimer !== null) {
+      window.clearInterval(this.transferStatusTimer)
+      this.transferStatusTimer = null
+    }
+  }
+
+  /**
+   * 对照启动代次应用原生任务快照；终态只处理一次。
+   *
+   * @param {Object} task - 本窗口的后台任务。
+   * @param {Object} snapshot - 原生状态快照或转换后的完成事件。
+   * @param {boolean} [reportProgress=true] - 是否将非终态进度转发给调用方。
+   * @param {boolean} [fromEvent=false] - 是否为包含文件级详情的进度事件。
+   * @returns {void}
+   */
+  applyTransferSnapshot(task, snapshot, reportProgress = true, fromEvent = false) {
+    if (task.settled || snapshot?.id !== task.connectionId || snapshot?.transferId !== task.transferId) return
+    if (snapshot.generation !== task.generation || !TRANSFER_STATUSES.has(snapshot.status)) return
+    const registered = !task.ready
+    task.ready = true
+    if (task.startTimer != null) {
+      window.clearTimeout(task.startTimer)
+      task.startTimer = null
+    }
+    task.missingStatusCount = 0
+
+    if (snapshot.status === 'succeeded' || snapshot.status === 'failed' || snapshot.status === 'cancelled') {
+      task.settled = true
+      this.removeActiveTransfer(task)
+      if (snapshot.status === 'succeeded') {
+        task.resolve({ message: snapshot.message })
+      } else {
+        const error = createTaskError(snapshot, snapshot.status === 'cancelled' ? '传输已取消' : task.failureMessage)
+        // 独立传输会话出错不能使仍正常工作的主连接断开。
+        if (error.scope === 'main' && this.isConnectionLossError(error)) {
+          this.markConnectionLost(task.connectionId, error, task.connection)
+        }
+        task.resolve({ error })
+      }
+      return
+    }
+
+    // 事件或查询也能确认登记，不能只等待可能丢失的启动回执再补发取消。
+    if (registered && task.cancelRequested) void this.cancelTransfer(task.transferId).catch(() => undefined)
+
+    // 排队和启动快照的 null 总量不表示正在传输未知大小的文件。
+    if (!fromEvent && (snapshot.status === 'queued' || snapshot.status === 'starting')) return
+
+    if (reportProgress && task.onProgress && Number.isFinite(Number(snapshot.progress))) {
+      const progressDetails = { ...task.lastProgress, ...snapshot }
+      let progress = Number(snapshot.progress)
+      if (!fromEvent && task.directoryTransfer) {
+        // 目录快照的字节数是整体进度，不能覆盖上一个事件中的单文件进度。
+        if (task.lastProgress) {
+          const fileProgress = Number(task.lastProgress.progress)
+          if (Number.isFinite(fileProgress)) progress = fileProgress
+          progressDetails.progress = progress
+          progressDetails.current = task.lastProgress.current
+          progressDetails.total = task.lastProgress.total
+        }
+        // 空文件夹的整体百分比依靠事件中的文件计数，快照无法重新计算。
+        progressDetails.overallProgress = snapshot.total === 0 && task.lastProgress?.overallProgress != null
+          ? task.lastProgress.overallProgress
+          : Number(snapshot.progress)
+        progressDetails.completedBytes = snapshot.current
+        progressDetails.totalBytes = snapshot.total
+      }
+      try {
+        task.onProgress(progress, progressDetails)
+      } catch (error) {
+        console.error('处理任务进度失败:', error)
+      }
+    }
+  }
+
+  /**
+   * 合并查询本窗口的活动任务，补偿丢失的进度或完成事件。
+   *
+   * @returns {Promise<void>} 本轮查询和快照处理结束后的 Promise。
+   */
+  async pollTransferStatuses() {
+    if (this.pollingTransferStatuses || this.activeTransfers.size === 0) return
+    const tasks = Array.from(this.activeTransfers.values()).filter(task => task.dispatched)
+    if (tasks.length === 0) return
+    this.pollingTransferStatuses = true
+    const eventVersions = new Map(tasks.map(task => [ task, task.eventVersion ]))
+    let queryTimeout
+    try {
+      const request = invoke('get_transfer_statuses', { transferIds: tasks.map(task => task.transferId) })
+      const timeout = new Promise((resolve, reject) => {
+        queryTimeout = window.setTimeout(() => reject(new Error('查询任务状态超时')), TRANSFER_STATUS_QUERY_TIMEOUT_MS)
+      })
+      const snapshots = await Promise.race([ request, timeout ])
+      if (!Array.isArray(snapshots)) return
+      const found = new Set()
+      for (const snapshot of snapshots) {
+        const task = this.activeTransfers.get(snapshot.transferId)
+        if (!task || !eventVersions.has(task)) continue
+        if (snapshot.id !== task.connectionId || snapshot.generation !== task.generation || !TRANSFER_STATUSES.has(snapshot.status)) continue
+        found.add(task)
+        // 查询期间收到的新事件比非终态查询结果更新，避免进度倒退。
+        this.applyTransferSnapshot(task, snapshot, eventVersions.get(task) === task.eventVersion)
+      }
+      for (const task of tasks) {
+        if (found.has(task) || task.settled || !task.ready || task.eventVersion !== eventVersions.get(task)) continue
+        task.missingStatusCount += 1
+        if (task.missingStatusCount < 3) continue
+        // 已确认登记的任务可能在窗口休眠期间被有界终态缓存淘汰，不能永远空转。
+        this.applyTransferSnapshot(task, {
+          id: task.connectionId,
+          transferId: task.transferId,
+          generation: task.generation,
+          status: 'failed',
+          error: {
+            code: 'TransferStateUnavailable',
+            scope: 'transfer',
+            message: '传输结果无法确认，请核对目标文件后再操作；不会自动重试'
+          }
+        })
+      }
+    } catch {
+      // IPC 暂时失败时保留任务和事件监听，下次继续查询。
+    } finally {
+      window.clearTimeout(queryTimeout)
+      this.pollingTransferStatuses = false
+    }
+  }
+
+  /**
+   * 注册当前窗口事件、启动原生任务，并以快照和共享轮询协调其终态。
+   *
+   * @param {Object} options - 命令、关联 ID、事件名称和进度回调。
+   * @returns {Promise<string>} 成功完成时的原生消息。
+   * @throws {Error} 当启动失败或原生任务进入失败、取消终态时抛出。
+   */
+  async runTransferTask(options) {
+    const { connectionId, connection, transferId, command, args, progressEvent, completeEvent, onProgress, onTransferId } = options
+    let resolveCompletion
+    // 完成信号始终 resolve，避免任务在启动 IPC 返回前失败时产生未处理 rejection。
+    const completion = new Promise(resolve => { resolveCompletion = resolve })
+    const task = {
+      connectionId,
+      connection,
+      transferId,
+      onProgress,
+      failureMessage: options.failureMessage,
+      directoryTransfer: command === 'sftp_upload_directory' || command === 'sftp_download_directory',
+      resolve: resolveCompletion,
+      generation: connection.generation,
+      dispatched: false,
+      ready: false,
+      settled: false,
+      eventVersion: 0,
+      lastProgress: null,
+      missingStatusCount: 0,
+      cancelRequested: false,
+      startTimer: null
+    }
+    let unlistenProgress
+    let unlistenComplete
+    const acceptEvent = (payload, complete) => {
+      const eventTransferId = payload.transferId || payload.operationId
+      if (payload.id !== connectionId || eventTransferId !== transferId || task.settled) return
+      if (payload.generation !== task.generation) return
+      task.eventVersion += 1
+      if (complete) {
+        this.applyTransferSnapshot(task, {
+          ...payload,
+          transferId,
+          status: payload.cancelled ? 'cancelled' : payload.success ? 'succeeded' : 'failed'
+        })
+      } else {
+        task.lastProgress = payload
+        this.applyTransferSnapshot(task, { ...payload, transferId, status: 'running' }, true, true)
+      }
+    }
+
+    this.activeTransfers.set(transferId, task)
+    try {
+      try {
+        onTransferId?.(transferId)
+      } catch (error) {
+        console.error('处理任务标识失败:', error)
+      }
+      const currentWindow = getCurrentWebviewWindow()
+      if (onProgress) {
+        unlistenProgress = await currentWindow.listen(progressEvent, event => acceptEvent(event.payload || {}, false))
+        if (task.settled) {
+          const result = await completion
+          if (result.error) throw result.error
+          return result.message
+        }
+        if (task.cancelRequested) throw createTaskError({ status: 'cancelled' }, '传输已取消')
+      }
+      unlistenComplete = await currentWindow.listen(completeEvent, event => acceptEvent(event.payload || {}, true))
+      if (task.settled) {
+        const result = await completion
+        if (result.error) throw result.error
+        return result.message
+      }
+      if (task.cancelRequested && !task.dispatched) {
+        throw createTaskError({ status: 'cancelled' }, '传输已取消')
+      }
+      if (!this.isCurrentConnection(connectionId, connection)) {
+        const error = new Error('连接已更改，未启动文件任务')
+        error.code = 'ConnectionGenerationChanged'
+        throw error
+      }
+      const expiresAt = Date.now() + TRANSFER_START_TIMEOUT_MS
+      task.startTimer = window.setTimeout(() => {
+        if (task.settled || task.ready) return
+        task.settled = true
+        const error = new Error('传输结果无法确认，请核对目标文件后再操作；不会自动重试')
+        error.code = 'TransferStateUnavailable'
+        error.scope = 'transfer'
+        task.resolve({ error })
+        this.removeActiveTransfer(task)
+        // 请求建立启动前取消墓碑；结果未知不能被迟到的取消回执改写。
+        void invoke('cancel_transfer', { transferId }).catch(() => undefined)
+      }, TRANSFER_START_TIMEOUT_MS)
+      task.dispatched = true
+      if (this.transferStatusTimer === null) {
+        this.transferStatusTimer = window.setInterval(() => void this.pollTransferStatuses(), TRANSFER_STATUS_POLL_INTERVAL_MS)
+      }
+      // 启动回执、定向事件与状态查询互为补偿；启动 IPC 挂起不能阻止已确认终态结算。
+      void invoke(command, { ...args, expectedGeneration: connection.generation, expiresAt }).then(snapshot => {
+        if (task.settled) return
+        if (!snapshot || snapshot.id !== connectionId || snapshot.transferId !== transferId) {
+          throw new Error('原生任务返回了无效的启动状态')
+        }
+        this.applyTransferSnapshot(task, snapshot, task.eventVersion === 0)
+      }).catch(error => {
+        // 已有事件或查询证实原生登记时，以真实任务状态为准，不把迟到的回执错误当终态。
+        if (task.settled || task.ready) return
+        const code = getErrorCode(error)
+        // 只有明确的登记前拒绝能立即结算；其他 IPC 错误不能证明未启动。
+        if (!TRANSFER_START_REJECTION_CODES.has(code)) return
+        task.settled = true
+        task.resolve({ error: code === 'TransferCancelled' ? createTaskError({ status: 'cancelled' }, '传输已取消') : error })
+        this.removeActiveTransfer(task)
+      })
+
+      const result = await completion
+      if (result.error) throw result.error
+      return result.message
+    } finally {
+      this.removeActiveTransfer(task)
+      // 解绑失败或 IPC 挂起不能吞掉已确认的传输结果，所有清理 Promise 都显式接住异常。
+      for (const unlisten of [ unlistenProgress, unlistenComplete ]) {
+        if (unlisten) void Promise.resolve().then(unlisten).catch(() => undefined)
+      }
+    }
   }
 
   /**
@@ -644,110 +969,60 @@ class SftpManager {
    *
    * @param {'upload'|'upload-directory'|'download'|'download-directory'} direction - 传输方向和项目类型。
    * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {{localPath: string, remotePath: string, onProgress?: TransferProgressCallback, overwrite?: boolean, onTransferId?: (transferId: string) => void}} options - 传输路径、覆盖策略和回调。
-   * @returns {Promise<string>} 对应完成事件中的成功消息。
-   * @throws {Error} 当连接不存在、远程命令失败、超时取消或完成事件报告失败时抛出。
+   * @param {{localPath: string, remotePath: string, onProgress?: TransferProgressCallback, overwrite?: boolean, onTransferId?: (transferId: string) => void, connection?: ConnectionSnapshot}} options - 传输路径、覆盖策略和捕获的会话。
+   * @returns {Promise<string>} 成功完成时的原生消息。
+   * @throws {Error} 当连接无效、启动失败或任务以失败、取消终态结束时抛出。
    */
   async transfer(direction, connectionId, options) {
-    const info = this.requireConnected(connectionId)
+    const connection = options.connection || this.captureConnection(connectionId)
+    if (!this.isCurrentConnection(connectionId, connection)) {
+      const error = new Error('连接已更改，未启动文件任务')
+      error.code = 'ConnectionGenerationChanged'
+      throw error
+    }
+    const info = connection.record
     const transferId = randomId(direction)
     const isUpload = direction === 'upload' || direction === 'upload-directory'
-    const progressEvent = isUpload ? 'upload-progress' : 'download-progress'
-    const completeEvent = isUpload ? 'upload-complete' : 'download-complete'
-    options.onTransferId?.(transferId)
-    let unlistenProgress
-    let unlistenComplete
-    let timeoutHandle
-
-    try {
-      let resolveCompletion
-      let rejectCompletion
-      const completion = new Promise((resolve, reject) => {
-        resolveCompletion = resolve
-        rejectCompletion = reject
-      })
-      /**
-       * 处理当前传输的完成事件，并把失败原因转换为 Promise 结果。
-       *
-       * @param {{payload?: Object}} event - Rust 端传来的完成事件。
-       * @returns {void}
-       */
-      const completeHandler = (event) => {
-        const payload = event.payload || {}
-        if (payload.id !== connectionId || payload.transferId !== transferId) return
-        if (payload.cancelled) {
-          rejectCompletion(new Error('传输已取消'))
-        } else if (payload.success) {
-          resolveCompletion(payload.message)
-        } else {
-          const transferError = new Error(payload.message || '传输失败')
-          if (this.isConnectionLossError(transferError)) {
-            this.markConnectionLost(connectionId, transferError)
-          }
-          rejectCompletion(transferError)
-        }
-      }
-      /**
-       * 过滤连接和传输 ID 后转发进度，避免串线到其他并发任务。
-       *
-       * @param {{payload?: Object}} event - Rust 端传来的进度事件。
-       * @returns {void}
-       */
-      const progressHandler = (event) => {
-        const payload = event.payload || {}
-        if (payload.id === connectionId && payload.transferId === transferId) {
-          options.onProgress?.(payload.progress, payload)
-        }
-      }
-      // 先注册监听器再调用工作线程，避免错过快速完成事件。
-      if (options.onProgress) unlistenProgress = await listen(progressEvent, progressHandler)
-      unlistenComplete = await listen(completeEvent, completeHandler)
-      const command = direction === 'upload'
-        ? 'scp_upload'
-        : direction === 'upload-directory'
-          ? 'sftp_upload_directory'
-          : direction === 'download-directory'
-            ? 'sftp_download_directory'
-            : 'scp_download'
-      await this.invokeRemote(connectionId, command, isUpload
-        ? {
-          id: connectionId,
-          localPath: options.localPath,
-          remotePath: options.remotePath,
-          transferId,
-          overwrite: options.overwrite
-        }
-        : {
-          id: connectionId,
-          remotePath: options.remotePath,
-          localPath: options.localPath,
-          transferId,
-          overwrite: options.overwrite
-        })
-
-      timeoutHandle = setTimeout(() => {
-        void this.cancelTransfer(transferId)
-      }, 30 * 60 * 1000)
-      const result = await completion
-      info.lastActivity = Date.now()
-      if (isUpload) this.invalidateDirectorySizeCache(connectionId)
-      return result
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle)
-      unlistenProgress?.()
-      unlistenComplete?.()
-    }
+    const command = direction === 'upload'
+      ? 'scp_upload'
+      : direction === 'upload-directory'
+        ? 'sftp_upload_directory'
+        : direction === 'download-directory'
+          ? 'sftp_download_directory'
+          : 'scp_download'
+    const result = await this.runTransferTask({
+      connectionId,
+      connection,
+      transferId,
+      command,
+      args: { id: connectionId, localPath: options.localPath, remotePath: options.remotePath, transferId, overwrite: options.overwrite },
+      progressEvent: isUpload ? 'upload-progress' : 'download-progress',
+      completeEvent: isUpload ? 'upload-complete' : 'download-complete',
+      onProgress: options.onProgress,
+      onTransferId: options.onTransferId,
+      failureMessage: '传输失败'
+    })
+    info.lastActivity = Date.now()
+    if (isUpload && this.isCurrentConnection(connectionId, connection)) this.invalidateDirectorySizeCache(connectionId)
+    return result
   }
 
   /**
    * 请求 Rust 端取消指定传输任务。
    *
    * @param {string} transferId - 创建传输任务时生成的唯一标识。
-   * @returns {Promise<boolean>} Rust 端接受取消请求时返回 true。
+   * @returns {Promise<Object|null>} 原生任务的最新状态；任务不存在或不属于当前窗口时返回 null。
    * @throws {Error} 当 IPC 调用失败时抛出。
    */
   async cancelTransfer(transferId) {
-    return invoke('cancel_transfer', { transferId })
+    const pendingTask = this.activeTransfers.get(transferId)
+    if (pendingTask) pendingTask.cancelRequested = true
+    const snapshot = await invoke('cancel_transfer', { transferId })
+    const task = this.activeTransfers.get(transferId)
+    if (task && snapshot) {
+      this.applyTransferSnapshot(task, snapshot)
+    }
+    return snapshot
   }
 
   /**
@@ -801,24 +1076,46 @@ class SftpManager {
    *
    * @param {string} connectionId - 已建立的 SSH 连接 ID。
    * @param {string} remotePath - 要读取的远程目录路径。
-   * @param {{showHiddenFiles?: boolean}} [options={}] - 控制是否返回以点开头的项目。
+   * @param {{showHiddenFiles?: boolean, signal?: AbortSignal, requestId?: string}} [options={}] - 隐藏文件设置及可取消请求的标识。
    * @returns {Promise<RemoteEntry[]>} 已排序的远程目录条目。
    * @throws {Error} 当连接无效、目录不存在或无权限读取时抛出。
    */
   async listRemoteDirectory(connectionId, remotePath, options = {}) {
     const info = this.requireConnected(connectionId)
     const showHiddenFiles = options.showHiddenFiles === true
-    const files = await this.invokeRemote(connectionId, 'list_sftp_directory', {
-      id: connectionId,
-      remotePath,
-      showHiddenFiles
+    const { signal } = options
+    if (signal?.aborted) throw createDirectoryAbortError()
+    const requestId = typeof options.requestId === 'string' && options.requestId
+      ? options.requestId
+      : signal ? randomId('directory') : undefined
+    let onAbort
+    const abortPromise = signal && new Promise((resolve, reject) => {
+      onAbort = () => {
+        void invoke('cancel_sftp_directory_request', { id: connectionId, requestId }).catch(() => undefined)
+        reject(createDirectoryAbortError())
+      }
+      signal.addEventListener('abort', onAbort, { once: true })
     })
-    info.lastActivity = Date.now()
-    return files.sort((a, b) => {
-      if (a.isDirectory && !b.isDirectory) return -1
-      if (!a.isDirectory && b.isDirectory) return 1
-      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
-    })
+    try {
+      const request = this.invokeRemote(connectionId, 'list_sftp_directory', {
+        id: connectionId,
+        remotePath,
+        showHiddenFiles,
+        ...(requestId ? { requestId } : {})
+      }, {
+        suppressConnectionLoss: () => signal?.aborted,
+        suppressHealthCheck: () => signal?.aborted
+      })
+      const files = await (abortPromise ? Promise.race([ request, abortPromise ]) : request)
+      info.lastActivity = Date.now()
+      return files.sort((a, b) => {
+        if (a.isDirectory && !b.isDirectory) return -1
+        if (!a.isDirectory && b.isDirectory) return 1
+        return REMOTE_NAME_COLLATOR.compare(a.name, b.name)
+      })
+    } finally {
+      if (onAbort) signal.removeEventListener('abort', onAbort)
+    }
   }
 
   /**
@@ -1157,57 +1454,32 @@ class SftpManager {
    * @param {string} remotePath - 要删除的远程项目路径。
    * @param {boolean} [isDirectory=false] - 调用方已知项目为目录时传入 true。
    * @param {TransferProgressCallback} [onProgress] - 接收递归删除进度事件的回调。
+   * @param {ConnectionSnapshot} [connection] - 删除操作发起时捕获的会话。
    * @returns {Promise<boolean>} 删除完成后返回 true。
    * @throws {Error} 当连接无效、删除失败或后端完成事件报告失败时抛出。
    */
-  async deleteRemoteItem(connectionId, remotePath, isDirectory = false, onProgress) {
-    const info = this.requireConnected(connectionId)
-    const operationId = randomId('delete')
-    let unlistenProgress
-    let unlistenComplete
-    try {
-      let resolveCompletion
-      let rejectCompletion
-      const completion = new Promise((resolve, reject) => {
-        resolveCompletion = resolve
-        rejectCompletion = reject
-      })
-      const completeHandler = event => {
-        const payload = event.payload || {}
-        if (payload.id !== connectionId || payload.operationId !== operationId) return
-        if (payload.success) {
-          resolveCompletion(payload.message)
-        } else {
-          const deleteError = new Error(payload.message || '删除失败')
-          if (this.isConnectionLossError(deleteError)) {
-            this.markConnectionLost(connectionId, deleteError)
-          }
-          rejectCompletion(deleteError)
-        }
-      }
-      if (onProgress) {
-        unlistenProgress = await listen('delete-progress', event => {
-          const payload = event.payload || {}
-          if (payload.id === connectionId && payload.operationId === operationId) {
-            onProgress(payload.progress, payload)
-          }
-        })
-      }
-      unlistenComplete = await listen('delete-complete', completeHandler)
-      await this.invokeRemote(connectionId, 'sftp_delete', {
-        id: connectionId,
-        remotePath,
-        isDirectory,
-        operationId
-      })
-      await completion
-      info.lastActivity = Date.now()
-      this.invalidateDirectorySizeCache(connectionId)
-      return true
-    } finally {
-      unlistenProgress?.()
-      unlistenComplete?.()
+  async deleteRemoteItem(connectionId, remotePath, isDirectory = false, onProgress, connection = this.captureConnection(connectionId)) {
+    if (!this.isCurrentConnection(connectionId, connection)) {
+      const error = new Error('连接已更改，未启动文件任务')
+      error.code = 'ConnectionGenerationChanged'
+      throw error
     }
+    const info = connection.record
+    const operationId = randomId('delete')
+    await this.runTransferTask({
+      connectionId,
+      connection,
+      transferId: operationId,
+      command: 'sftp_delete',
+      args: { id: connectionId, remotePath, isDirectory, operationId },
+      progressEvent: 'delete-progress',
+      completeEvent: 'delete-complete',
+      onProgress,
+      failureMessage: '删除失败'
+    })
+    info.lastActivity = Date.now()
+    if (this.isCurrentConnection(connectionId, connection)) this.invalidateDirectorySizeCache(connectionId)
+    return true
   }
 
   /**
@@ -1296,18 +1568,19 @@ class SftpManager {
    * @throws {Error} 当保活失败时抛出，并在本地标记连接已断开。
    */
   async checkConnection(connectionId) {
-    this.requireConnected(connectionId)
+    const connection = this.captureConnection(connectionId)
     try {
       const result = await invoke('check_ssh_connection', { id: connectionId })
-      const info = this.connections.get(connectionId)
-      if (info) info.lastActivity = Date.now()
+      if (!this.isCurrentConnection(connectionId, connection)) return false
+      connection.record.lastActivity = Date.now()
       const healthy = Boolean(result)
-      if (!healthy) this.markConnectionLost(connectionId, '服务器无响应或网络已断开')
+      if (!healthy) this.markConnectionLost(connectionId, '服务器无响应或网络已断开', connection)
       return healthy
     } catch (error) {
       this.markConnectionLost(
         connectionId,
-        this.isConnectionLossError(error) ? error : '服务器无响应或网络已断开'
+        this.isConnectionLossError(error) ? error : '服务器无响应或网络已断开',
+        connection
       )
       throw error
     }
@@ -1399,6 +1672,25 @@ class SftpManager {
     const info = this.requireConnection(connectionId)
     if (info.status !== SftpConnectionStatus.CONNECTED) throw new Error('连接未建立')
     return info
+  }
+
+  /** 捕获当前连接记录及原生代次，供跨 await 的操作保持同一会话。 */
+  captureConnection(connectionId) {
+    const record = this.requireConnected(connectionId)
+    if (!Number.isSafeInteger(record.generation) || record.generation < 0) {
+      throw new Error('服务器连接代次无效，请重新连接')
+    }
+    return { record, generation: record.generation }
+  }
+
+  /** 同一 ID 重连后，旧操作不得使用新记录或新代次。 */
+  isCurrentConnection(connectionId, connection) {
+    return Boolean(connection?.record)
+      && Number.isSafeInteger(connection.generation)
+      && connection.generation >= 0
+      && this.connections.get(connectionId) === connection.record
+      && connection.record.generation === connection.generation
+      && connection.record.status === SftpConnectionStatus.CONNECTED
   }
 }
 

@@ -1,3 +1,4 @@
+import { invoke } from '@tauri-apps/api/core'
 import { load } from '@tauri-apps/plugin-store'
 import { proxy, useSnapshot } from 'valtio'
 
@@ -90,31 +91,17 @@ export class ReactiveStore {
    * @throws {Error} 当 Store 无法初始化或保存失败时抛出。
    */
   async set(key, value) {
-    const store = await this.init()
+    await this.init()
     this.state[key] = value
     return this.enqueueWrite(async () => {
-      await store.set(key, value)
-      await store.save()
-    })
-  }
-
-  /**
-   * 在串行写入队列中读取并更新一个键，避免并发调用基于旧快照互相覆盖。
-   *
-   * @param {string} key - 要更新的设置键。
-   * @param {(current: unknown) => unknown} updater - 基于队列内最新值生成新值的函数。
-   * @returns {Promise<unknown>} 已写入的新值。
-   * @throws {Error} 当 Store 初始化、读取或保存失败时抛出。
-   */
-  async update(key, updater) {
-    const store = await this.init()
-    return this.enqueueWrite(async () => {
-      const current = await store.get(key)
-      const next = updater(current)
-      await store.set(key, next)
-      await store.save()
-      this.state[key] = next
-      return next
+      try {
+        await invoke('write_store_preference', { key, value, remove: false })
+      } catch (error) {
+        const saved = await this.store.get(key).catch(() => undefined)
+        if (saved === undefined) delete this.state[key]
+        else this.state[key] = saved
+        throw error
+      }
     })
   }
 
@@ -134,48 +121,6 @@ export class ReactiveStore {
       console.error(`读取本地数据失败 [${ key }]`, error)
       return this.state[key] ?? null
     }
-  }
-
-  /**
-   * 删除一个持久化键及其响应式状态。
-   *
-   * @param {string} key - 要删除的设置键。
-   * @returns {Promise<void>} 删除并保存完成后的 Promise。
-   * @throws {Error} 当 Store 无法初始化或保存失败时抛出。
-   */
-  async delete(key) {
-    const store = await this.init()
-    delete this.state[key]
-    return this.enqueueWrite(async () => {
-      await store.delete(key)
-      await store.save()
-    })
-  }
-
-  /**
-   * 清空所有持久化设置和内存快照。
-   *
-   * @returns {Promise<void>} 清空并保存完成后的 Promise。
-   * @throws {Error} 当 Store 无法初始化或保存失败时抛出。
-   */
-  async clear() {
-    const store = await this.init()
-    Object.keys(this.state).forEach(key => delete this.state[key])
-    return this.enqueueWrite(async () => {
-      await store.clear()
-      await store.save()
-    })
-  }
-
-  /**
-   * 显式刷新底层 Store 的待写内容。
-   *
-   * @returns {Promise<void>} 底层 Store 保存完成后的 Promise。
-   * @throws {Error} 当 Store 无法初始化或保存失败时抛出。
-   */
-  async save() {
-    const store = await this.init()
-    return this.enqueueWrite(() => store.save())
   }
 
   /**

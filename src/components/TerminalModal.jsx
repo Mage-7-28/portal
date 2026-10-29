@@ -1,18 +1,19 @@
 /**
  * 远程终端 UI。
- * xterm 只处理显示和输入，PTY 生命周期由 Tauri 命令与事件完成闭环。
+ * xterm 只处理显示和输入，PTY 生命周期由 Tauri 命令与 Channel 完成闭环。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Modal, Spin } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Terminal } from '@xterm/xterm'
-import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { Channel, invoke } from '@tauri-apps/api/core'
 import AppIcon from './AppIcon'
-import { normalizeError, StoreKeys } from '../utils/constants.js'
+import { getErrorCode, normalizeError, StoreKeys } from '../utils/constants.js'
 import { store, useStoreValue } from '../utils/storeUtils.js'
 import { normalizeTerminalFontSize } from '../utils/workspacePreferences.js'
+import { createInputQueue, createOutputReceiver, createResizeQueue, normalizeTerminalDimensions } from '../utils/terminalTransport.js'
+import { createTerminalOutputDecorator } from '../utils/terminalOutput.js'
 
 /**
  * 为每个终端 WebView 生成独立的后端会话标识。
@@ -25,6 +26,9 @@ const createTerminalId = () => {
   }
   return `terminal-${ Date.now() }-${ Math.random().toString(16).slice(2) }`
 }
+
+// 即使随机数回退值相同，同一 WebView 的不同打开操作也使用不同代次。
+let nextTerminalGeneration = 0
 
 // xterm 的基础主题令牌，与 CSS ANSI 颜色兜底保持一致。
 const TERMINAL_THEME = {
@@ -58,6 +62,10 @@ const DEFAULT_TERMINAL_FONT_SIZE = 13
 const MIN_TERMINAL_FONT_SIZE = 10
 const MAX_TERMINAL_FONT_SIZE = 22
 const SEARCH_HIGHLIGHT_LIMIT = 1000
+// 原生输出背压上限为 256 KiB，最后一个数据包最多再携带 32 KiB。
+const STARTUP_OUTPUT_MAX_BYTES = (256 + 32) * 1024
+// 空数据包也可能占用接收器条目；额外允许错误和退出包。
+const STARTUP_OUTPUT_MAX_PACKETS = STARTUP_OUTPUT_MAX_BYTES + 2
 
 const SEARCH_OPTIONS = {
   regex: false,
@@ -96,49 +104,6 @@ const isTerminalSearchShortcut = event => {
   return isMac
     ? event.metaKey && !event.ctrlKey && !event.shiftKey
     : event.ctrlKey && event.shiftKey && !event.metaKey
-}
-
-// 普通日志关键词的 ANSI 前景色；已经携带控制序列的终端输出不会使用它。
-const LOG_HIGHLIGHT_COLORS = {
-  FATAL: '38;2;225;132;125',
-  ERROR: '38;2;225;132;125',
-  EXCEPTION: '38;2;225;132;125',
-  TRACEBACK: '38;2;225;132;125',
-  WARN: '38;2;220;177;105',
-  WARNING: '38;2;220;177;105',
-  INFO: '38;2;145;181;151',
-  NOTICE: '38;2;145;181;151',
-  SUCCESS: '38;2;145;181;151',
-  DEBUG: '38;2;158;162;173',
-  TRACE: '38;2;158;162;173'
-}
-
-// 仅匹配完整关键词，避免给普通单词的一部分添加颜色控制码。
-const LOG_HIGHLIGHT_PATTERN = /\b(FATAL|ERROR|EXCEPTION|TRACEBACK|WARN(?:ING)?|INFO|NOTICE|SUCCESS|DEBUG|TRACE)\b/gi
-// xterm 无法安全处理的控制字符模式；命中后将原样交给终端解析器。
-const UNSUPPORTED_CONTROL_PATTERN = /[\u0000-\u0008\u000b\u000c\u000e-\u001a\u001c-\u001f]/
-
-/**
- * 只为普通日志关键词增加颜色，保留已有 ANSI 控制序列不变。
- *
- * @param {string} text - 不包含 ANSI 控制序列的终端文本。
- * @returns {string} 插入关键词颜色控制序列后的文本。
- */
-const highlightPlainText = text => text.replace(
-  LOG_HIGHLIGHT_PATTERN,
-  value => `\x1b[${ LOG_HIGHLIGHT_COLORS[value.toUpperCase()] }m${ value }\x1b[0m`
-)
-
-/**
- * 判断输出是否可安全增强；交互式程序输出必须原样交给 xterm。
- *
- * @param {string} data - 后端 PTY 返回的文本数据。
- * @returns {string} 可安全增强时返回带关键词颜色的文本，否则返回原始数据。
- */
-const decorateTerminalOutput = data => {
-  // 含有 ESC 或其他控制字符的数据可能属于 ANSI、光标控制或全屏程序，必须原样交给 xterm。
-  if (!data || data.includes('\x1b') || UNSUPPORTED_CONTROL_PATTERN.test(data)) return data
-  return highlightPlainText(data)
 }
 
 /**
@@ -185,8 +150,6 @@ export const TerminalView = ({
   const previousFocusRequestRef = useRef(focusRequest)
   // 后端 PTY 生命周期标志，避免在尚未建立或已经关闭后继续发送数据。
   const backendReadyRef = useRef(false)
-  const closingRef = useRef(false)
-  const writeErrorShownRef = useRef(false)
   // 对外暴露的幂等关闭函数，独立窗口宿主和组件卸载都会调用它。
   const closeTerminalRef = useRef(() => Promise.resolve())
   // 终端连接阶段和用户可读的状态文本。
@@ -256,7 +219,7 @@ export const TerminalView = ({
     terminalRef.current?.focus()
   }, [])
 
-  // connectionId 变化时重建 xterm、IPC 监听和 PTY；清理必须先关后端再销毁视图。
+  // connectionId 变化时重建 xterm、IPC Channel 和 PTY；清理必须先关后端再销毁视图。
   useEffect(() => {
     if (searchConnectionRef.current !== connectionId) {
       // 搜索内容只属于原会话，不能带入新连接。
@@ -274,11 +237,21 @@ export const TerminalView = ({
     }
 
     let disposed = false
-    let listenerCleanups = []
     const terminalId = createTerminalId()
+    const generation = `${ createTerminalId() }-${ ++nextTerminalGeneration }`
+    let closeRequested = false
+    let endReceived = false
+    let sessionErrored = false
+    let transportErrorShown = false
+    let inputQueue
+    let resizeQueue
+    let outputReceiver
+    let outputChannel
+    let startupConfirmed = false
+    let startupOutput = []
+    let startupOutputBytes = 0
+    let startupPacketCount = 0
     backendReadyRef.current = false
-    closingRef.current = false
-    writeErrorShownRef.current = false
     setStatus('connecting')
     setStatusMessage('正在建立终端连接...')
 
@@ -387,13 +360,19 @@ export const TerminalView = ({
      * @returns {Promise<boolean>} 后端关闭命令返回的结果；调用失败时返回 false。
      */
     const closeBackend = () => {
+      closeRequested = true
       // 旧连接的异步清理不能更改新实例的 PTY 状态。
       if (terminalRef.current === terminal) {
-        closingRef.current = true
         backendReadyRef.current = false
       }
+      inputQueue?.dispose()
+      resizeQueue?.dispose()
+      outputReceiver?.dispose()
+      startupOutput = []
+      startupOutputBytes = 0
+      if (outputChannel) outputChannel.onmessage = () => undefined
       // 关闭命令幂等，重复调用可以覆盖“窗口关闭早于 PTY 创建完成”的竞态。
-      return invoke('close_ssh_terminal', { terminalId }).catch(() => false)
+      return invoke('close_ssh_terminal', { terminalId, generation }).catch(() => false)
     }
     closeTerminalRef.current = closeBackend
 
@@ -433,101 +412,186 @@ export const TerminalView = ({
       : null
     resizeObserver?.observe(containerRef.current)
 
-    const dataDisposable = terminal.onData(data => {
-      if (disposed || !backendReadyRef.current) return
-      void invoke('write_ssh_terminal', { terminalId, data }).catch(error => {
-        if (disposed || writeErrorShownRef.current) return
-        writeErrorShownRef.current = true
-        backendReadyRef.current = false
-        terminal.options.disableStdin = true
-        terminal.writeln(`\r\n\x1b[31m[终端输入失败] ${ normalizeError(error) }\x1b[0m`)
-        setStatus('error')
-        setStatusMessage('终端输入失败')
-      })
+    const failTransport = (label, error, allowAfterEnd = false) => {
+      if (disposed || closeRequested || (endReceived && !allowAfterEnd) || transportErrorShown) return
+      transportErrorShown = true
+      sessionErrored = true
+      backendReadyRef.current = false
+      inputQueue?.dispose()
+      resizeQueue?.dispose()
+      terminal.options.disableStdin = true
+      terminal.writeln(`\r\n\x1b[31m[${ label }] ${ normalizeError(error) }\x1b[0m`)
+      setStatus('error')
+      setStatusMessage(label)
+    }
+
+    const failStartupOutput = () => {
+      if (disposed || closeRequested) return
+      failTransport('终端输出失败', new Error('终端启动前输出缓冲区已满'), true)
+      void closeBackend()
+    }
+
+    inputQueue = createInputQueue({
+      terminalId,
+      generation,
+      invoke,
+      onOverflow: () => {
+        if (!disposed && !closeRequested) terminal.writeln('\r\n\x1b[31m[终端输入失败] 输入队列已满，请稍后重试\x1b[0m')
+      },
+      onError: error => {
+        // 读取线程可能已经移除会话，而最终输出和退出包仍在 Channel 中途。
+        // 输入队列已停止，等待结束包按消费顺序处理，避免抢先禁用输入或误报失败。
+        if (getErrorCode(error) === 'TerminalNotFound') return
+        failTransport('终端输入失败', error)
+      }
     })
-    let pendingResize = null
-    let resizeInFlight = false
-    // 原生尺寸命令可能乱序完成；每个 PTY 串行发送，并合并等待期间的中间尺寸。
-    const syncTerminalSize = async (columns, rows) => {
-      pendingResize = { columns, rows }
-      if (resizeInFlight || disposed || !backendReadyRef.current) return
-      resizeInFlight = true
-      try {
-        while (pendingResize && !disposed && backendReadyRef.current) {
-          const size = pendingResize
-          pendingResize = null
-          await invoke('resize_ssh_terminal', { terminalId, ...size }).catch(() => undefined)
-        }
-      } finally {
-        resizeInFlight = false
+
+    // 只应用仍对应当前 xterm 尺寸的后端响应，避免旧响应覆盖后续窗口变化。
+    const applyEffectiveDimensions = (size, requested) => {
+      if (disposed || closeRequested || !size || !Number.isFinite(size.columns) || !Number.isFinite(size.rows)) return
+      const current = normalizeTerminalDimensions(terminal.cols, terminal.rows)
+      if (current.columns !== requested.columns || current.rows !== requested.rows) return
+      const effective = normalizeTerminalDimensions(size.columns, size.rows)
+      if (terminal.cols !== effective.columns || terminal.rows !== effective.rows) {
+        terminal.resize(effective.columns, effective.rows)
       }
     }
+    resizeQueue = createResizeQueue({ terminalId, generation, invoke, onResize: applyEffectiveDimensions })
+
+    const decorateTerminalOutput = createTerminalOutputDecorator()
+    const startupOutputEncoder = new globalThis.TextEncoder()
+    const writeTerminalOutput = (data, consumed) => terminal.write(decorateTerminalOutput(data), consumed)
+    const flushStartupOutput = () => {
+      let index = 0
+      // 保持暂存状态直到队列完全写入，避免同步重入时新数据插到旧数据之前。
+      while (index < startupOutput.length && !disposed && !closeRequested) {
+        const item = startupOutput[index]
+        startupOutput[index++] = null
+        startupOutputBytes -= item.bytes
+        writeTerminalOutput(item.data, item.consumed)
+      }
+      startupOutput = []
+      startupOutputBytes = 0
+      startupConfirmed = true
+    }
+    outputReceiver = createOutputReceiver({
+      terminalId,
+      generation,
+      invoke,
+      // xterm 自带 VT/ANSI 解析器；普通日志只增强关键词颜色，交互式控制序列原样传递。
+      write: (data, consumed) => {
+        if (startupConfirmed) {
+          writeTerminalOutput(data, consumed)
+          return
+        }
+        const remaining = STARTUP_OUTPUT_MAX_BYTES - startupOutputBytes
+        // 先限制 UTF-16 长度，避免为超大包分配无界的临时编码缓冲区。
+        if (data.length > remaining) {
+          failStartupOutput()
+          return
+        }
+        const bytes = startupOutputEncoder.encode(data).byteLength
+        if (bytes > remaining) {
+          failStartupOutput()
+          return
+        }
+        startupOutput.push({ data, consumed, bytes })
+        startupOutputBytes += bytes
+      },
+      onEndReceived: () => { endReceived = true },
+      onError: packet => {
+        if (disposed || closeRequested) return
+        sessionErrored = true
+        backendReadyRef.current = false
+        inputQueue.dispose()
+        resizeQueue.dispose()
+        terminal.options.disableStdin = true
+        terminal.writeln(`\r\n\x1b[31m[终端错误] ${ String(packet.message || '终端连接发生错误') }\x1b[0m`)
+        setStatus('error')
+        setStatusMessage('终端连接发生错误')
+      },
+      onExit: packet => {
+        if (disposed || closeRequested) return
+        backendReadyRef.current = false
+        inputQueue.dispose()
+        resizeQueue.dispose()
+        terminal.options.disableStdin = true
+        const message = String(packet.message || '远程终端已关闭')
+        terminal.writeln(`\r\n\x1b[90m[${ message }]\x1b[0m`)
+        if (!sessionErrored) {
+          setStatus('closed')
+          setStatusMessage(message)
+        }
+      },
+      onAckError: error => {
+        // 读取线程发送最终包后可能先删除会话，再由 WebView 收到退出/错误包。
+        // 此时不再需要 ACK，也不能提前销毁 Channel，否则会丢失尚在途的结束包。
+        if (getErrorCode(error) === 'TerminalNotFound') return
+        failTransport('终端输出失败', error)
+        // 停止后端读取，避免无法确认的输出永久占满背压窗口。
+        if (!disposed && !closeRequested && !endReceived) void closeBackend()
+      }
+    })
+    const dataDisposable = terminal.onData(data => {
+      if (disposed || closeRequested || endReceived || !backendReadyRef.current) return
+      inputQueue.enqueue(data)
+    })
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-      if (disposed || !backendReadyRef.current) return
-      void syncTerminalSize(cols, rows)
+      if (disposed || closeRequested || endReceived || !backendReadyRef.current) return
+      resizeQueue.request(cols, rows)
     })
 
     /**
-     * 注册终端 IPC 事件并创建后端 PTY，成功后开启 xterm 输入。
+     * 通过会话专属 Channel 创建后端 PTY，成功后开启 xterm 输入。
      *
      * @returns {Promise<void>} 终端初始化完成或失败清理完成后的 Promise。
      */
     const setupTerminal = async () => {
       try {
-        const [ dataUnlisten, errorUnlisten, closedUnlisten ] = await Promise.all([
-          listen('ssh-terminal-data', event => {
-            const payload = event.payload || {}
-            if (disposed || payload.terminalId !== terminalId || typeof payload.data !== 'string') return
-            // xterm 自带 VT/ANSI 解析器；普通日志只增强关键词颜色，交互式控制序列原样传递。
-            // 这样不会按 IPC 数据块破坏 vim、top 等程序的转义序列。
-            terminal.write(decorateTerminalOutput(payload.data))
-          }),
-          listen('ssh-terminal-error', event => {
-            const payload = event.payload || {}
-            if (disposed || payload.terminalId !== terminalId) return
-            const message = String(payload.message || '终端连接发生错误')
-            terminal.writeln(`\r\n\x1b[31m[终端错误] ${ message }\x1b[0m`)
-            setStatus('error')
-            setStatusMessage('终端连接发生错误')
-          }),
-          listen('ssh-terminal-closed', event => {
-            const payload = event.payload || {}
-            if (disposed || payload.terminalId !== terminalId || payload.expected) return
-            backendReadyRef.current = false
-            terminal.options.disableStdin = true
-            terminal.writeln(`\r\n\x1b[90m[${ payload.reason || '远程终端已关闭' }]\x1b[0m`)
-            setStatus('closed')
-            setStatusMessage(payload.reason || '远程终端已关闭')
-          })
-        ])
-        if (disposed) {
-          dataUnlisten()
-          errorUnlisten()
-          closedUnlisten()
-          return
-        }
-        listenerCleanups = [ dataUnlisten, errorUnlisten, closedUnlisten ]
+        outputChannel = new Channel(packet => {
+          if (disposed || closeRequested) return
+          if (!startupConfirmed && packet?.terminalId === terminalId && packet.generation === generation
+            && ++startupPacketCount > STARTUP_OUTPUT_MAX_PACKETS) {
+            failStartupOutput()
+            return
+          }
+          outputReceiver.receive(packet)
+        })
         fitTerminal()
-        await invoke('open_ssh_terminal', {
+        const requested = normalizeTerminalDimensions(terminal.cols, terminal.rows)
+        const size = await invoke('open_ssh_terminal', {
           id: connectionId,
           terminalId,
-          columns: terminal.cols,
-          rows: terminal.rows
+          ...requested,
+          generation,
+          onOutput: outputChannel
         })
-        if (disposed || closingRef.current) {
+        if (disposed || closeRequested) {
           closeBackend()
           return
         }
+        // 退出可能早于 open 命令返回；仍需消费其前序输出，但不能复活终端。
+        if (endReceived || sessionErrored) {
+          flushStartupOutput()
+          return
+        }
+        applyEffectiveDimensions(size, requested)
         backendReadyRef.current = true
         terminal.options.disableStdin = false
+        flushStartupOutput()
+        if (disposed || closeRequested || endReceived || sessionErrored) return
         setStatus('connected')
         setStatusMessage('已连接')
         fitTerminal()
         // 初始化在途时字号或窗口可能变化，fit 未改变本地尺寸也必须同步一次远端 PTY。
-        void syncTerminalSize(terminal.cols, terminal.rows)
+        resizeQueue.request(terminal.cols, terminal.rows)
         focusTerminalIfAvailable()
       } catch (error) {
-        if (disposed) return
+        if (disposed || closeRequested) return
+        if (sessionErrored || (endReceived && startupOutput.length === 0)) {
+          closeBackend()
+          return
+        }
         terminal.options.disableStdin = true
         terminal.writeln(`\r\n\x1b[31m[终端启动失败] ${ normalizeError(error) }\x1b[0m`)
         setStatus('error')
@@ -543,7 +607,6 @@ export const TerminalView = ({
 
     return () => {
       disposed = true
-      pendingResize = null
       if (fitFrame) window.cancelAnimationFrame(fitFrame)
       window.cancelAnimationFrame(firstFrame)
       window.cancelAnimationFrame(secondFrame)
@@ -561,7 +624,6 @@ export const TerminalView = ({
       window.removeEventListener('blur', resumeSearchAfterSelecting)
       if (searchRefreshTimerRef.current !== null) window.clearTimeout(searchRefreshTimerRef.current)
       searchRefreshTimerRef.current = null
-      listenerCleanups.forEach(cleanup => cleanup())
       if (motionPreference?.removeEventListener) motionPreference.removeEventListener('change', handleMotionChange)
       else motionPreference?.removeListener?.(handleMotionChange)
       closeBackend()
