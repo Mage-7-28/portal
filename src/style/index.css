@@ -1173,10 +1173,6 @@ html,
 }
 
 /* 远程终端使用独立 PTY，模拟器负责光标、滚动、ANSI 颜色和键盘交互。 */
-.terminal-modal .ant-modal-header {
-  margin-bottom: 9px;
-}
-
 .terminal-connection-meta {
   display: flex;
   min-width: 0;
@@ -1228,7 +1224,8 @@ html,
   flex-direction: column;
   height: clamp(300px, calc(100dvh - 154px), 660px);
   min-height: 300px;
-  padding: 10px 11px;
+  box-sizing: border-box;
+  padding: 8px;
   overflow: hidden;
   border: 1px solid #45474d;
   border-radius: 5px;
@@ -1240,6 +1237,8 @@ html,
   flex: 1 1 0;
   min-width: 0;
   min-height: 0;
+  padding: 0;
+  border: 0;
 }
 
 .terminal-emulator .xterm {
@@ -1253,24 +1252,20 @@ html,
   scrollbar-width: thin;
 }
 
-.terminal-emulator .xterm-screen {
-  width: 100% !important;
-}
-
 /* xterm DOM 渲染器会在运行时注入字体和颜色规则；这里提供静态兜底，确保生产包 CSP 较严格时仍保持一致。 */
 .terminal-emulator .xterm-rows,
 .terminal-emulator .xterm-rows > div,
 .terminal-emulator .xterm-rows span,
 .terminal-emulator .xterm-char-measure-element {
-  font-family: "SF Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace !important;
-  font-size: var(--terminal-font-size, 13px) !important;
+  font-family: "SF Mono", "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "DejaVu Sans Mono", monospace;
+  font-size: var(--terminal-font-size, 13px);
   font-kerning: none;
 }
 
 .terminal-emulator .xterm-rows {
   pointer-events: none;
   color: #e6e8eb !important;
-  line-height: 1.25 !important;
+  line-height: 1.25;
   white-space: pre;
 }
 
@@ -1373,7 +1368,6 @@ html,
   .terminal-emulator {
     height: clamp(260px, calc(100dvh - 142px), 540px);
     min-height: 260px;
-    padding: 8px 9px;
   }
 
   .terminal-status {
@@ -1977,7 +1971,7 @@ html,
 }
 
 .server-workspace-shell .server-terminal-card > .ant-card-body {
-  padding: 5px;
+  padding: 0;
 }
 
 .server-workspace-pane {
@@ -2022,8 +2016,6 @@ html,
   height: auto;
   min-width: 0;
   min-height: 0;
-  padding: 7px;
-  box-sizing: border-box;
 }
 
 .server-terminal-placeholder {
@@ -2064,7 +2056,7 @@ html,
 }
 
 .server-monitor-title,
-.server-monitor-updated,
+.server-monitor-health,
 .server-process-summary {
   display: inline-flex;
   min-width: 0;
@@ -2074,11 +2066,6 @@ html,
 
 .server-monitor-title > .app-icon {
   color: #7fa6a4;
-}
-
-.server-monitor-updated {
-  font-size: 10px;
-  font-variant-numeric: tabular-nums;
 }
 
 .server-monitor-live-dot {

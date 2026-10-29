@@ -17,7 +17,7 @@ import './style/connection-boot.css'
 import './style/launcher.css'
 // xterm 官方要求在应用入口加载基础 CSS，终端组件只负责创建实例和写入 PTY 数据。
 import '@xterm/xterm/css/xterm.css'
-import { GlobalFontFamily } from './utils/common.js'
+import { GlobalFontFamily } from './utils/constants.js'
 import { initStore } from './utils/storeUtils.js'
 import { initNotification } from './utils/notificationUtils.js'
 

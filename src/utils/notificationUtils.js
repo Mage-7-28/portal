@@ -7,9 +7,8 @@ import {
 } from '@tauri-apps/plugin-notification'
 import { msgBoxStyle } from './constants.js'
 
-// 系统通知未提供标题时使用的应用名称，以及应用内 Toast 的默认去重 ID。
+// 系统通知未提供标题时使用的应用名称。
 const APP_TITLE = 'Portal'
-const DEFAULT_TOAST_ID = 'msgBoxGlobal'
 
 /**
  * @typedef {Object} NotificationOptions
@@ -19,6 +18,8 @@ const DEFAULT_TOAST_ID = 'msgBoxGlobal'
  * @property {number} [duration] - 应用内 Toast 持续时间（毫秒）。
  * @property {string} [position] - 应用内 Toast 位置。
  * @property {Object} [style] - 应用内 Toast 样式覆盖项。
+ * @property {'auto'|'in-app'} [delivery='auto'] - 主动操作的反馈可固定在当前窗口，不受原生弹窗焦点变化影响。
+ * @property {string|string[]} [details] - 仅在本窗口展开显示的诊断详情，不发送至系统通知。
  */
 
 // 通知权限的进程级缓存，避免每次后台提示都重复查询或弹出授权请求。
@@ -104,9 +105,14 @@ const getToastMethod = (type) => {
  */
 const showToast = (type, title, body, options = {}) => {
   const toastMethod = getToastMethod(type)
+  const { delivery: _delivery, ...displayOptions } = options
   const toastOptions = {
-    ...options,
-    id: options.id || DEFAULT_TOAST_ID,
+    ...displayOptions,
+    // 不同操作不能共享默认 ID；只有调用方明确提供 ID 时才更新已有通知。
+    ...(options.id ? { id: options.id } : {}),
+    ...(type === 'error' && options.delivery === 'in-app' ? { duration: options.duration ?? Infinity } : {}),
+    // react-hot-toast 的单条默认 ariaProps 会覆盖宿主配置，错误需在提交时声明。
+    ...(type === 'error' ? { ariaProps: { role: 'alert', 'aria-live': 'assertive' }} : {}),
     style: { ...msgBoxStyle, ...(options.style || {}) }
   }
   toastMethod(getToastMessage(title, body), toastOptions)
@@ -127,6 +133,8 @@ const pickSystemOptions = (options = {}) => {
     style: _style,
     duration: _duration,
     position: _position,
+    delivery: _delivery,
+    details: _details,
     ...systemOptions
   } = options
   return systemOptions
@@ -193,15 +201,6 @@ export class NotificationUtils {
   }
 
   /**
-   * 获取当前窗口状态，供需要时调试或测试。
-   *
-   * @returns {Promise<boolean>} 当前窗口处于前台且可交互时返回 true。
-   */
-  static async isForeground() {
-    return isWindowFocused()
-  }
-
-  /**
    * 根据窗口状态分发通知。
    *
    * @param {string} type - Toast 类型或普通信息类型。
@@ -211,6 +210,7 @@ export class NotificationUtils {
    * @returns {Promise<boolean>} 通知是否成功发送或显示。
    */
   static async dispatch(type, title, body = '', options = {}) {
+    if (options.delivery === 'in-app') return showToast(type, title, body, options)
     const foreground = await isWindowFocused()
     if (foreground) return showToast(type, title, body, options)
 
@@ -231,17 +231,6 @@ export class NotificationUtils {
       console.error('发送系统通知失败:', error)
       return showToast(type, title, body, options)
     }
-  }
-
-  /**
-   * 发送普通通知。
-   *
-   * @param {NotificationOptions & {type?: string}} [options={}] - 通知标题、正文、类型和显示选项。
-   * @returns {Promise<boolean>} 通知是否成功发送或显示。
-   */
-  static async send(options = {}) {
-    const { title = APP_TITLE, body = '', type = 'info', ...rest } = options
-    return NotificationUtils.dispatch(type, title, body, rest)
   }
 
   /**
@@ -292,41 +281,9 @@ export class NotificationUtils {
     return NotificationUtils.dispatch('warning', title, body, options)
   }
 
-  /**
-   * 保留兼容性；系统通知按钮需通过 Tauri actionTypeId 配置，当前只发送文本通知。
-   *
-   * @param {unknown} title - 通知标题。
-   * @param {unknown} body - 通知正文。
-   * @param {Object[]} _buttons - 兼容旧调用方的按钮描述，当前不会发送到系统通知。
-   * @param {NotificationOptions} [options={}] - 通知显示选项。
-   * @returns {Promise<boolean>} 通知是否成功发送或显示。
-   */
-  static async withButtons(title, body, _buttons, options = {}) {
-    return NotificationUtils.dispatch('info', title, body, options)
-  }
-
-  /**
-   * 延迟发送通知。
-   *
-   * @param {number} delay - 延迟时间（毫秒）。
-   * @param {NotificationOptions & {type?: string}} options - 延迟发送的通知配置。
-   * @returns {Promise<boolean>} 延迟后通知是否成功发送或显示。
-   */
-  static async sendWithDelay(delay, options) {
-    return new Promise(resolve => {
-      setTimeout(() => {
-        void NotificationUtils.send(options).then(resolve)
-      }, delay)
-    })
-  }
 }
 
 export const notification = NotificationUtils
-export const sendInfo = NotificationUtils.info
-export const sendSuccess = NotificationUtils.success
-export const sendError = NotificationUtils.error
-export const sendWarning = NotificationUtils.warning
-export const sendNotificationWithDelay = NotificationUtils.sendWithDelay
 
 /**
  * 初始化通知模块；权限会在第一次后台通知时按需申请。

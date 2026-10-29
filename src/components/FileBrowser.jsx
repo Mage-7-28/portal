@@ -13,8 +13,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { getCurrentWebview } from '@tauri-apps/api/webview'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { PubSubBusinessKeyEnum } from '../utils/common'
-import { normalizeError } from '../utils/constants.js'
+import { getErrorDetails, normalizeError, PubSubBusinessKeyEnum } from '../utils/constants.js'
 import { sftpManager } from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
@@ -401,7 +400,7 @@ const FileBrowser = ({
       setRenameValue(entry.name)
       setRenameTarget(target)
     } catch (error) {
-      void notification.error('重命名失败', normalizeError(error))
+      void notification.error('重命名失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     }
   }, [ currentConnectionId, currentPath ])
 
@@ -433,7 +432,7 @@ const FileBrowser = ({
       await itemActionRefs.current.handleRenameItem(entry, name, renameTarget)
       if (mountedRef.current) setRenameTarget(null)
     } catch (error) {
-      if (mountedRef.current) void notification.error('重命名失败', normalizeError(error))
+      if (mountedRef.current) void notification.error('重命名失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       if (mountedRef.current) setRenaming(false)
       release()
@@ -459,7 +458,7 @@ const FileBrowser = ({
         setSelectedKeys([])
       })
     } catch (error) {
-      void notification.error(`批量删除失败：${ normalizeError(error) }`)
+      void notification.error('批量删除失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       batchStateRef.current = { batchDeleting: false, batchDownloading: false }
       setBatchDeleting(false)
@@ -490,7 +489,7 @@ const FileBrowser = ({
         await openTerminalWindow(connection)
       }
     } catch (openError) {
-      void notification.error(`打开终端失败：${ openError?.message || '未知错误' }`)
+      void notification.error('打开终端失败', normalizeError(openError), { delivery: 'in-app', details: getErrorDetails(openError) })
     } finally {
       terminalOpeningCountRef.current = Math.max(0, terminalOpeningCountRef.current - 1)
       if (terminalOpeningCountRef.current === 0) setTerminalOpening(false)
@@ -514,7 +513,7 @@ const FileBrowser = ({
         setSelectedKeys([])
       })
     } catch (error) {
-      void notification.error(`批量下载失败：${ normalizeError(error) }`)
+      void notification.error('批量下载失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       batchStateRef.current = { batchDeleting: false, batchDownloading: false }
       setBatchDownloading(false)
@@ -545,7 +544,7 @@ const FileBrowser = ({
       setDirectoryModalOpen(false)
       setDirectoryName('')
     } catch (error) {
-      notification.error('创建目录失败', error.message || error.toString() || '未知错误')
+      notification.error('创建目录失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       setDirectorySubmitting(false)
       release()
@@ -611,7 +610,8 @@ const FileBrowser = ({
         || !sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
       notification.error(
         kind === 'directory' ? '添加文件夹失败' : '添加文件失败',
-        error.message || error.toString() || '未知错误'
+        normalizeError(error),
+        { delivery: 'in-app', details: getErrorDetails(error) }
       )
     } finally {
       if (sessionId === uploadSessionRef.current) setUploadPicking(null)
@@ -669,7 +669,7 @@ const FileBrowser = ({
         submitting: uploadSubmittingRef.current
       })
       if (action === 'ignore') return
-      notification.error('添加拖拽内容失败', error.message || error.toString() || '无法读取拖拽路径')
+      notification.error('添加拖拽内容失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       uploadDropProcessingRef.current = false
       setUploadDropProcessing(false)
@@ -832,26 +832,43 @@ const FileBrowser = ({
       )
     })
 
+    let refreshStarted = false
     try {
       publishProgress(0)
       const result = await workflow.run(validItems, initialOutcomes)
+      if (!isCurrent()) return
+      refreshStarted = true
+      const refresh = await handleRefresh(uploadTarget)
       if (!isCurrent()) return
       const { succeeded, failed, skipped, notStarted, unknown, unlistedSkipped, directoryCount } = result
       const names = failed.map(outcome => outcome.item?.remotePath || outcome.job.fileName).join('、')
       const skippedCount = skipped.length + unlistedSkipped
       const summary = `已上传 ${ succeeded.length } 个文件${ directoryCount ? `、${ directoryCount } 个目录` : '' }${ skippedCount ? `，跳过 ${ skippedCount } 个` : '' }${ failed.length ? `，${ failed.length } 个失败` : '' }${ notStarted.length ? `，${ notStarted.length } 个未开始` : '' }${ unknown.length ? `，${ unknown.length } 个结果待核对` : '' }${ names ? `：${ names }` : '' }`
-      if (failed.length || unknown.length || notStarted.length || result.cancelled) notification.error(result.cancelled ? '上传已取消' : '上传未全部完成', summary)
-      else notification.success('上传完成', summary)
+      const options = { delivery: 'in-app', id: progressIds.taskId }
+      if (failed.length || unknown.length || notStarted.length || result.cancelled) {
+        const details = [ ...failed, ...unknown ].slice(0, 20).map(outcome => `${ outcome.item?.remotePath || outcome.job.fileName }：${ getErrorDetails(outcome.item?.error || outcome.error) || '结果待核对，请刷新确认' }`)
+        if (refresh?.status === 'failed') details.push(`目录刷新失败：${ getErrorDetails(refresh.error) }`)
+        notification.error(result.cancelled ? '上传已取消' : '上传未全部完成', summary, { ...options, details })
+      } else if (refresh?.status === 'failed') {
+        notification.warning('上传已完成，但目录刷新失败，请重新刷新查看', summary, {
+          ...options, duration: Infinity, details: getErrorDetails(refresh.error)
+        })
+      } else notification.success('上传完成', summary, options)
     } catch (error) {
-      if (isCurrent()) notification.error('上传文件失败', normalizeError(error))
+      if (isCurrent()) notification.error('上传文件失败', normalizeError(error), {
+        delivery: 'in-app', id: progressIds.taskId, details: getErrorDetails(error)
+      })
     } finally {
       PubSubBusinessKeyEnum.SEND_MASK({ ...progressIds, event: PROGRESS_EVENT_END })
       try {
-        if (isCurrent()) {
-          await handleRefresh(uploadTarget)
+        if (!refreshStarted && isCurrent()) {
+          const refresh = await handleRefresh(uploadTarget)
+          if (refresh?.status === 'failed' && isCurrent()) notification.warning('目录刷新失败，请重新刷新查看', '', {
+            delivery: 'in-app', details: getErrorDetails(refresh.error)
+          })
         }
       } catch (error) {
-        if (isCurrent()) notification.error('刷新目录失败', normalizeError(error))
+        if (isCurrent()) notification.error('刷新目录失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
       } finally {
         uploadSubmittingRef.current = false
         setUploadSubmitting(false)

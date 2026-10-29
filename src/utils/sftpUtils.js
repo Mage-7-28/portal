@@ -6,7 +6,7 @@
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow'
-import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, normalizeError } from './constants.js'
+import { CONNECTION_TIMEOUT_MS, SftpConnectionStatus, getErrorCode, getErrorDetails, normalizeError } from './constants.js'
 
 /**
  * @typedef {Object} SshConnectionConfig
@@ -154,6 +154,7 @@ const createTaskError = (payload, fallback) => {
   const message = payload.status === 'cancelled' ? '传输已取消' : details.message || payload.message || fallback
   const error = new Error(message)
   error.code = details.code || payload.code || (payload.status === 'cancelled' ? 'TransferCancelled' : '')
+  if (payload.result) error.result = payload.result
   if (details.scope || payload.scope) error.scope = details.scope || payload.scope
   return error
 }
@@ -204,10 +205,8 @@ class SftpManager {
     this.pendingDisconnects = new Map()
     // UI 层断线订阅者集合；每个订阅者由 subscribeConnectionLost 返回的函数移除。
     this.connectionLostListeners = new Set()
-    // 远程命令默认超时和历史重试参数，供连接流程兼容旧调用方。
+    // 连接测试的 TCP 与 SSH 握手默认超时。
     this.defaultTimeout = CONNECTION_TIMEOUT_MS
-    this.retryAttempts = 3
-    this.retryDelay = 1000
     // Rust `ssh-disconnected` 事件的唯一取消监听函数。
     this.connectionEventUnlisten = null
     // 目录统计使用独立 SSH 会话；限制并发数，兼顾扫描速度和远端会话压力。
@@ -329,7 +328,7 @@ class SftpManager {
     if (code) {
       return /^(ConnectionNotFound|ConnectionFailed|ConnectionLost|ConnectionClosed|Disconnected)$/i.test(code)
     }
-    return /^(?:连接不存在(?:或未连接)?|连接未建立|连接已断开|连接已关闭|SSH 连接已断开|broken pipe|connection (?:lost|reset|aborted|closed|not connected))$/i.test(normalizeError(details))
+    return /^(?:连接不存在(?:或未连接)?|连接未建立|连接已断开|连接已关闭|SSH 连接已断开|broken pipe|connection (?:lost|reset|aborted|closed|not connected))$/i.test(getErrorDetails(details))
   }
 
   /**
@@ -415,6 +414,7 @@ class SftpManager {
         success: false,
         requiresHostKeyConfirmation: false,
         error: normalizeError(error),
+        errorDetails: getErrorDetails(error),
         message: '连接测试失败'
       }
     }
@@ -600,102 +600,6 @@ class SftpManager {
         this.pendingDisconnects.delete(connectionId)
       }
     }
-  }
-
-  /**
-   * 上传单个本地文件，并通过回调报告传输进度。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {string} localPath - 本机源文件绝对路径。
-   * @param {string} remotePath - 远程目标文件路径。
-   * @param {TransferProgressCallback} [onProgress] - 接收传输进度事件的回调。
-   * @param {boolean} [overwrite=false] - 目标存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
-   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
-   * @returns {Promise<string>} Rust 端发出的成功完成消息。
-   * @throws {Error} 当连接无效、传输失败或被取消时抛出。
-   */
-  async uploadFile(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId, connection) {
-    return this.transfer('upload', connectionId, {
-      localPath,
-      remotePath,
-      onProgress,
-      overwrite,
-      onTransferId,
-      connection
-    })
-  }
-
-  /**
-   * 递归上传本地目录。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {string} localPath - 本机源目录绝对路径。
-   * @param {string} remotePath - 远程目标目录路径。
-   * @param {TransferProgressCallback} [onProgress] - 接收单文件和整体进度事件的回调。
-   * @param {boolean} [overwrite=false] - 目标目录或文件存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
-   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
-   * @returns {Promise<string>} Rust 端发出的成功完成消息。
-   * @throws {Error} 当连接无效、目录扫描失败、传输失败或被取消时抛出。
-   */
-  async uploadDirectory(connectionId, localPath, remotePath, onProgress, overwrite = false, onTransferId, connection) {
-    return this.transfer('upload-directory', connectionId, {
-      localPath,
-      remotePath,
-      onProgress,
-      overwrite,
-      onTransferId,
-      connection
-    })
-  }
-
-  /**
-   * 下载单个远程文件到本地路径。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {string} remotePath - 远程源文件路径。
-   * @param {string} localPath - 本机目标文件绝对路径。
-   * @param {TransferProgressCallback} [onProgress] - 接收传输进度事件的回调。
-   * @param {boolean} [overwrite=false] - 本机目标已存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
-   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
-   * @returns {Promise<string>} Rust 端发出的成功完成消息。
-   * @throws {Error} 当连接无效、传输失败或被取消时抛出。
-   */
-  async downloadFile(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId, connection) {
-    return this.transfer('download', connectionId, {
-      remotePath,
-      localPath,
-      onProgress,
-      overwrite,
-      onTransferId,
-      connection
-    })
-  }
-
-  /**
-   * 递归下载远程目录。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {string} remotePath - 远程源目录路径。
-   * @param {string} localPath - 本机目标目录绝对路径。
-   * @param {TransferProgressCallback} [onProgress] - 接收单文件和整体进度事件的回调。
-   * @param {boolean} [overwrite=false] - 本机目录或文件存在时是否允许覆盖。
-   * @param {(transferId: string) => void} [onTransferId] - 分配传输 ID 后接收该标识的回调，可在启动期间请求取消。
-   * @param {ConnectionSnapshot} [connection] - 批量操作捕获的原始会话。
-   * @returns {Promise<string>} Rust 端发出的成功完成消息。
-   * @throws {Error} 当连接无效、目录扫描失败、传输失败或被取消时抛出。
-   */
-  async downloadDirectory(connectionId, remotePath, localPath, onProgress, overwrite = false, onTransferId, connection) {
-    return this.transfer('download-directory', connectionId, {
-      remotePath,
-      localPath,
-      onProgress,
-      overwrite,
-      onTransferId,
-      connection
-    })
   }
 
   /**
@@ -964,7 +868,7 @@ class SftpManager {
 
       const result = await completion
       if (result.error) throw result.error
-      return task.batch ? result.result : result.message
+      return task.batch || options.returnResult ? result.result : result.message
     } finally {
       this.removeActiveTransfer(task)
       // 解绑失败或 IPC 挂起不能吞掉已确认的传输结果，所有清理 Promise 都显式接住异常。
@@ -972,28 +876,6 @@ class SftpManager {
         if (unlisten) void Promise.resolve().then(unlisten).catch(() => undefined)
       }
     }
-  }
-
-  /**
-   * 监听传输事件并等待对应的上传或下载任务完成。
-   *
-   * @param {'upload'|'upload-directory'|'download'|'download-directory'} direction - 传输方向和项目类型。
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @param {{localPath: string, remotePath: string, onProgress?: TransferProgressCallback, overwrite?: boolean, onTransferId?: (transferId: string) => void, connection?: ConnectionSnapshot}} options - 传输路径、覆盖策略和捕获的会话。
-   * @returns {Promise<string>} 成功完成时的原生消息。
-   * @throws {Error} 当连接无效、启动失败或任务以失败、取消终态结束时抛出。
-   */
-  async transfer(direction, connectionId, options) {
-    const result = await this.transferBatch(connectionId, [{
-      localPath: options.localPath,
-      remotePath: options.remotePath,
-      isDirectory: direction.endsWith('-directory')
-    }], { ...options, direction: direction.startsWith('upload') ? 'upload' : 'download' })
-    if (result.failed || result.unknown || result.notStarted || result.status === 'cancelled') {
-      const item = result.items.find(item => item.error)
-      throw createTaskError({ ...result, error: item?.error }, '传输未全部完成')
-    }
-    return result.message
   }
 
   /** 一次登记整个批次，由原生有界工作池调度，避免前端逐文件 IPC 串行等待。 */
@@ -1005,7 +887,6 @@ class SftpManager {
       throw error
     }
     const info = connection.record
-    if (options.shouldStart && !options.shouldStart()) throw createTaskError({ status: 'cancelled' }, '传输已取消')
     if (options.shouldStart && !options.shouldStart()) throw createTaskError({ status: 'cancelled' }, '传输已取消')
     if (!this.isCurrentConnection(connectionId, connection)) {
       throw createTaskError({ code: 'ConnectionGenerationChanged', message: '连接已更改，未启动文件任务' }, '连接已更改')
@@ -1516,7 +1397,7 @@ class SftpManager {
    * @param {boolean} [isDirectory=false] - 调用方已知项目为目录时传入 true。
    * @param {TransferProgressCallback} [onProgress] - 接收递归删除进度事件的回调。
    * @param {ConnectionSnapshot} [connection] - 删除操作发起时捕获的会话。
-   * @returns {Promise<boolean>} 删除完成后返回 true。
+   * @returns {Promise<{operation: 'delete', outcome: 'deleted'|'alreadyAbsent', removedEntries: number, verifiedAbsent: true}>} 经原生端验证的删除结果。
    * @throws {Error} 当连接无效、删除失败或后端完成事件报告失败时抛出。
    */
   async deleteRemoteItem(connectionId, remotePath, isDirectory = false, onProgress, connection = this.captureConnection(connectionId)) {
@@ -1527,7 +1408,7 @@ class SftpManager {
     }
     const info = connection.record
     const operationId = randomId('delete')
-    await this.runTransferTask({
+    const result = await this.runTransferTask({
       connectionId,
       connection,
       transferId: operationId,
@@ -1535,12 +1416,20 @@ class SftpManager {
       args: { id: connectionId, remotePath, isDirectory, operationId },
       progressEvent: 'delete-progress',
       completeEvent: 'delete-complete',
+      returnResult: true,
       onProgress,
       failureMessage: '删除失败'
     })
+    if (result?.operation !== 'delete' || result.verifiedAbsent !== true
+      || ![ 'deleted', 'alreadyAbsent' ].includes(result.outcome)) {
+      const error = new Error('原生端未确认目标已不存在，请刷新核对删除结果')
+      error.code = 'TransferOutcomeUnknown'
+      error.result = result
+      throw error
+    }
     info.lastActivity = Date.now()
     if (this.isCurrentConnection(connectionId, connection)) this.invalidateDirectorySizeCache(connectionId)
-    return true
+    return result
   }
 
   /**
@@ -1572,33 +1461,6 @@ class SftpManager {
     const home = await this.invokeRemote(connectionId, 'get_sftp_user_home', { id: connectionId })
     info.lastActivity = Date.now()
     return home
-  }
-
-  /**
-   * 返回远程系统信息；当前协议层仅提供占位结果。
-   *
-   * @param {string} connectionId - 要校验的已连接 SSH 连接 ID。
-   * @returns {Promise<{os: string, version: string}>} 当前固定返回未知系统信息的 Promise。
-   * @throws {Error} 当连接未建立时抛出。
-   */
-  async getRemoteSystemInfo(connectionId) {
-    this.requireConnected(connectionId)
-    return { os: 'unknown', version: '' }
-  }
-
-  /**
-   * 将 Windows 远程主目录转换为可浏览的盘符列表。
-   *
-   * @param {string} connectionId - 已建立的 SSH 连接 ID。
-   * @returns {Promise<string[]>} Windows 主目录返回对应盘符根路径，其他系统返回空数组。
-   * @throws {Error} 当连接无效或主目录查询失败时抛出。
-   */
-  async getRemoteDrives(connectionId) {
-    const info = this.requireConnected(connectionId)
-    const home = await this.invokeRemote(connectionId, 'get_sftp_user_home', { id: connectionId })
-    info.lastActivity = Date.now()
-    const match = /^([A-Za-z]):(?:[/\\]|$)/.exec(home || '')
-    return match ? [`${ match[1] }:/`] : []
   }
 
   /**
@@ -1645,68 +1507,6 @@ class SftpManager {
       )
       throw error
     }
-  }
-
-  /**
-   * 在应用退出或页面重置时关闭所有连接。
-   *
-   * 单条连接关闭失败不会阻断其余连接的清理。
-   *
-   * @returns {Promise<void>} 全部本地连接状态清理完成后的 Promise。
-   */
-  async closeAllConnections() {
-    await Promise.all(Array.from(this.connections.keys()).map(connectionId => this.disconnect(connectionId).catch(() => undefined)))
-    this.connections.clear()
-  }
-
-  /**
-   * 将连接状态表转换为普通对象，便于调试或兼容旧调用方。
-   *
-   * @returns {Record<string, ConnectionInfo>} 以连接 ID 为键的当前内存状态快照。
-   */
-  getConnections() {
-    return Object.fromEntries(this.connections)
-  }
-
-  /**
-   * 根据配置复用已有 ID，否则生成新的连接 ID。
-   *
-   * @param {SshConnectionConfig} config - 待保存或新建的连接配置。
-   * @returns {string} 配置已有 ID 或新生成的连接 ID。
-   */
-  generateConnectionId(config) {
-    return config.id || randomId('connection')
-  }
-
-  /**
-   * 使用统一错误格式化函数转换 IPC 或网络错误。
-   *
-   * @param {unknown} error - 待展示的原始错误值。
-   * @returns {string} 用户可读的错误文本。
-   */
-  parseError(error) {
-    return normalizeError(error)
-  }
-
-  /**
-   * 按有限次数重试建立连接，最后一次错误会原样抛出。
-   *
-   * @param {string} connectionId - 要重试的连接 ID。
-   * @param {number} [attempts=this.retryAttempts] - 总尝试次数，至少会执行一次。
-   * @returns {Promise<ConnectResult>} 连接成功或待确认主机指纹时的结果。
-   * @throws {Error} 当全部尝试失败或连接配置不存在时抛出最后一个错误。
-   */
-  async connectWithRetry(connectionId, attempts = this.retryAttempts) {
-    let lastError
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      try {
-        return await this.connect(connectionId)
-      } catch (error) {
-        lastError = error
-        if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, this.retryDelay))
-      }
-    }
-    throw lastError || new Error('连接失败')
   }
 
   /**

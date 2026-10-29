@@ -35,18 +35,14 @@
         position: fixed;
         inset: 0;
         z-index: 9999;
-        display: grid;
-        place-items: center;
+        display: flex;
         box-sizing: border-box;
         min-height: 100dvh;
         padding: 24px;
-        overflow: hidden;
+        overflow: auto;
         background:
-          radial-gradient(ellipse at 50% 42%, rgba(103, 199, 209, 0.07), transparent 55%),
-          linear-gradient(rgba(166, 173, 183, 0.018) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(166, 173, 183, 0.018) 1px, transparent 1px),
-          #1e1f22;
-        background-size: auto, 40px 40px, 40px 40px, auto;
+          radial-gradient(ellipse at 50% 35%, rgba(105, 178, 190, .09), transparent 45%),
+          linear-gradient(160deg, #202427, #191c1f 72%);
         opacity: 1;
         transition: opacity 180ms ease-out;
       }
@@ -58,159 +54,192 @@
 
       .loading-panel {
         position: relative;
-        display: grid;
-        grid-template-columns: 48px minmax(0, 1fr);
-        width: min(352px, 100%);
+        display: flex;
+        width: min(440px, 100%);
+        min-width: 0;
+        flex-direction: column;
+        align-items: center;
         box-sizing: border-box;
-        column-gap: 12px;
-        padding: 16px;
-        border: 1px solid #5b5e66;
-        border-top-color: rgba(103, 199, 209, 0.55);
-        border-radius: 8px;
-        background: linear-gradient(135deg, rgba(103, 199, 209, 0.04), transparent), #242529;
-        box-shadow:
-          inset 0 1px 0 rgba(255, 255, 255, 0.03),
-          0 14px 34px rgba(0, 0, 0, 0.36);
+        margin: auto;
+        padding: 24px 30px 32px;
+        border: 1px solid rgba(170, 197, 200, .14);
+        border-radius: 12px;
+        background: linear-gradient(150deg, rgba(55, 66, 69, .62), rgba(30, 34, 37, .96) 48%);
+        box-shadow: 0 24px 70px rgba(0, 0, 0, .27), inset 0 1px rgba(255, 255, 255, .035);
+        text-align: center;
+      }
+
+      .loading-brand {
+        display: flex;
+        width: 100%;
+        align-items: center;
+        gap: 8px;
+        color: #c6d4d5;
+        font: 600 10px/1 ui-sans-serif, system-ui, sans-serif;
+        letter-spacing: .16em;
         text-align: left;
       }
 
-      .loading-logo-shell {
+      .loading-brand img { display: block; object-fit: contain; }
+      .loading-brand-caption { margin-left: auto; color: #89999b; font-size: 11px; font-weight: 400; letter-spacing: .04em; }
+
+      .loading-scene {
         position: relative;
         display: grid;
-        width: 48px;
-        height: 48px;
+        width: min(240px, 100%);
+        height: 190px;
         place-items: center;
-        border: 1px solid rgba(103, 199, 209, 0.22);
-        border-radius: 12px;
-        background: #1e1f22;
+        margin: 8px 0 2px;
+        animation: portal-loading-enter 240ms ease-out both;
       }
 
-      .loading-logo-shell::after {
+      .loading-halo {
         position: absolute;
-        inset: -6px;
-        border: 1px solid transparent;
-        border-top-color: #67c7d1;
-        border-bottom-color: #eb9070;
-        border-radius: 50%;
-        content: '';
-        animation: portal-loading-spin 4.8s linear infinite;
+        inset: 0;
+        background: radial-gradient(ellipse at 50% 51%, rgba(111, 206, 217, .18), rgba(93, 158, 168, .045) 42%, transparent 70%);
+        animation: portal-loading-breathe 4s ease-in-out infinite;
       }
 
-      .loading-logo {
-        display: block;
-        width: 38px;
-        height: 38px;
-        object-fit: contain;
+      .loading-ground {
+        position: absolute;
+        bottom: 16px;
+        width: 190px;
+        height: 24px;
+        background: radial-gradient(ellipse, rgba(104, 194, 204, .16), transparent 70%);
       }
 
-      .loading-copy {
-        display: flex;
-        min-width: 0;
-        flex-direction: column;
-        justify-content: center;
+      .loading-gateway {
+        position: relative;
+        width: 106px;
+        height: 146px;
+        perspective: 480px;
+        filter: drop-shadow(0 12px 20px rgba(0, 0, 0, .3));
       }
 
-      .loading-title {
-        margin: 0;
-        color: #e6e8eb;
-        font-size: 16px;
-        font-weight: 650;
-        line-height: 1.2;
+      .loading-gateway::before,
+      .loading-gateway::after { position: absolute; content: ''; }
+      .loading-gateway::before {
+        top: 2px;
+        bottom: 2px;
+        left: -8px;
+        width: 8px;
+        transform: skewY(-25deg);
+        transform-origin: right center;
+        background: linear-gradient(90deg, #26383b, #506d70);
+      }
+      .loading-gateway::after {
+        top: -5px;
+        right: 0;
+        left: -8px;
+        height: 5px;
+        transform: skewX(-55deg);
+        transform-origin: right bottom;
+        background: linear-gradient(90deg, #3e5558, #6c9092);
       }
 
-      .loading-status {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        margin: 6px 0 0;
-        color: #a9adb6;
-        font-size: 12px;
-        line-height: 1.3;
+      .loading-opening {
+        position: absolute;
+        inset: 2px;
+        background: linear-gradient(150deg, #719ca0, #334c50 46%, #1f3439);
+        box-shadow: 0 0 24px rgba(113, 207, 216, .14);
       }
 
-      .loading-spinner {
-        width: 10px;
-        height: 10px;
-        box-sizing: border-box;
-        border: 2px solid rgba(235, 144, 112, 0.24);
-        border-top-color: #eb9070;
-        border-radius: 50%;
-        animation: portal-loading-spin 760ms linear infinite;
+      .loading-door-leaf {
+        position: absolute;
+        top: 2px;
+        bottom: 2px;
+        width: calc(50% - 2px);
+        backface-visibility: hidden;
+        background: linear-gradient(150deg, #354347, #252f32 58%, #20282b);
+        transition: transform 180ms ease-out;
       }
 
-      .loading-progress {
-        grid-column: 1 / -1;
-        height: 3px;
-        margin-top: 14px;
-        overflow: hidden;
-        border-radius: 999px;
-        background: #3a3c42;
-      }
+      .loading-door-leaf.is-left { left: 2px; transform-origin: left center; border-right: 1px solid rgba(142, 218, 222, .36); }
+      .loading-door-leaf.is-right { right: 2px; transform-origin: right center; border-left: 1px solid rgba(10, 21, 24, .6); background: linear-gradient(210deg, #405155, #263235 60%, #20292b); }
+      .loading-frame { position: absolute; z-index: 1; background: linear-gradient(90deg, #506a6c, #8eb8ba 48%, #385256); }
+      .loading-frame.is-left,
+      .loading-frame.is-right { top: 0; bottom: 0; width: 3px; }
+      .loading-frame.is-left { left: 0; animation: portal-loading-frame-left 240ms ease-out both; }
+      .loading-frame.is-right { right: 0; animation: portal-loading-frame-right 240ms ease-out both; }
+      .loading-frame.is-top { top: 0; right: 0; left: 0; height: 3px; animation: portal-loading-frame-top 240ms ease-out both; }
+      .loading-threshold { position: absolute; right: -10px; bottom: -2px; left: -10px; height: 2px; background: linear-gradient(90deg, transparent, rgba(162, 223, 226, .7), transparent); }
+      #loading.is-leaving .loading-door-leaf.is-left { transform: rotateY(-72deg); }
+      #loading.is-leaving .loading-door-leaf.is-right { transform: rotateY(72deg); }
 
-      .loading-progress-bar {
-        width: 38%;
-        height: 100%;
-        border-radius: inherit;
-        background: linear-gradient(90deg, #eb9070, #67c7d1);
-        animation: portal-loading-progress 1.45s ease-in-out infinite;
-      }
+      .loading-title { margin: 0 0 8px; color: #e5ecec; font-size: 20px; font-weight: 600; line-height: 1.4; }
+      .loading-status { margin: 0; color: #a9b4b5; font-size: 12px; line-height: 1.7; }
 
-      @keyframes portal-loading-spin {
-        to {
-          transform: rotate(360deg);
-        }
-      }
+      @keyframes portal-loading-enter { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+      @keyframes portal-loading-frame-left { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+      @keyframes portal-loading-frame-right { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+      @keyframes portal-loading-frame-top { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+      @keyframes portal-loading-breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
 
-      @keyframes portal-loading-progress {
-        0% {
-          transform: translateX(-120%);
-        }
-
-        100% {
-          transform: translateX(290%);
-        }
-      }
+      #loading.is-paused *,
+      #loading.is-paused *::before,
+      #loading.is-paused *::after { animation-play-state: paused !important; }
+      #loading.is-paused,
+      #loading.is-paused .loading-door-leaf { transition: none; }
 
       @media (prefers-reduced-motion: reduce) {
-        #loading {
-          transition: none;
-        }
-
-        .loading-spinner,
-        .loading-progress-bar,
-        .loading-logo-shell::after {
-          animation: none;
-        }
+        #loading,
+        .loading-door-leaf { transition: none; }
+        .loading-scene,
+        .loading-halo,
+        .loading-scene .loading-frame { animation: none; }
       }
 
-      @media (max-width: 380px) {
-        #loading {
-          padding: 16px;
-        }
-
-        .loading-panel {
-          padding: 14px;
-        }
+      @media (max-width: 420px), (max-height: 580px) {
+        #loading { padding: 16px; }
+        .loading-panel { padding: 18px 20px 24px; }
+        .loading-scene { height: 165px; margin: 2px 0; }
+        .loading-gateway { width: 90px; height: 124px; }
+        .loading-ground { bottom: 12px; }
       }
     </style>
   </head>
 
   <body>
     <div id="root"></div>
-    <div id="loading" role="status" aria-live="polite" aria-label="正在启动 Portal">
+    <div id="loading" role="status" aria-live="polite" aria-atomic="true">
       <div class="loading-panel">
-        <div class="loading-logo-shell">
-          <img class="loading-logo" src="/portal-logo.svg" width="38" height="38" alt="" />
+        <div class="loading-brand" aria-hidden="true">
+          <img src="/portal-logo.svg" width="24" height="24" alt="" />
+          <span>PORTAL</span>
+          <span class="loading-brand-caption">本地应用</span>
         </div>
-        <div class="loading-copy">
-          <h1 class="loading-title">Portal</h1>
-          <p class="loading-status"><span class="loading-spinner" aria-hidden="true"></span>正在启动</p>
+        <div class="loading-scene" aria-hidden="true">
+          <span class="loading-halo"></span>
+          <span class="loading-ground"></span>
+          <div class="loading-gateway">
+            <span class="loading-opening"></span>
+            <span class="loading-door-leaf is-left"></span>
+            <span class="loading-door-leaf is-right"></span>
+            <span class="loading-frame is-left"></span>
+            <span class="loading-frame is-right"></span>
+            <span class="loading-frame is-top"></span>
+            <span class="loading-threshold"></span>
+          </div>
         </div>
-        <div class="loading-progress" aria-hidden="true">
-          <div class="loading-progress-bar"></div>
-        </div>
+        <h1 class="loading-title">正在启动 Portal</h1>
+        <p class="loading-status">正在准备应用界面</p>
       </div>
     </div>
+    <script>
+      // 在主模块加载前暂停后台窗口动效；首屏移除后释放监听器。
+      (() => {
+        const loading = document.getElementById('loading')
+        const syncVisibility = () => loading.classList.toggle('is-paused', document.hidden)
+        const observer = new MutationObserver(() => {
+          if (loading.isConnected) return
+          document.removeEventListener('visibilitychange', syncVisibility)
+          observer.disconnect()
+        })
+        document.addEventListener('visibilitychange', syncVisibility)
+        observer.observe(document.body, { childList: true })
+        syncVisibility()
+      })()
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>

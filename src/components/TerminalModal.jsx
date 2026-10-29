@@ -3,13 +3,14 @@
  * xterm 只处理显示和输入，PTY 生命周期由 Tauri 命令与 Channel 完成闭环。
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Input, Modal, Spin } from 'antd'
+import { Button, Input, Spin } from 'antd'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Terminal } from '@xterm/xterm'
 import { Channel, invoke } from '@tauri-apps/api/core'
 import AppIcon from './AppIcon'
-import { getErrorCode, normalizeError, StoreKeys } from '../utils/constants.js'
+import { getErrorCode, getErrorDetails, normalizeError, StoreKeys } from '../utils/constants.js'
+import { notification } from '../utils/notificationUtils.js'
 import { store, useStoreValue } from '../utils/storeUtils.js'
 import { normalizeTerminalFontSize } from '../utils/workspacePreferences.js'
 import { createInputQueue, createOutputReceiver, createResizeQueue, normalizeTerminalDimensions } from '../utils/terminalTransport.js'
@@ -62,6 +63,8 @@ const DEFAULT_TERMINAL_FONT_SIZE = 13
 const MIN_TERMINAL_FONT_SIZE = 10
 const MAX_TERMINAL_FONT_SIZE = 22
 const SEARCH_HIGHLIGHT_LIMIT = 1000
+// 与 @xterm/addon-fit 0.11.0 的默认滚动条宽度一致。
+const XTERM_6_SCROLLBAR_WIDTH = 14
 // 原生输出背压上限为 256 KiB，最后一个数据包最多再携带 32 KiB。
 const STARTUP_OUTPUT_MAX_BYTES = (256 + 32) * 1024
 // 空数据包也可能占用接收器条目；额外允许错误和退出包。
@@ -107,7 +110,43 @@ const isTerminalSearchShortcut = event => {
 }
 
 /**
- * 终端视图只负责 xterm 与后端 PTY 的生命周期，外层可以是模态框或独立窗口。
+ * 使用渲染器的设备像素单元计算完整网格，避免 CSS 画布舍入造成重复 fit 来回缩放。
+ *
+ * @param {Terminal} terminal - 当前终端实例。
+ * @param {FitAddon} fitAddon - 已加载的尺寸插件。
+ * @returns {{cols: number, rows: number}|undefined} 可容纳的列数和行数。
+ */
+const proposeStableTerminalDimensions = (terminal, fitAddon) => {
+  const proposed = fitAddon.proposeDimensions()
+  if (!proposed || !Number.isFinite(proposed.cols) || !Number.isFinite(proposed.rows)) return undefined
+
+  // xterm 6.0.0 没有公开字符单元尺寸；此适配依赖其 DOM 渲染器的内部结构，升级时须复核。
+  const cell = terminal._core?._renderService?.dimensions?.device?.cell
+  const dpr = window.devicePixelRatio
+  const element = terminal.element
+  if (!element?.parentElement || !Number.isFinite(dpr) || dpr <= 0
+    || !Number.isFinite(cell?.width) || cell.width <= 0
+    || !Number.isFinite(cell?.height) || cell.height <= 0) return proposed
+
+  const parentStyle = window.getComputedStyle(element.parentElement)
+  const terminalStyle = window.getComputedStyle(element)
+  const padding = side => Number.parseFloat(terminalStyle.getPropertyValue(`padding-${ side }`)) || 0
+  const scrollbar = terminal.options.scrollback === 0 ? 0 : (terminal.options.overviewRuler?.width || XTERM_6_SCROLLBAR_WIDTH)
+  const width = Number.parseFloat(parentStyle.getPropertyValue('width')) - padding('left') - padding('right') - scrollbar
+  const height = Number.parseFloat(parentStyle.getPropertyValue('height')) - padding('top') - padding('bottom')
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return proposed
+
+  const cellsThatFit = (available, deviceCell, minimum) => {
+    // DOM 渲染器先将整块画布取整，再均分到各行列；按相同规则避免边界溢出。
+    let count = Math.max(minimum, Math.floor((Math.floor(available) + 0.5) * dpr / deviceCell))
+    if (count > minimum && Math.round(deviceCell * count / dpr) > available) count -= 1
+    return count
+  }
+  return { cols: cellsThatFit(width, cell.width, 2), rows: cellsThatFit(height, cell.height, 1) }
+}
+
+/**
+ * 终端视图只负责 xterm 与后端 PTY 的生命周期，外层可以是工作区或独立窗口。
  * 通过直接调用 Tauri 命令，独立 WebView 不需要复制主窗口的连接缓存。
  *
  * @param {Object} props - 终端视图属性。
@@ -119,7 +158,7 @@ const isTerminalSearchShortcut = event => {
  * @param {(state: {status: string, message: string}) => void} [props.onStatusChange] - 将终端状态同步给外层面板。
  * @param {() => void|Promise<void>} [props.onRequestClose] - 请求外层宿主关闭终端的回调。
  * @param {(closeHandler: () => Promise<unknown>) => void} [props.onCloseReady] - 接收可幂等释放后端 PTY 的回调。
- * @param {(controls: {openSearch: () => void, adjustFontSize: (delta: number) => void, resetFontSize: () => void}|null) => void} [props.onControlsReady] - 注册不暴露终端实例的工具操作。
+ * @param {(controls: {openSearch: () => void, adjustFontSize: (delta: number) => void, resetFontSize: () => void, requestFit: () => void}|null) => void} [props.onControlsReady] - 注册不暴露终端实例的工具操作。
  * @param {number} [props.focusRequest=0] - 变化时将键盘焦点交给已运行终端。
  * @returns {JSX.Element} 包含连接状态和 xterm 容器，并可按宿主配置显示底部关闭区域的终端视图。
  */
@@ -167,6 +206,12 @@ export const TerminalView = ({
   searchOpenRef.current = searchOpen
   searchTermRef.current = searchTerm
 
+  useEffect(() => () => {
+    // 已卸载的视图不能由在途偏好写入的完成回调再次更新。
+    fontWriteRevisionRef.current += 1
+    pendingFontWriteRef.current = false
+  }, [])
+
   // 其他窗口修改全局偏好时同步当前实例，不重建终端或 PTY。
   useEffect(() => {
     if (pendingFontWriteRef.current) return
@@ -209,7 +254,8 @@ export const TerminalView = ({
     searchInputRef.current?.focus()
   }, [])
 
-  const controls = useMemo(() => ({ openSearch, adjustFontSize, resetFontSize }), [ openSearch, adjustFontSize, resetFontSize ])
+  const requestFit = useCallback(() => fitTerminalRef.current(), [])
+  const controls = useMemo(() => ({ openSearch, adjustFontSize, resetFontSize, requestFit }), [ openSearch, adjustFontSize, resetFontSize, requestFit ])
 
   // 自动聚焦只在窗口和终端都可交互、且用户没有聚焦其他控件时发生。
   const focusTerminalIfAvailable = useCallback(() => {
@@ -254,6 +300,15 @@ export const TerminalView = ({
     backendReadyRef.current = false
     setStatus('connecting')
     setStatusMessage('正在建立终端连接...')
+
+    const reportTerminalError = (label, error, kind) => {
+      void notification.error(label, normalizeError(error), {
+        delivery: 'in-app',
+        duration: Infinity,
+        details: getErrorDetails(error),
+        id: `${ generation }-${ kind }`
+      })
+    }
 
     const motionPreference = window.matchMedia?.('(prefers-reduced-motion: reduce)')
     const terminal = new Terminal({
@@ -376,6 +431,8 @@ export const TerminalView = ({
     }
     closeTerminalRef.current = closeBackend
 
+    let fontMetricsDirty = false
+    let initialResizePending = false
     /**
      * 根据容器尺寸调整 xterm 行列数，容器尚未布局完成时跳过本次测量。
      *
@@ -387,7 +444,17 @@ export const TerminalView = ({
       // 窗口初始布局完成前容器可能为 0 尺寸，此时跳过测量，交给 ResizeObserver 重试。
       if (!container || container.clientWidth <= 0 || container.clientHeight <= 0) return
       try {
-        fitAddon.fit()
+        if (fontMetricsDirty) {
+          fontMetricsDirty = false
+          // xterm 缓存字符尺寸；字体加载后通过公开的字体选项重新测量，不改变实际字体栈。
+          const fontFamily = terminal.options.fontFamily
+          terminal.options.fontFamily = `${ fontFamily } `
+          terminal.options.fontFamily = fontFamily
+        }
+        const dimensions = proposeStableTerminalDimensions(terminal, fitAddon)
+        if (dimensions && (terminal.cols !== dimensions.cols || terminal.rows !== dimensions.rows)) {
+          terminal.resize(dimensions.cols, dimensions.rows)
+        }
       } catch {
         return
       }
@@ -403,7 +470,18 @@ export const TerminalView = ({
       fitFrame = window.requestAnimationFrame(() => {
         fitFrame = 0
         fitTerminal()
+        if (initialResizePending) {
+          initialResizePending = false
+          if (!disposed && !closeRequested && !endReceived && backendReadyRef.current) {
+            resizeQueue.request(terminal.cols, terminal.rows)
+          }
+        }
       })
+    }
+    const scheduleFontFit = () => {
+      if (disposed) return
+      fontMetricsDirty = true
+      scheduleFit()
     }
     fitTerminalRef.current = scheduleFit
     const ResizeObserverConstructor = typeof window !== 'undefined' ? window.ResizeObserver : undefined
@@ -411,6 +489,36 @@ export const TerminalView = ({
       ? new ResizeObserverConstructor(scheduleFit)
       : null
     resizeObserver?.observe(containerRef.current)
+
+    const fontSet = document.fonts
+    fontSet?.ready?.then(scheduleFontFit, () => undefined)
+    fontSet?.addEventListener?.('loadingdone', scheduleFontFit)
+
+    // 分辨率媒体查询在 DPR 变化后必须重新订阅；xterm 自身会同步刷新字符尺寸。
+    let resolutionQuery
+    const removeResolutionListener = () => {
+      if (resolutionQuery?.removeEventListener) resolutionQuery.removeEventListener('change', handleResolutionChange)
+      else resolutionQuery?.removeListener?.(handleResolutionChange)
+    }
+    const watchResolution = () => {
+      removeResolutionListener()
+      if (disposed || !window.matchMedia) return
+      resolutionQuery = window.matchMedia(`(resolution: ${ window.devicePixelRatio }dppx)`)
+      if (resolutionQuery.addEventListener) resolutionQuery.addEventListener('change', handleResolutionChange)
+      else resolutionQuery.addListener?.(handleResolutionChange)
+    }
+    const handleResolutionChange = () => {
+      watchResolution()
+      scheduleFit()
+    }
+    watchResolution()
+    const handleVisibilityChange = () => {
+      if (!document.hidden) scheduleFit()
+    }
+    window.addEventListener('resize', scheduleFit)
+    window.addEventListener('focus', scheduleFit)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    terminalContainer.addEventListener('focusin', scheduleFit)
 
     const failTransport = (label, error, allowAfterEnd = false) => {
       if (disposed || closeRequested || (endReceived && !allowAfterEnd) || transportErrorShown) return
@@ -421,6 +529,7 @@ export const TerminalView = ({
       resizeQueue?.dispose()
       terminal.options.disableStdin = true
       terminal.writeln(`\r\n\x1b[31m[${ label }] ${ normalizeError(error) }\x1b[0m`)
+      reportTerminalError(label, error, 'transport')
       setStatus('error')
       setStatusMessage(label)
     }
@@ -456,7 +565,28 @@ export const TerminalView = ({
         terminal.resize(effective.columns, effective.rows)
       }
     }
-    resizeQueue = createResizeQueue({ terminalId, generation, invoke, onResize: applyEffectiveDimensions })
+    let lastResizeFailure = ''
+    const invokeResize = async (command, args) => {
+      try {
+        const result = await invoke(command, args)
+        lastResizeFailure = ''
+        return result
+      } catch (error) {
+        const code = getErrorCode(error)
+        // 重试状态不是失败；结束包可能晚于会话移除到达，也不能将其误报为调整失败。
+        if (!disposed && !closeRequested && !endReceived && !sessionErrored
+          && code !== 'BackgroundBusy' && code !== 'TerminalResizePending' && code !== 'TerminalNotFound') {
+          const failure = `${ code }\0${ getErrorDetails(error) }`
+          if (failure !== lastResizeFailure) {
+            lastResizeFailure = failure
+            reportTerminalError('调整终端大小失败', error, 'resize')
+          }
+        }
+        // 保留原始错误，交由单飞队列处理其重试与取消规则。
+        throw error
+      }
+    }
+    resizeQueue = createResizeQueue({ terminalId, generation, invoke: invokeResize, onResize: applyEffectiveDimensions })
 
     const decorateTerminalOutput = createTerminalOutputDecorator()
     const startupOutputEncoder = new globalThis.TextEncoder()
@@ -507,6 +637,7 @@ export const TerminalView = ({
         resizeQueue.dispose()
         terminal.options.disableStdin = true
         terminal.writeln(`\r\n\x1b[31m[终端错误] ${ String(packet.message || '终端连接发生错误') }\x1b[0m`)
+        reportTerminalError('终端读取失败', packet.message || '终端连接发生错误', 'read')
         setStatus('error')
         setStatusMessage('终端连接发生错误')
       },
@@ -537,7 +668,7 @@ export const TerminalView = ({
       inputQueue.enqueue(data)
     })
     const resizeDisposable = terminal.onResize(({ cols, rows }) => {
-      if (disposed || closeRequested || endReceived || !backendReadyRef.current) return
+      if (disposed || closeRequested || endReceived || !backendReadyRef.current || initialResizePending) return
       resizeQueue.request(cols, rows)
     })
 
@@ -582,9 +713,9 @@ export const TerminalView = ({
         if (disposed || closeRequested || endReceived || sessionErrored) return
         setStatus('connected')
         setStatusMessage('已连接')
-        fitTerminal()
-        // 初始化在途时字号或窗口可能变化，fit 未改变本地尺寸也必须同步一次远端 PTY。
-        resizeQueue.request(terminal.cols, terminal.rows)
+        // 初始化在途时字号或窗口可能变化；等待 fit 后同步，即使本地尺寸未改变也发送一次。
+        initialResizePending = true
+        scheduleFit()
         focusTerminalIfAvailable()
       } catch (error) {
         if (disposed || closeRequested) return
@@ -594,6 +725,7 @@ export const TerminalView = ({
         }
         terminal.options.disableStdin = true
         terminal.writeln(`\r\n\x1b[31m[终端启动失败] ${ normalizeError(error) }\x1b[0m`)
+        reportTerminalError('终端启动失败', error, 'open')
         setStatus('error')
         setStatusMessage('终端启动失败')
         closeBackend()
@@ -601,16 +733,17 @@ export const TerminalView = ({
     }
 
     void setupTerminal()
-    window.addEventListener('resize', fitTerminal)
-    const firstFrame = window.requestAnimationFrame(fitTerminal)
-    const secondFrame = window.requestAnimationFrame(() => window.requestAnimationFrame(fitTerminal))
+    scheduleFit()
 
     return () => {
       disposed = true
       if (fitFrame) window.cancelAnimationFrame(fitFrame)
-      window.cancelAnimationFrame(firstFrame)
-      window.cancelAnimationFrame(secondFrame)
-      window.removeEventListener('resize', fitTerminal)
+      window.removeEventListener('resize', scheduleFit)
+      window.removeEventListener('focus', scheduleFit)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      terminalContainer.removeEventListener('focusin', scheduleFit)
+      fontSet?.removeEventListener?.('loadingdone', scheduleFontFit)
+      removeResolutionListener()
       resizeObserver?.disconnect()
       backendReadyRef.current = false
       dataDisposable.dispose()
@@ -659,8 +792,8 @@ export const TerminalView = ({
     const explicitlyRequested = focusRequest !== previousFocusRequestRef.current
     previousFocusRequestRef.current = focusRequest
     if (!active) return undefined
+    fitTerminalRef.current()
     const frame = window.requestAnimationFrame(() => {
-      fitTerminalRef.current()
       if (explicitlyRequested && activeRef.current && !searchOpenRef.current && (!document.hasFocus || document.hasFocus())) {
         terminalRef.current?.focus()
       } else {
@@ -668,7 +801,7 @@ export const TerminalView = ({
       }
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [ active, focusRequest, focusTerminalIfAvailable ])
+  }, [ active, connectionId, focusRequest, focusTerminalIfAvailable ])
 
   // 搜索只读取当前 xterm 缓冲区，结果装饰启用后插件才会报告匹配数量。
   useEffect(() => {
@@ -863,39 +996,3 @@ export const TerminalView = ({
     </div>
   )
 }
-
-/**
- * 模态框宿主，复用 TerminalView 以保持主窗口与独立窗口行为一致。
- *
- * @param {Object} props - 模态框属性。
- * @param {boolean} props.open - 是否显示终端模态框。
- * @param {() => void} props.onClose - 请求关闭模态框的回调。
- * @param {string|null} props.connectionId - 当前 SSH 连接 ID。
- * @param {{username?: string, host?: string, port?: number}|null} props.connection - 用于展示终端标题的连接信息。
- * @returns {JSX.Element|null} 打开时返回终端模态框，否则返回 null。
- */
-const TerminalModal = ({ open, onClose, connectionId, connection }) => {
-  if (!open) return null
-  return (
-    <Modal
-      rootClassName="compact-modal terminal-modal"
-      title="远程终端"
-      open
-      centered
-      footer={null}
-      width="min(1120px, calc(100vw - 32px))"
-      onCancel={onClose}
-      mask={{ closable: true }}
-      keyboard
-      destroyOnHidden
-    >
-      <TerminalView
-        connectionId={connectionId}
-        connection={connection}
-        onRequestClose={onClose}
-      />
-    </Modal>
-  )
-}
-
-export default TerminalModal

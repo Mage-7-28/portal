@@ -6,14 +6,6 @@ const host = process.env.TAURI_DEV_HOST
 // Vite 配置文档：https://vite.dev/config/
 export default defineConfig(({ mode }) => ({
   plugins: [react()],
-  test: {
-    include: [],
-    includeSource: ['src/**/*.{js,jsx}']
-  },
-  define: {
-    'import.meta.vitest': 'undefined'
-  },
-
   // Tauri 生产包通过内置资源协议加载文件，使用相对路径可兼容开发服务器和安装包。
   base: './',
 

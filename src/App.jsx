@@ -11,8 +11,7 @@ import { getCurrentWindow } from '@tauri-apps/api/window'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { Toaster } from 'react-hot-toast'
-import { normalizeError, StoreKeys } from './utils/common.js'
+import { getErrorDetails, normalizeError, StoreKeys } from './utils/constants.js'
 import { AntdThemeConfig } from './theme/antdTheme.js'
 import { store, useStoreValue } from './utils/storeUtils.js'
 import { notification } from './utils/notificationUtils.js'
@@ -20,6 +19,7 @@ import { checkLatestRelease, PROJECT_REPOSITORY_URL } from './utils/updateUtils.
 import TransferProgressProvider from './components/TransferProgressProvider.jsx'
 import UpdateAvailableModal from './components/UpdateAvailableModal.jsx'
 import AppIcon from './components/AppIcon'
+import NotificationHost from './components/NotificationHost.jsx'
 import {
   closeServerWorkspaceWindow,
   closeServerWorkspaceWindows,
@@ -126,7 +126,7 @@ function MainApp() {
       await invoke('exit_application')
     } catch (error) {
       exitRequestedRef.current = false
-      void notification.error('退出应用失败：' + normalizeError(error))
+      void notification.error('退出应用失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       exitConfirmingRef.current = false
     }
@@ -160,7 +160,7 @@ function MainApp() {
     } catch (error) {
       // 启动检查失败不应打断用户进入应用；手动检查则提供可见反馈。
       console.warn('检查应用更新失败:', error)
-      if (manual) void notification.error('检查更新失败：' + normalizeError(error))
+      if (manual) void notification.error('检查更新失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
       return false
     } finally {
       setCheckingUpdate(false)
@@ -201,7 +201,7 @@ function MainApp() {
     try {
       await openUrl(releaseUrl)
     } catch (error) {
-      void notification.error('打开更新页面失败：' + normalizeError(error))
+      void notification.error('打开更新页面失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
       return
     }
 
@@ -227,7 +227,7 @@ function MainApp() {
     try {
       await openUrl(PROJECT_REPOSITORY_URL)
     } catch (error) {
-      void notification.error('打开开源地址失败：' + normalizeError(error))
+      void notification.error('打开开源地址失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       setOpeningRepository(false)
     }
@@ -245,7 +245,7 @@ function MainApp() {
     try {
       await openServerWorkspaceWindow(connection)
     } catch (error) {
-      void notification.error('打开服务器工作窗口失败：' + normalizeError(error))
+      void notification.error('打开服务器工作窗口失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     }
   }, [])
 
@@ -258,7 +258,7 @@ function MainApp() {
   const closeConnectionWorkspace = useCallback(connectionId => {
     if (!connectionId) return
     void closeServerWorkspaceWindow(connectionId).catch(error => {
-      void notification.error('关闭服务器工作窗口失败：' + normalizeError(error))
+      void notification.error('关闭服务器工作窗口失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     })
   }, [])
 
@@ -298,7 +298,7 @@ function MainApp() {
             await store.set(StoreKeys.DOWNLOAD_PATH, result)
             void notification.success('下载路径已更新')
           } catch (error) {
-            void notification.error('设置下载路径失败：' + normalizeError(error))
+            void notification.error('设置下载路径失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
           }
         })
         if (active) {
@@ -341,7 +341,7 @@ function MainApp() {
         const dispose = await listen('menu-show-hidden-files', event => {
           if (typeof event.payload !== 'boolean') return
           void store.set(StoreKeys.SHOW_HIDDEN_FILES, event.payload).catch(error => {
-            void notification.error('保存显示隐藏文件设置失败：' + normalizeError(error))
+            void notification.error('保存显示隐藏文件设置失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
           })
         })
         if (active) {
@@ -522,7 +522,6 @@ function MainApp() {
           </Button>
         </section>
       </Modal>
-      <Toaster />
     </ConfigProvider>
   )
 }
@@ -534,22 +533,24 @@ function MainApp() {
  */
 function App() {
   const serverWorkspaceParams = getServerWorkspaceParams()
+  const terminalWindowParams = getTerminalWindowParams()
+  let content
   if (serverWorkspaceParams) {
-    return (
+    content = (
       <Suspense fallback={null}>
         <LazyServerWorkspaceWindow {...serverWorkspaceParams} />
       </Suspense>
     )
-  }
-  const terminalWindowParams = getTerminalWindowParams()
-  if (terminalWindowParams) {
-    return (
+  } else if (terminalWindowParams) {
+    content = (
       <Suspense fallback={<TerminalLoading standalone />}>
         <LazyTerminalWindow {...terminalWindowParams} />
       </Suspense>
     )
+  } else {
+    content = <TransferProgressProvider baseTitle="Portal"><MainApp /></TransferProgressProvider>
   }
-  return <TransferProgressProvider baseTitle="Portal"><MainApp /></TransferProgressProvider>
+  return <>{content}<NotificationHost /></>
 }
 
 export default App

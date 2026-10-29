@@ -1,4 +1,4 @@
-import { normalizeError } from './common.js'
+import { normalizeError } from './constants.js'
 import sftpManager from './sftpUtils.js'
 
 /**

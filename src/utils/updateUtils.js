@@ -120,21 +120,6 @@ const compareParsedVersions = (left, right) => {
 }
 
 /**
- * 比较两个 SemVer 版本。返回 null 表示任一版本格式不合法。
- * 支持 Tauri/Git 常见的 v2.1.0 与 2.1.0 写法，并正确处理预发布版本。
- *
- * @param {unknown} left - 左侧版本值。
- * @param {unknown} right - 右侧版本值。
- * @returns {-1|0|1|null} 比较结果；任一版本格式不合法时返回 null。
- */
-export const compareVersions = (left, right) => {
-  const leftVersion = parseVersion(left)
-  const rightVersion = parseVersion(right)
-  if (!leftVersion || !rightVersion) return null
-  return compareParsedVersions(leftVersion, rightVersion)
-}
-
-/**
  * 请求最新 Release。检查失败由调用方决定是否记录日志或提示用户；更新检查不应阻塞应用启动。
  *
  * @param {string} currentVersion - 当前已安装应用的版本号。
@@ -166,7 +151,7 @@ export const checkLatestRelease = async (currentVersion) => {
     const tagName = typeof release?.tag_name === 'string' ? release.tag_name.trim() : ''
     const latest = parseVersion(tagName)
     if (!latest) {
-      throw new Error('Release 的 tag_name 不是有效的 SemVer 版本')
+      throw new Error('更新发布的版本号格式无效，暂时无法检查更新')
     }
 
     if (compareParsedVersions(latest, current) <= 0) return null

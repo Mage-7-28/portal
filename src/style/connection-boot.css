@@ -1,207 +1,228 @@
-/* 连接阶段的强动效集中在独立遮罩，不覆盖实际终端或文件内容。 */
+/* 连接遮罩只呈现真实通道状态；入口和离场不延迟工作区放行。 */
 .connection-boot-screen {
-  display: grid;
+  display: flex;
   width: 100%;
   height: 100%;
-  place-items: center;
-  padding: 28px;
   box-sizing: border-box;
+  padding: 24px;
+  overflow: auto;
   background:
-    radial-gradient(ellipse at 50% 35%, rgba(103, 199, 209, 0.075), transparent 58%),
-    linear-gradient(rgba(103, 199, 209, 0.025) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(103, 199, 209, 0.025) 1px, transparent 1px),
-    var(--portal-geek-canvas);
-  background-size: auto, 48px 48px, 48px 48px, auto;
+    radial-gradient(ellipse at 50% 35%, rgba(105, 178, 190, .09), transparent 45%),
+    linear-gradient(160deg, #202427, #191c1f 72%);
 }
 
 .connection-boot-panel {
   position: relative;
   display: flex;
-  width: min(480px, 100%);
+  width: min(440px, 100%);
   min-width: 0;
   flex-direction: column;
   align-items: center;
-  padding: 28px 32px 24px;
-  border: 1px solid var(--portal-geek-line-soft);
-  border-top-color: rgba(103, 199, 209, 0.55);
-  border-radius: 8px;
-  background: linear-gradient(145deg, rgba(103, 199, 209, 0.035), transparent 55%), #242529;
-  box-shadow: 0 24px 90px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.035);
-  text-align: center;
   box-sizing: border-box;
+  margin: auto;
+  padding: 24px 30px 28px;
+  border: 1px solid rgba(170, 197, 200, .14);
+  border-radius: 12px;
+  background: linear-gradient(150deg, rgba(55, 66, 69, .62), rgba(30, 34, 37, .96) 48%);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, .27), inset 0 1px rgba(255, 255, 255, .035);
+  text-align: center;
 }
 
-.connection-boot-mark {
+.connection-boot-brand {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  color: #c6d4d5;
+  font: 600 10px/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: .16em;
+  text-align: left;
+}
+
+.connection-boot-brand img { display: block; object-fit: contain; }
+.connection-boot-brand-caption { margin-left: auto; color: #89999b; font-size: 11px; font-weight: 400; letter-spacing: .04em; }
+
+.connection-boot-scene {
   position: relative;
   display: grid;
-  width: 188px;
-  height: 168px;
+  width: min(240px, 100%);
+  height: 190px;
   place-items: center;
-  margin-bottom: 20px;
+  margin: 8px 0 2px;
+  animation: portal-boot-enter 240ms ease-out both;
 }
 
-.connection-boot-grid {
-  position: absolute;
-  inset: 14px;
-  background:
-    linear-gradient(90deg, transparent calc(50% - .5px), rgba(103, 199, 209, 0.2) 50%, transparent calc(50% + .5px)),
-    linear-gradient(transparent calc(50% - .5px), rgba(103, 199, 209, 0.2) 50%, transparent calc(50% + .5px));
-}
-
-.connection-boot-ring {
-  position: relative;
-  display: grid;
-  width: 130px;
-  height: 130px;
-  place-items: center;
-}
-
-.connection-boot-ring::before,
-.connection-boot-ring::after {
+.connection-boot-halo {
   position: absolute;
   inset: 0;
-  border: 2px solid transparent;
-  border-top-color: #67c7d1;
-  border-right-color: rgba(103, 199, 209, 0.18);
-  border-bottom-color: #eb9070;
-  border-radius: 50%;
-  content: '';
-  animation: portal-boot-orbit 4.8s linear infinite;
+  background: radial-gradient(ellipse at 50% 51%, rgba(111, 206, 217, .18), rgba(93, 158, 168, .045) 42%, transparent 70%);
 }
 
-.connection-boot-ring::after {
-  inset: 9px;
-  border-width: 1px;
-  border-top-color: rgba(235, 144, 112, 0.65);
-  border-right-color: transparent;
-  border-bottom-color: rgba(103, 199, 209, 0.65);
-  animation-duration: 7.2s;
-  animation-direction: reverse;
+.connection-boot-screen[data-state='connecting'] .connection-boot-halo {
+  animation: portal-boot-breathe 4s ease-in-out infinite;
 }
 
-.connection-boot-ring-core {
-  position: relative;
-  display: grid;
-  width: 82px;
-  height: 82px;
-  border: 1px solid rgba(103, 199, 209, 0.22);
-  border-radius: 18px;
-  place-items: center;
-  background: var(--portal-geek-canvas);
-  box-shadow: 0 0 28px rgba(103, 199, 209, 0.08);
-}
-
-.connection-boot-ring-core img { object-fit: contain; }
-
-.connection-boot-corner {
+.connection-boot-ground {
   position: absolute;
-  width: 14px;
-  height: 14px;
-  border-color: rgba(103, 199, 209, 0.7);
-  border-style: solid;
-  border-width: 0;
-  animation: portal-boot-beacon 3.2s ease-in-out infinite;
+  bottom: 16px;
+  width: 190px;
+  height: 24px;
+  background: radial-gradient(ellipse, rgba(104, 194, 204, .16), transparent 70%);
 }
 
-.connection-boot-corner.is-top-left { top: 0; left: 0; border-width: 1px 0 0 1px; }
-.connection-boot-corner.is-top-right { top: 0; right: 0; border-width: 1px 1px 0 0; animation-delay: .8s; }
-.connection-boot-corner.is-bottom-left { bottom: 0; left: 0; border-width: 0 0 1px 1px; animation-delay: 1.6s; }
-.connection-boot-corner.is-bottom-right { bottom: 0; right: 0; border-width: 0 1px 1px 0; animation-delay: 2.4s; }
-
-.connection-boot-copy { width: 100%; min-width: 0; }
-
-.connection-boot-eyebrow {
-  display: block;
-  margin-bottom: 12px;
-  color: var(--portal-geek-teal);
-  font: 10px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  letter-spacing: .14em;
+.connection-boot-gateway {
+  position: relative;
+  width: 106px;
+  height: 146px;
+  perspective: 480px;
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, .3));
 }
 
-.connection-boot-copy h1 { margin: 0 0 10px; font-size: 22px; font-weight: 600; }
-
-.connection-boot-copy strong {
-  display: block;
-  overflow: hidden;
-  color: var(--portal-geek-primary);
-  font-size: 14px;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.connection-boot-gateway::before,
+.connection-boot-gateway::after { position: absolute; content: ''; }
+.connection-boot-gateway::before {
+  top: 2px;
+  bottom: 2px;
+  left: -8px;
+  width: 8px;
+  transform: skewY(-25deg);
+  transform-origin: right center;
+  background: linear-gradient(90deg, #26383b, #506d70);
+}
+.connection-boot-gateway::after {
+  top: -5px;
+  right: 0;
+  left: -8px;
+  height: 5px;
+  transform: skewX(-55deg);
+  transform-origin: right bottom;
+  background: linear-gradient(90deg, #3e5558, #6c9092);
 }
 
-.connection-boot-copy p {
-  min-height: 36px;
-  margin: 12px 0 20px;
-  color: var(--portal-geek-text-muted);
-  font-size: 12px;
-  line-height: 1.6;
-  overflow-wrap: anywhere;
+.connection-boot-opening {
+  position: absolute;
+  inset: 2px;
+  background: linear-gradient(150deg, #719ca0, #334c50 46%, #1f3439);
+  box-shadow: 0 0 24px rgba(113, 207, 216, .14);
 }
+
+.connection-boot-door-leaf {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: calc(50% - 2px);
+  backface-visibility: hidden;
+  background: linear-gradient(150deg, #354347, #252f32 58%, #20282b);
+  transition: transform 180ms ease-out;
+}
+
+.connection-boot-door-leaf.is-left {
+  left: 2px;
+  transform-origin: left center;
+  border-right: 1px solid rgba(142, 218, 222, .36);
+}
+
+.connection-boot-door-leaf.is-right {
+  right: 2px;
+  transform-origin: right center;
+  border-left: 1px solid rgba(10, 21, 24, .6);
+  background: linear-gradient(210deg, #405155, #263235 60%, #20292b);
+}
+
+.connection-boot-frame { position: absolute; z-index: 1; background: linear-gradient(90deg, #506a6c, #8eb8ba 48%, #385256); }
+.connection-boot-frame.is-left,
+.connection-boot-frame.is-right { top: 0; bottom: 0; width: 3px; }
+.connection-boot-frame.is-left { left: 0; animation: portal-boot-frame-left 240ms ease-out both; }
+.connection-boot-frame.is-right { right: 0; animation: portal-boot-frame-right 240ms ease-out both; }
+.connection-boot-frame.is-top { top: 0; right: 0; left: 0; height: 3px; animation: portal-boot-frame-top 240ms ease-out both; }
+.connection-boot-threshold { position: absolute; right: -10px; bottom: -2px; left: -10px; height: 2px; background: linear-gradient(90deg, transparent, rgba(162, 223, 226, .7), transparent); }
+
+.server-workspace-loading.is-leaving .connection-boot-door-leaf.is-left { transform: rotateY(-72deg); }
+.server-workspace-loading.is-leaving .connection-boot-door-leaf.is-right { transform: rotateY(72deg); }
+
+.connection-boot-status { width: 100%; min-width: 0; }
+.connection-boot-copy { min-width: 0; }
+.connection-boot-copy h1 { margin: 0 0 8px; color: #e5ecec; font-size: 20px; font-weight: 600; line-height: 1.4; }
+.connection-boot-copy strong { display: block; overflow: hidden; color: #a6c6c8; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.connection-boot-copy p { min-height: 20px; margin: 10px 0 20px; color: #a9b4b5; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 
 .connection-boot-stages {
   display: grid;
   width: 100%;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  border: 1px solid var(--portal-geek-line-soft);
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.12);
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(162, 190, 192, .12);
+  border-radius: 7px;
+  background: rgba(14, 20, 22, .22);
+  list-style: none;
 }
 
 .connection-boot-stage {
   display: grid;
+  min-width: 0;
   justify-items: center;
-  gap: 6px;
-  padding: 12px 6px;
-  color: var(--portal-geek-text-muted);
+  gap: 5px;
+  padding: 11px 4px;
+  color: #b1bcbd;
   font-size: 12px;
 }
 
-.connection-boot-stage + .connection-boot-stage { border-left: 1px solid var(--portal-geek-line-soft); }
-.connection-boot-stage-status { font-size: 11px; }
-
-.connection-boot-stage-indicator {
-  width: 6px;
-  height: 6px;
-  margin-bottom: 2px;
-  border-radius: 50%;
-  background: #858991;
-}
-
-.connection-boot-stage.is-ready .connection-boot-stage-indicator { background: var(--portal-geek-success); }
-.connection-boot-stage.is-error .connection-boot-stage-indicator { background: #d86f6f; }
-.connection-boot-stage.is-waiting .connection-boot-stage-indicator { background: #d0a965; }
-.connection-boot-stage.is-connecting .connection-boot-stage-indicator {
-  background: var(--portal-geek-teal);
-  animation: portal-boot-beacon 3.2s ease-in-out infinite;
-}
+.connection-boot-stage + .connection-boot-stage { border-left: 1px solid rgba(162, 190, 192, .12); }
+.connection-boot-stage-status { color: #91a0a1; font-size: 11px; }
+.connection-boot-stage-indicator { width: 5px; height: 5px; margin-bottom: 1px; border-radius: 50%; background: #879395; }
+.connection-boot-stage.is-ready .connection-boot-stage-indicator { background: #92c6b3; }
+.connection-boot-stage.is-error .connection-boot-stage-indicator { background: #d88f86; }
+.connection-boot-stage.is-waiting .connection-boot-stage-indicator { background: #d6bb86; }
+.connection-boot-stage.is-connecting .connection-boot-stage-indicator { background: #8fc9cd; }
 
 .connection-boot-retry {
   display: inline-flex;
+  min-height: 34px;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 32px;
   margin-top: 16px;
-  padding: 4px 16px;
-  border: 1px solid rgba(103, 199, 209, 0.5);
-  border-radius: 5px;
-  background: rgba(103, 199, 209, 0.06);
-  color: var(--portal-geek-text);
+  padding: 5px 16px;
+  border: 1px solid rgba(150, 205, 209, .4);
+  border-radius: 6px;
+  background: rgba(120, 187, 193, .08);
+  color: #dce9e9;
   font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
 
-.connection-boot-retry:focus-visible { outline: 2px solid var(--portal-geek-teal); outline-offset: 3px; }
-.connection-boot-retry:hover { background: rgba(103, 199, 209, 0.12); }
+.connection-boot-retry:focus-visible { outline: 2px solid #a0dadd; outline-offset: 3px; }
+.connection-boot-retry:hover { background: rgba(120, 187, 193, .16); }
 
-@keyframes portal-boot-orbit { to { transform: rotate(360deg); } }
-@keyframes portal-boot-beacon { 0%, 100% { opacity: .45; } 50% { opacity: 1; } }
+@keyframes portal-boot-enter { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
+@keyframes portal-boot-frame-left { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
+@keyframes portal-boot-frame-right { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+@keyframes portal-boot-frame-top { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+@keyframes portal-boot-breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+
+.portal-window-hidden .connection-boot-screen *,
+.portal-window-hidden .connection-boot-screen *::before,
+.portal-window-hidden .connection-boot-screen *::after { animation-play-state: paused !important; }
+.portal-window-hidden .server-workspace-loading,
+.portal-window-hidden .connection-boot-door-leaf { transition: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .connection-boot-ring::before,
-  .connection-boot-ring::after,
-  .connection-boot-corner,
-  .connection-boot-stage-indicator { animation: none; }
+  .connection-boot-scene,
+  .connection-boot-halo,
+  .connection-boot-screen[data-state='connecting'] .connection-boot-halo,
+  .connection-boot-scene .connection-boot-frame { animation: none; }
+  .server-workspace-loading,
+  .connection-boot-door-leaf { transition: none; }
+}
+
+@media (max-width: 420px), (max-height: 580px) {
+  .connection-boot-screen { padding: 16px; }
+  .connection-boot-panel { padding: 18px 20px 20px; }
+  .connection-boot-scene { height: 165px; margin: 2px 0; }
+  .connection-boot-gateway { width: 90px; height: 124px; }
+  .connection-boot-ground { bottom: 12px; }
+  .connection-boot-copy p { margin-bottom: 14px; }
 }

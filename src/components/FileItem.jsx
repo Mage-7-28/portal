@@ -7,8 +7,7 @@ import { Button, List, Spin, Tooltip } from 'antd'
 import AppIcon from './AppIcon'
 import { resolveFileIcon } from '../utils/fileIconUtils.js'
 import { confirm } from '@tauri-apps/plugin-dialog'
-import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common'
-import { normalizeError } from '../utils/constants.js'
+import { formatFileSize, getErrorDetails, normalizeError, PubSubBusinessKeyEnum } from '../utils/constants.js'
 import sftpManager from '../utils/sftpUtils'
 import { notification } from '../utils/notificationUtils'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
@@ -185,7 +184,7 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
       connection = sftpManager.captureConnection(connectionId)
     } catch (error) {
       release()
-      notification.error('下载失败', normalizeError(error))
+      notification.error('下载失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
       return
     }
     const isCurrent = () => sftpManager.isCurrentConnection(connectionId, connection)
@@ -268,14 +267,17 @@ const FileItem = ({ entry, currentPath, connectionId, showHiddenFiles = false, s
       const skippedCount = skipped.length + unlistedSkipped
       if (failed.length || notStarted.length || unknown.length) {
         const details = failed.map(outcome => `${ outcome.job.localPath }：${ normalizeError(outcome.item?.error || outcome.error) }`).join('、')
-        notification.error('下载未全部完成', `已下载 ${ succeeded.length } 个文件，${ failed.length } 个失败，${ notStarted.length } 个未开始，${ unknown.length } 个结果待核对${ details ? `：${ details }` : '' }`)
+        notification.error('下载未全部完成', `已下载 ${ succeeded.length } 个文件，${ failed.length } 个失败，${ notStarted.length } 个未开始，${ unknown.length } 个结果待核对${ details ? `：${ details }` : '' }`, {
+          delivery: 'in-app',
+          details: [ ...failed, ...unknown ].slice(0, 20).map(outcome => `${ outcome.job.localPath }：${ getErrorDetails(outcome.item?.error || outcome.error) || '结果待核对，请刷新确认' }`)
+        })
       } else if (result.cancelled || skippedCount) {
         notification.success(result.cancelled ? '下载已取消' : '下载未全部完成', `已下载 ${ succeeded.length } 个文件，跳过 ${ skippedCount } 个`)
       } else {
         notification.success('下载成功', `${ itemLabel } ${ entry.name } 已保存到 ${ localPath }`)
       }
     } catch (error) {
-      if (isCurrent()) notification.error('下载失败', normalizeError(error))
+      if (isCurrent()) notification.error('下载失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       if (progressIds) {
         PubSubBusinessKeyEnum.SEND_MASK({

@@ -19,8 +19,7 @@
     "tauri:windows": "tauri build --target x86_64-pc-windows-msvc --config src-tauri/tauri.prod.conf.json",
     "tauri:linux": "tauri build --bundles deb,appimage --config src-tauri/tauri.prod.conf.json",
     "tauri:build": "tauri build --config src-tauri/tauri.prod.conf.json",
-    "tauri:icon": "tauri icon public/portal-logo.svg",
-    "test:unit": "vitest run",
+    "tauri:icon": "node scripts/generate-app-icons.mjs",
     "lint": "eslint src scripts vite.config.js eslint.config.js --ext .js,.jsx,.mjs,.ts,.tsx",
     "lint:fix": "eslint src scripts vite.config.js eslint.config.js --ext .js,.jsx,.mjs,.ts,.tsx --fix",
     "audit:prod": "pnpm audit --prod --audit-level moderate",
@@ -35,9 +34,9 @@
     "@tauri-apps/plugin-notification": "~2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-store": "~2.4.2",
-    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "0.16.0",
-    "@xterm/xterm": "^6.0.0",
+    "@xterm/xterm": "6.0.0",
     "antd": "^6.3.3",
     "prismjs": "^1.30.0",
     "pubsub-js": "^1.9.5",
@@ -49,7 +48,7 @@
   "devDependencies": {
     "@ant-design/static-style-extract": "2.1.0",
     "@eslint/eslintrc": "3.3.7",
-    "@tauri-apps/cli": "^2",
+    "@tauri-apps/cli": "2.11.0",
     "@typescript-eslint/eslint-plugin": "8.72.0",
     "@typescript-eslint/parser": "8.72.0",
     "@vitejs/plugin-react": "4.7.0",
@@ -60,7 +59,6 @@
     "eslint-plugin-react-refresh": "0.5.7",
     "goober": "2.1.18",
     "license-checker": "^25.0.1",
-    "vite": "7.3.7",
-    "vitest": "4.1.12"
+    "vite": "7.3.7"
   }
 }

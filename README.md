@@ -102,7 +102,7 @@ Windows 和 Linux 暂未提供官方安装包。如果你希望在这些平台�
 - Node.js 22（至少 22.12）
 - pnpm（使用 `package.json` 中 `packageManager` 指定的版本）
 - Rust stable toolchain
-- macOS 构建还需要 Xcode Command Line Tools
+- macOS 构建需要 Xcode Command Line Tools；重新生成图标还需要包含 Icon Composer 和 `actool` 的完整 Xcode 27 或更新版本
 
 ### 安装依赖
 
@@ -115,7 +115,6 @@ pnpm install --frozen-lockfile
 ```bash
 pnpm tauri:dev           # 启动桌面开发环境
 pnpm lint               # 检查前端、脚本与配置
-pnpm test:unit          # 执行源码内嵌的前端单元测试
 pnpm build              # 生成主题样式并构建前端
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo test --manifest-path src-tauri/Cargo.toml
@@ -124,6 +123,12 @@ pnpm audit:dev           # 审计开发依赖
 ```
 
 `pnpm-lock.yaml` 和 `src-tauri/Cargo.lock` 纳入版本管理；更新依赖时同步更新锁文件，并重新执行上述检查。
+
+前端不保留专用测试框架或独立测试夹具；额外界面验证使用临时脚本，结束后清理。Rust 回归测试保留在源文件的 `#[cfg(test)]` 模块内。
+
+### 应用图标
+
+`src-tauri/icons/Portal.icon` 是可编辑的原生分层图标源文件，可用 Icon Composer 调整材质。执行 `pnpm tauri:icon` 从同一组图层生成应用内标志、原生 `Assets.car` 和 PNG、ICNS、ICO 静态回退资源，不要直接覆盖生成文件。脚本在独立的非隐藏临时目录中编译；源文件未更新时复用已编译的原生资源，需要强制重新编译时运行 `pnpm tauri:icon --force-native`。macOS 打包使用 Tauri CLI 2.11.0 将已生成的原生资源写入应用并配置图标名称，不依赖打包阶段调用 Icon Composer；旧版 macOS 和其他桌面平台继续使用静态回退。
 
 ### 构建 macOS DMG
 

@@ -10,7 +10,7 @@ import { listen } from '@tauri-apps/api/event'
 import { confirm } from '@tauri-apps/plugin-dialog'
 import { AntdThemeConfig } from '../theme/antdTheme.js'
 import { useStoreValue } from '../utils/storeUtils.js'
-import { normalizeError, StoreKeys } from '../utils/common.js'
+import { normalizeError, StoreKeys } from '../utils/constants.js'
 import { formatServerWorkspaceTitle, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_PROFILE_EVENT } from '../utils/serverWorkspace.js'
 import { normalizeTerminalFontSize, normalizeWorkspaceLayout, shouldRevealWorkspace } from '../utils/workspacePreferences.js'
 import ConnectionBootScreen from './ConnectionBootScreen.jsx'
@@ -345,10 +345,11 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
   return (
     <ConfigProvider theme={AntdThemeConfig} locale={zhCN} componentSize="small">
       <TransferProgressProvider baseTitle={formatServerWorkspaceTitle(connectionProfile)}>
-        <main className={`server-workspace-shell${ focusMode ? ' is-terminal-focus' : '' }`} aria-busy={!workspaceReady && waitingForConnection}>
+        <main className={`server-workspace-shell${ focusMode ? ' is-terminal-focus' : '' }`}>
           <div
             ref={workspaceMainRef}
             className={`server-workspace-main${ workspaceReady ? '' : ' is-initializing' }`}
+            aria-busy={!workspaceReady && waitingForConnection}
             aria-hidden={!workspaceReady}
             inert={!workspaceReady}
           >
@@ -358,7 +359,10 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
               onResize={sizes => {
                 if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, fileRatio: sizes[0] / (sizes[0] + sizes[1]) }))
               }}
-              onResizeEnd={persistWorkspaceLayout}
+              onResizeEnd={() => {
+                persistWorkspaceLayout()
+                terminalControls?.requestFit()
+              }}
             >
               <Splitter.Panel size={`${ fileRatio * 100 }%`} min="30%" max="62%">
                 <div className="server-workspace-pane" inert={focusMode} aria-hidden={focusMode}>
@@ -382,7 +386,10 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
                   onResize={sizes => {
                     if (!focusMode && sizes[0] + sizes[1] > 0) setLayout(current => ({ ...current, rightTerminalRatio: sizes[0] / (sizes[0] + sizes[1]) }))
                   }}
-                  onResizeEnd={persistWorkspaceLayout}
+                  onResizeEnd={() => {
+                    persistWorkspaceLayout()
+                    terminalControls?.requestFit()
+                  }}
                 >
                   <Splitter.Panel size={`${ terminalRatio * 100 }%`} min="32%" max="70%">
                     <Card

@@ -8,8 +8,7 @@ import { invoke } from '@tauri-apps/api/core'
 import { Button, Modal, Progress, Spin } from 'antd'
 import { store, useStoreValue } from '../utils/storeUtils.js'
 import sftpManager from '../utils/sftpUtils.js'
-import { getReadableConnectionError, isCredentialError, SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
-import { formatFileSize, PubSubBusinessKeyEnum } from '../utils/common.js'
+import { formatFileSize, getErrorCode, getErrorDetails, getReadableConnectionError, isCredentialError, PubSubBusinessKeyEnum, SftpConnectionStatus, StoreKeys, normalizeError } from '../utils/constants.js'
 import { joinLocalPath, resolveDownloadPath } from '../utils/downloadUtils.js'
 import { formatJsonPreviewAsync, getPreviewDescriptor, highlightCode, MAX_PREVIEW_BYTES } from '../utils/previewUtils.js'
 import FileBrowser from './FileBrowser.jsx'
@@ -55,6 +54,7 @@ import { createNativeBatchWorkflow, createOperationLock, runTransferBatch } from
 
 /**
  * @typedef {Object} OperationStatus
+ * @property {string} id - 当前操作的通知去重标识。
  * @property {(message: string) => void} start - 发布操作开始状态。
  * @property {(progress: number, message: string, details?: Object) => void} update - 发布操作进度状态。
  * @property {() => void} dismiss - 关闭本次操作状态。
@@ -149,42 +149,6 @@ const deriveRemoteDrives = (path) => {
   const match = /^([A-Za-z]):(?:[/\\]|$)/.exec(path || '')
   return match ? [`${ match[1] }:/`] : []
 }
-
-// rAF 回调发生在重绘前，再通过宏任务让浏览器先完成 loading 绘制，然后才调用原生 SSH 接口。
-const CONNECTION_LOADING_DELAY_MS = 80
-/**
- * 等待一次绘制再触发原生连接调用，让 loading 状态先被用户看到。
- *
- * @returns {Promise<void>} 下一次浏览器绘制及最小 loading 展示时间结束后的 Promise。
- */
-const waitForNextPaint = () => new Promise(resolve => {
-  if (typeof window === 'undefined') {
-    setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
-    return
-  }
-
-  let fallbackTimer
-  let settled = false
-  const settleAfterPaint = () => {
-    if (settled) return
-    settled = true
-    if (fallbackTimer) window.clearTimeout(fallbackTimer)
-    window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
-  }
-
-  if (typeof window.requestAnimationFrame === 'function') {
-    // 窗口最小化时部分 WebView 会暂停 rAF，兜底定时器避免连接流程被无限推迟。
-    fallbackTimer = window.setTimeout(() => {
-      if (!settled) {
-        settled = true
-        resolve()
-      }
-    }, CONNECTION_LOADING_DELAY_MS * 2)
-    window.requestAnimationFrame(settleAfterPaint)
-    return
-  }
-  window.setTimeout(resolve, CONNECTION_LOADING_DELAY_MS)
-})
 
 /**
  * 管理 SSH 连接、远程目录、传输、预览和会话密码生命周期。
@@ -332,6 +296,7 @@ function FileBrowserPanel({
       })
     }
     return {
+      id: progressIds.taskId,
       start: message => publish(0, message),
       update: (progress, message, details) => publish(progress, message, details),
       dismiss: () => PubSubBusinessKeyEnum.SEND_MASK({
@@ -502,7 +467,7 @@ function FileBrowserPanel({
   // Store 的键事件可能在事务保存完成前到达，只作为失效通知，不直接采纳裸数组。
   useEffect(() => {
     void loadConnections().catch(loadError => {
-      if (componentMountedRef.current) void notification.error(`同步连接配置失败：${ normalizeError(loadError) }`)
+      if (componentMountedRef.current) void notification.error('同步连接配置失败', normalizeError(loadError), { delivery: 'in-app', details: getErrorDetails(loadError) })
     })
   }, [ loadConnections, storedConnections, storedConnectionsRevision ])
 
@@ -619,7 +584,7 @@ function FileBrowserPanel({
   const handleDeleteConnection = async (connectionId) => {
     const profile = connectionsRef.current.find(item => item.id === connectionId)
     if (!profile) {
-      void notification.error('删除连接失败：连接配置已删除')
+      void notification.error('删除连接失败：连接配置已删除', '', { delivery: 'in-app' })
       return
     }
     try {
@@ -634,9 +599,9 @@ function FileBrowserPanel({
         return updated
       })
       onConnectionDeleted?.(connectionId)
-      void notification.success('连接已删除')
+      void notification.success('连接已删除', '', { delivery: 'in-app' })
     } catch (deleteError) {
-      void notification.error(`删除连接失败：${ normalizeError(deleteError) }`)
+      void notification.error('删除连接失败', normalizeError(deleteError), { delivery: 'in-app', details: getErrorDetails(deleteError) })
     }
   }
 
@@ -696,7 +661,7 @@ function FileBrowserPanel({
     connectionAttemptRef.current += 1
     const attemptId = connectionAttemptRef.current
     connectingIdRef.current = connection.id
-    // 提交凭据后立即关闭输入框，让连接列表的 loading 状态先呈现出来。
+    // 提交凭据后立即关闭输入框并更新连接状态。
     setPasswordPrompt(null)
     setPasswordPromptError('')
     setConnectingId(connection.id)
@@ -704,7 +669,6 @@ function FileBrowserPanel({
     setLoading(true)
     setConnectionFailure('')
     updateSessionState({ status: 'connecting', phase: 'ssh', message: '正在建立 SSH 连接...' })
-    await waitForNextPaint()
     if (!componentMountedRef.current) return
     const credentialsValue = typeof credentialsForProfile === 'string'
       ? { password: credentialsForProfile }
@@ -747,6 +711,7 @@ function FileBrowserPanel({
         )
         if (!accepted) throw new Error('已取消主机密钥确认')
         if (!componentMountedRef.current) return
+        updateSessionState({ status: 'connecting', phase: 'ssh', message: '正在建立 SSH 连接...' })
         await sftpManager.updateHostKey(connectionId, result.hostKey.fingerprint)
         handshakeProfile = await updateProfile(handshakeProfile, { hostKeyFingerprint: result.hostKey.fingerprint })
         result = await sftpManager.connect(connectionId)
@@ -774,7 +739,7 @@ function FileBrowserPanel({
       } catch (credentialError) {
         handshakeProfile = await requireCurrentProfile(handshakeProfile)
         if (componentMountedRef.current) {
-          void notification.error(`密码持久化失败：${ normalizeError(credentialError) }`)
+          void notification.error('保存密码失败', normalizeError(credentialError), { delivery: 'in-app', details: getErrorDetails(credentialError) })
         }
       }
 
@@ -832,7 +797,7 @@ function FileBrowserPanel({
       setCurrentConnection(profile)
       onSessionConnected?.({ ...profile, id: connectionId }, attemptId)
       updateSessionState({ status: 'connected', phase: 'files', message: '文件目录已就绪' })
-      void notification.success('连接成功')
+      void notification.success('连接成功', '', { delivery: 'in-app' })
     } catch (error) {
       if (!componentMountedRef.current) {
         await disconnectAttempt()
@@ -856,7 +821,7 @@ function FileBrowserPanel({
       resetRemoteView()
       setConnectionFailure(readableError)
       updateSessionState({ status: 'error', phase: 'ssh', message: readableError })
-      void notification.error(readableError)
+      void notification.error(readableError, '', { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       if (componentMountedRef.current) {
         if (connectingIdRef.current === connection.id) {
@@ -893,7 +858,7 @@ function FileBrowserPanel({
       const message = `读取连接配置失败：${ normalizeError(loadError) }`
       setConnectionFailure(message)
       updateSessionState({ status: 'error', phase: 'credentials', message })
-      void notification.error(message)
+      void notification.error(message, '', { delivery: 'in-app', details: getErrorDetails(loadError) })
       return
     }
     const latestConnection = connectionsRef.current.find(item => item.id === connection.id)
@@ -901,7 +866,7 @@ function FileBrowserPanel({
       const message = '连接配置已删除，请重新选择连接'
       setConnectionFailure(message)
       updateSessionState({ status: 'error', phase: 'credentials', message })
-      void notification.error(message)
+      void notification.error(message, '', { delivery: 'in-app' })
       return
     }
     if (workspaceMode === 'launcher' && onOpenConnection) {
@@ -1007,7 +972,7 @@ function FileBrowserPanel({
         )
         if (!accepted) return
       } catch (confirmError) {
-        void notification.error(`确认断开连接失败：${ normalizeError(confirmError) }`)
+        void notification.error('确认断开连接失败', normalizeError(confirmError), { delivery: 'in-app', details: getErrorDetails(confirmError) })
         return
       }
     }
@@ -1045,7 +1010,7 @@ function FileBrowserPanel({
    *
    * @param {string} path - 要加载的远程目录路径。
    * @param {string|null} [connectionId=currentConnectionId] - 使用的 SSH 连接 ID。
-   * @param {{preservePathInput?: boolean}} [options={}] - 后台刷新时保留未提交的路径草稿。
+   * @param {{preservePathInput?: boolean, preserveEntriesOnError?: boolean}} [options={}] - 后台刷新时保留路径草稿及上次列表。
    * @returns {Promise<{status: 'success'|'failed'|'superseded', error?: unknown}>} 本次加载结果。
    */
   const loadRemoteDirectory = useCallback((path, connectionId = currentConnectionId, options = {}) => {
@@ -1095,7 +1060,7 @@ function FileBrowserPanel({
           return { status: 'superseded' }
         }
         directoryIntentRef.current = { connectionId, path: currentPathRef.current }
-        setFiles([])
+        if (!options.preserveEntriesOnError) setFiles([])
         const connectionStillActive = activeConnectionIdRef.current === connectionId
           && sftpManager.getConnectionInfo(connectionId) === record
           && record?.generation === connection.generation
@@ -1139,11 +1104,12 @@ function FileBrowserPanel({
    * 变更完成后失效目标目录的缓存，仅在仍显示该目录且没有前往别处的导航时刷新。
    *
    * @param {{connectionId: string, path: string, connection: Object}} target - 开始操作时捕获的远程连接和目录。
-   * @returns {Promise<void>} 必要的刷新完成后的 Promise。
+   * @returns {Promise<{status: 'success'|'failed'|'superseded'|'not-needed', error?: unknown}>} 刷新结果，与远程变更结果分开结算。
    */
   const refreshDirectoryAfterMutation = async target => {
     const { connectionId, path } = target
-    if (!isCurrentOperationTarget(target) || typeof path !== 'string') return
+    if (!isCurrentOperationTarget(target)) return { status: 'superseded' }
+    if (typeof path !== 'string') return { status: 'not-needed' }
     const normalizedPath = normalizeRemotePath(path)
     sftpManager.invalidateDirectorySizeCache(connectionId, normalizedPath)
     const intent = directoryIntentRef.current
@@ -1151,8 +1117,29 @@ function FileBrowserPanel({
       activeConnectionIdRef.current !== connectionId
       || currentPathRef.current !== normalizedPath
       || (intent && (intent.connectionId !== connectionId || intent.path !== normalizedPath))
-    ) return
-    await loadRemoteDirectoryRef.current?.(normalizedPath, connectionId, { preservePathInput: true })
+    ) return { status: 'superseded' }
+    try {
+      return await loadRemoteDirectoryRef.current?.(normalizedPath, connectionId, {
+        preservePathInput: true,
+        preserveEntriesOnError: true
+      }) || { status: 'not-needed' }
+    } catch (error) {
+      return { status: 'failed', error }
+    }
+  }
+
+  /** 远端变更已经确认后，刷新失败只能改变反馈级别，不能误报变更失败或完整成功。 */
+  const notifyMutationSuccess = (message, refresh, id) => {
+    const options = { delivery: 'in-app', id }
+    if (refresh?.status === 'failed') {
+      void notification.warning(`${ message }，但目录刷新失败，请重新刷新查看`, '', {
+        ...options,
+        duration: Infinity,
+        details: getErrorDetails(refresh.error)
+      })
+    } else {
+      void notification.success(message, '', options)
+    }
   }
 
   // 记录已经应用到远程列表的隐藏文件偏好，避免首次渲染重复刷新目录。
@@ -1264,7 +1251,7 @@ function FileBrowserPanel({
       }
     } catch (previewError) {
       if (!previewController.signal.aborted && currentPreviewRequest === previewRequestId.current) {
-        void notification.error(`预览失败：${ normalizeError(previewError) }`)
+        void notification.error('预览失败', normalizeError(previewError), { delivery: 'in-app', details: getErrorDetails(previewError) })
       }
     } finally {
       if (currentPreviewRequest === previewRequestId.current) {
@@ -1315,10 +1302,13 @@ function FileBrowserPanel({
    */
   const handleCreateDirectory = async (name, target) => {
     if (!isCurrentOperationTarget(target)) return
+    let created = false
     try {
       await sftpManager.createRemoteDirectory(target.connectionId, joinRemotePath(target.path, name))
+      created = true
     } finally {
-      await refreshDirectoryAfterMutation(target)
+      const refresh = await refreshDirectoryAfterMutation(target)
+      if (created && isCurrentOperationTarget(target)) notifyMutationSuccess('文件夹已创建', refresh)
     }
   }
 
@@ -1418,11 +1408,15 @@ function FileBrowserPanel({
       const failedNames = failed.map(item => item.item?.localPath || item.job.entry.name).join('、')
       const skippedCount = skipped.length + unlistedSkipped
       const summary = `已下载 ${ succeeded.length } 个文件${ directoryCount ? `、${ directoryCount } 个目录` : '' }${ skippedCount ? `，跳过 ${ skippedCount } 个` : '' }${ failed.length ? `，${ failed.length } 个失败` : '' }${ notStarted.length ? `，${ notStarted.length } 个未开始` : '' }${ unknown.length ? `，${ unknown.length } 个结果待核对` : '' }${ failedNames ? `：${ failedNames }` : '' }`
-      if (failed.length || notStarted.length || unknown.length || result.cancelled) void notification.error(`${ result.cancelled ? '下载已取消：' : '' }${ summary }`)
-      else void notification.success(summary)
+      if (failed.length || notStarted.length || unknown.length || result.cancelled) {
+        const details = [ ...failed, ...unknown ].slice(0, 20).map(outcome => `${ outcome.item?.localPath || outcome.job.localPath }：${ getErrorDetails(outcome.item?.error || outcome.error) || '结果待核对，请检查本地文件' }`)
+        void notification.error(`${ result.cancelled ? '下载已取消：' : '' }${ summary }`, '', {
+          delivery: 'in-app', id: progressIds.taskId, details
+        })
+      } else void notification.success(summary, '', { delivery: 'in-app', id: progressIds.taskId })
       return !result.cancelled && !failed.length && !notStarted.length && !unknown.length && !skippedCount
     } catch (error) {
-      if (isCurrent()) void notification.error(`下载失败：${ normalizeError(error) }`)
+      if (isCurrent()) void notification.error('下载失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
       return false
     } finally {
       if (progressIds) PubSubBusinessKeyEnum.SEND_MASK({ ...progressIds, event: PROGRESS_EVENT_END })
@@ -1437,7 +1431,7 @@ function FileBrowserPanel({
    * @param {OperationStatus} status - 发布删除进度的操作状态对象。
    * @param {{connectionId: string, path: string, connection: Object}} target - 发起删除时捕获的远程目录和会话。
    * @param {{queueIndex?: number, queueTotal?: number, showBatchPosition?: boolean}} [options={}] - 批量删除进度配置。
-   * @returns {Promise<void>} 远程删除任务完成后的 Promise。
+   * @returns {Promise<Object>} 原生端已验证的删除结果。
    * @throws {Error} 当远程删除失败或连接不可用时抛出。
    */
   const deleteRemoteEntry = async (entry, status, target, options = {}) => {
@@ -1446,7 +1440,7 @@ function FileBrowserPanel({
       queueTotal = 1,
       showBatchPosition = false
     } = options
-    await sftpManager.deleteRemoteItem(
+    return sftpManager.deleteRemoteItem(
       target.connectionId,
       joinRemotePath(target.path, entry.name),
       entry.isDirectory,
@@ -1504,7 +1498,9 @@ function FileBrowserPanel({
       })
       if (!accepted || !isCurrentOperationTarget(target)) return
     } catch (confirmError) {
-      void notification.error(`确认删除失败：${ normalizeError(confirmError) }`)
+      void notification.error(`确认删除失败：${ normalizeError(confirmError) }`, '', {
+        delivery: 'in-app', details: getErrorDetails(confirmError)
+      })
       return
     }
 
@@ -1512,16 +1508,29 @@ function FileBrowserPanel({
     let refreshStarted = false
     status.start(entry.isDirectory ? '正在删除文件夹及其内容...' : '正在删除文件...')
     try {
-      await deleteRemoteEntry(entry, status, target)
-      if (!isCurrentOperationTarget(target)) return
-      status.update(92, '正在刷新目录...', { phase: 'refreshing' })
+      const result = await deleteRemoteEntry(entry, status, target)
+      if (isCurrentOperationTarget(target)) status.update(92, '正在刷新目录...', { phase: 'refreshing' })
       refreshStarted = true
-      await refreshDirectoryAfterMutation(target)
-      if (!isCurrentOperationTarget(target)) return
-      void notification.success('已删除')
+      const refresh = await refreshDirectoryAfterMutation(target)
+      if (!isCurrentOperationTarget(target)) {
+        void notification.warning('原连接的删除已完成，当前连接已更改，请核对原目录', '', {
+          delivery: 'in-app', id: status.id, duration: Infinity,
+          details: `原目录：${ target.path }\n${ entry.name }：${ result.outcome === 'alreadyAbsent' ? '目标已不存在' : '已确认删除' }`
+        })
+        return
+      }
+      notifyMutationSuccess(result.outcome === 'alreadyAbsent' ? '目标已不存在' : '已删除', refresh, status.id)
     } catch (deleteError) {
-      const message = normalizeError(deleteError)
-      void notification.error(`删除失败：${ message }`)
+      const removed = Number(deleteError.result?.removedEntries) || 0
+      const unknown = deleteError.result?.outcome === 'unknown'
+        || [ 'TransferOutcomeUnknown', 'TransferStateUnavailable', 'OutcomeUnknown' ].includes(getErrorCode(deleteError))
+      const message = unknown ? `${ removed > 0 ? `已确认删除 ${ removed } 项，其余` : '删除' }结果待核对，请刷新确认后再操作`
+        : removed > 0 ? `部分内容已删除（${ removed } 项），剩余内容未完成：${ normalizeError(deleteError) }`
+          : `删除失败：${ normalizeError(deleteError) }`
+      void notification.error(message, '', {
+        delivery: 'in-app', id: status.id,
+        details: `原目录：${ target.path }\n${ entry.name }\n${ getErrorDetails(deleteError) }`
+      })
     } finally {
       try {
         if (!refreshStarted) await refreshDirectoryAfterMutation(target)
@@ -1586,7 +1595,7 @@ function FileBrowserPanel({
             publishBatchProgress(details.fileName || entry.name, details.phase)
           }
         }
-        await deleteRemoteEntry(entry, itemStatus, target)
+        return deleteRemoteEntry(entry, itemStatus, target)
       }, {
         concurrency: 4,
         isCurrent: () => isCurrentOperationTarget(target),
@@ -1598,25 +1607,42 @@ function FileBrowserPanel({
         }
       })
       const result = await batch.promise
-      if (!isCurrentOperationTarget(target)) {
-        return false
-      }
-      status.update(92, '正在刷新目录...', {
+      if (isCurrentOperationTarget(target)) status.update(92, '正在刷新目录...', {
         phase: 'refreshing',
         queueIndex: entries.length,
         queueTotal: entries.length,
         pendingCount: 0
       })
       refreshStarted = true
-      await refreshDirectoryAfterMutation(target)
-      if (!isCurrentOperationTarget(target)) return false
+      const refresh = await refreshDirectoryAfterMutation(target)
       const deletedCount = result.succeeded.length
+      const alreadyAbsentCount = result.succeeded.filter(outcome => outcome.value?.outcome === 'alreadyAbsent').length
+      const deletedSummary = alreadyAbsentCount
+        ? `已删除 ${ deletedCount - alreadyAbsentCount } 个项目，${ alreadyAbsentCount } 个目标已不存在`
+        : `已删除 ${ deletedCount } 个项目`
+      const connectionChanged = !isCurrentOperationTarget(target)
       if (deletedCount === entries.length) {
-        void notification.success(`已删除 ${ entries.length } 个项目`)
+        if (connectionChanged) {
+          void notification.warning(`原连接${ deletedSummary }，当前连接已更改，请核对原目录`, '', {
+            delivery: 'in-app', id: status.id, duration: Infinity,
+            details: `原目录：${ target.path }`
+          })
+          return false
+        }
+        notifyMutationSuccess(deletedSummary, refresh, status.id)
         return true
       }
-      const failedNames = result.failed.map(outcome => outcome.job.name).join('、')
-      void notification.error(`已删除 ${ deletedCount } 个项目，${ result.failed.length } 个失败，${ result.notStarted.length } 个未开始，${ result.unknown.length } 个结果待核对${ failedNames ? `：${ failedNames }` : '' }`)
+      const failures = [ ...result.failed, ...result.unknown ]
+      const details = failures.slice(0, 20).map(outcome => {
+        const removed = Number(outcome.error?.result?.removedEntries) || 0
+        return `${ outcome.job.name }${ removed ? `（已删除部分内容：${ removed } 项）` : '' }：${ normalizeError(outcome.error) }\n${ getErrorDetails(outcome.error) }`
+      })
+      details.unshift(`原目录：${ target.path }${ connectionChanged ? '（连接已更改，未刷新新会话）' : '' }`)
+      if (failures.length > 20) details.push(`另有 ${ failures.length - 20 } 个项目未完成，请在目录中核对`)
+      if (refresh.status === 'failed') details.push(`目录刷新失败：${ getErrorDetails(refresh.error) }`)
+      void notification.error(`${ deletedSummary }，${ result.failed.length } 个失败，${ result.notStarted.length } 个未开始，${ result.unknown.length } 个结果待核对`, '', {
+        delivery: 'in-app', id: status.id, details
+      })
       return false
     } finally {
       try {
@@ -1652,8 +1678,8 @@ function FileBrowserPanel({
       if (!isCurrentOperationTarget(target)) return
       status.update(82, '正在刷新目录...')
       refreshStarted = true
-      await refreshDirectoryAfterMutation(target)
-      if (isCurrentOperationTarget(target)) void notification.success('已重命名')
+      const refresh = await refreshDirectoryAfterMutation(target)
+      if (isCurrentOperationTarget(target)) notifyMutationSuccess('已重命名', refresh, status.id)
     } catch (renameError) {
       // 保持弹窗打开，让用户修正名称或重新尝试。
       throw renameError

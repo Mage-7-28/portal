@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import PubSub from 'pubsub-js'
-import { PROGRESS_UPDATE_INTERVAL_MS, PubSubBusinessKeyEnum, normalizeError } from '../utils/constants.js'
+import { getErrorDetails, PROGRESS_UPDATE_INTERVAL_MS, PubSubBusinessKeyEnum, normalizeError } from '../utils/constants.js'
 import { ProgressContext } from '../utils/progressContext.js'
 import { PROGRESS_END, PROGRESS_EVENT_END, PROGRESS_UPDATE, createInitialProgressState, getProgressKey, progressReducer } from '../utils/progressState.js'
 import { createProgressTitleUpdater, formatProgressWindowTitle } from '../utils/progressTitle.js'
@@ -69,7 +69,7 @@ const TransferProgressProvider = ({ baseTitle, children }) => {
     try {
       await task.onCancel()
     } catch (error) {
-      void notification.error('取消操作失败', normalizeError(error))
+      void notification.error('取消操作失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       // 等待生产者发送结束事件，不在取消请求刚被受理时伪造任务已完成。
       pendingCancelsRef.current.delete(key)

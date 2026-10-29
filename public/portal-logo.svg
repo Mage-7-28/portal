@@ -1,22 +1,40 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- 由 scripts/generate-app-icons.mjs 从 Icon Composer 图层生成。 -->
   <defs>
-    <linearGradient id="tile" x1="176" y1="96" x2="848" y2="928" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#2A3033"/>
-      <stop offset="1" stop-color="#181D20"/>
+    <linearGradient id="gateway-frame" x1="255" y1="193" x2="751" y2="829" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e7fbf9"/>
+      <stop offset="0.19" stop-color="#a8e1e2"/>
+      <stop offset="0.47" stop-color="#77bec7"/>
+      <stop offset="0.73" stop-color="#b9eceb"/>
+      <stop offset="1" stop-color="#558a9b"/>
+    </linearGradient>
+    <linearGradient id="gateway-left" x1="236" y1="480" x2="334" y2="480" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#b6e6e5" stop-opacity="0.85"/>
+      <stop offset="1" stop-color="#4b95a3" stop-opacity="0.22"/>
+    </linearGradient>
+    <linearGradient id="gateway-right" x1="689" y1="500" x2="792" y2="500" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#e5ffff" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#3d7d91" stop-opacity="0.72"/>
     </linearGradient>
   </defs>
-  <rect x="68" y="68" width="888" height="888" rx="200" fill="url(#tile)"/>
-  <path
-    d="M332 219h360l113 113v376l-97 97H316l-97-97V332z"
-    stroke="#EB9070"
-    stroke-width="64"
-    stroke-linejoin="round"
-  />
-  <path
-    d="m359 405 125 107-125 107m176 0h130"
-    stroke="#67C7D1"
-    stroke-width="64"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
+  <path d="M232 798V324c0-113 70-166 179-166h202c109 0 179 53 179 166v474l-102 58V331c0-48-29-75-82-75H416c-53 0-82 27-82 75v525z" fill="url(#gateway-frame)"/>
+  <path d="M232 324c0-103 58-154 151-164-40 34-49 77-49 171v525l-102-58z" fill="url(#gateway-left)"/>
+  <path d="M641 160c93 10 151 61 151 164v474l-102 58V331c0-94-9-137-49-171z" fill="url(#gateway-right)"/>
+  <path d="M257 784V330c0-98 58-147 157-147h196c99 0 157 49 157 147v454" fill="none" stroke="#f2ffff" stroke-opacity="0.54" stroke-width="8" stroke-linecap="round"/>
+  <path d="M334 816V331c0-48 29-75 82-75h192c53 0 82 27 82 75v485" fill="none" stroke="#164f60" stroke-opacity="0.35" stroke-width="8"/>
+  <defs>
+    <!-- 保持直接坐标；Xcode 的 actool 无法编译此图层的渐变变换形式。 -->
+    <radialGradient id="light-halo" cx="512" cy="543" r="315" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#a6fbf2" stop-opacity="0.26"/>
+      <stop offset="0.48" stop-color="#63c9d1" stop-opacity="0.10"/>
+      <stop offset="1" stop-color="#63c9d1" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="light-core" x1="512" y1="328" x2="512" y2="750" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#efffff" stop-opacity="0.92"/>
+      <stop offset="0.55" stop-color="#affbf3"/>
+      <stop offset="1" stop-color="#55c6d0" stop-opacity="0.78"/>
+    </linearGradient>
+  </defs>
+  <ellipse cx="512" cy="543" rx="210" ry="315" fill="url(#light-halo)"/>
+  <path d="M512 328c17 0 30 14 30 31v359c0 18-13 32-30 32s-30-14-30-32V359c0-17 13-31 30-31z" fill="url(#light-core)"/>
 </svg>

@@ -29,7 +29,7 @@ const getPlatformLabel = platform => ({
 /**
  * 展示服务器 CPU、内存和进程负载。
  *
- * @param {{connectionId: string, active?: boolean, onInitialStateChange?: (state: {status: 'ready'|'error', message: string}) => void}} props - 监控连接、采集开关和首次采集结果回调。
+ * @param {{connectionId: string, active?: boolean, onInitialStateChange?: (state: {status: 'ready'|'error', message: string, currentHealth?: 'ready'|'error'|'connecting'}) => void}} props - 监控连接、采集开关以及首次采集结果和当前健康状态回调。
  * @returns {JSX.Element} 同时包含资源指标和进程表的监控面板。
  */
 const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange }) => {
@@ -42,10 +42,11 @@ const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange 
   const hasSnapshot = snapshot != null
   const initialStatus = snapshot ? 'ready' : state.error ? 'error' : ''
   const initialMessage = snapshot ? '' : state.error
+  const currentHealth = state.error ? 'error' : state.refreshing ? 'connecting' : snapshot ? 'ready' : 'connecting'
 
   useEffect(() => {
-    if (initialStatus) onInitialStateChange?.({ status: initialStatus, message: initialMessage })
-  }, [ initialMessage, initialStatus, onInitialStateChange ])
+    if (initialStatus) onInitialStateChange?.({ status: initialStatus, message: initialMessage, currentHealth })
+  }, [ currentHealth, initialMessage, initialStatus, onInitialStateChange ])
 
   // 百分比高度在多层 flex 和固定表头之间不可靠，按实际剩余空间设置唯一滚动区。
   useLayoutEffect(() => {
@@ -133,10 +134,14 @@ const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange 
         </div>
       )}
       extra={(
-        <Text type="secondary" className="server-monitor-updated" title="每 5 秒自动采集；下方时间为最近一次成功采样时间">
-          <span className={`server-monitor-live-dot${ state.error ? ' is-stale' : '' }`} aria-hidden="true" />
-          {snapshot ? new Date(snapshot.collectedAt).toLocaleTimeString('zh-CN', { hour12: false }) : '等待采样'}
-        </Text>
+        <span
+          className="server-monitor-health"
+          role="img"
+          aria-label={state.error ? '监控采样暂不可用' : snapshot ? '监控采样正常' : '正在等待监控采样'}
+          title="每 5 秒自动采集服务器状态"
+        >
+          <span className={`server-monitor-live-dot${ state.error || !snapshot ? ' is-stale' : '' }`} aria-hidden="true" />
+        </span>
       )}
       styles={{ body: { minHeight: 0 }}}
     >

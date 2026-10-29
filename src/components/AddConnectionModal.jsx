@@ -8,7 +8,7 @@ import AppIcon from './AppIcon'
 import * as dialog from '@tauri-apps/plugin-dialog'
 import { createConnectionFormGuard } from '../utils/connectionFormGuard.js'
 import sftpManager from '../utils/sftpUtils.js'
-import { normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
+import { getErrorDetails, normalizeError, THEME_DANGER, THEME_SUCCESS, THEME_TEXT_SECONDARY, THEME_WARNING } from '../utils/constants.js'
 import { notification } from '../utils/notificationUtils.js'
 
 const { Text } = Typography
@@ -142,7 +142,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
         if (!guard.isCurrentTest(ticket)) return
         if (!accepted) {
           setTestResult({ ...result, trusted: false, formTicket: ticket })
-          void notification.error('未信任服务器指纹，连接测试已取消')
+          void notification.info('未信任服务器指纹，连接测试已取消', '', { delivery: 'in-app' })
           return
         }
 
@@ -164,14 +164,14 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
       }
 
       if (result.success) {
-        void notification.success('连接测试成功，服务器指纹已信任')
+        void notification.success('连接测试成功，服务器指纹已信任', '', { delivery: 'in-app' })
       } else {
-        void notification.error(`连接测试失败：${ result.error }`)
+        void notification.error('连接测试失败', result.error, { delivery: 'in-app', details: result.errorDetails })
       }
     } catch (error) {
       if (!guard.isCurrentTest(ticket)) return
       if (error?.errorFields) return
-      void notification.error(`连接测试失败：${ normalizeError(error) }`)
+      void notification.error('连接测试失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       if (guard.isCurrentTest(ticket)) setTesting(false)
     }
@@ -214,7 +214,7 @@ const AddConnectionModal = ({ visible, onCancel, onAddSuccess, editingConnection
       void notification.success(editingConnection ? '连接配置已更新' : '连接配置已保存')
       if (guard.isCurrentSave(ticket)) handleCancel()
     } catch (error) {
-      void notification.error(`保存连接失败：${ normalizeError(error) }`)
+      void notification.error('保存连接失败', normalizeError(error), { delivery: 'in-app', details: getErrorDetails(error) })
     } finally {
       guard.finishSave(ticket)
       setSaving(false)

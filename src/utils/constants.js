@@ -19,9 +19,6 @@ export const StoreKeys = {
   WORKSPACE_LAYOUTS: 'workspace_layouts'
 }
 
-// Store 数据结构版本，用于后续迁移持久化配置。
-export const StoreVersion = 3
-
 // PubSub 传输状态总线的主题和发送入口。
 export const PubSubBusinessKeyEnum = {
   MASK: 'mask',
@@ -29,7 +26,7 @@ export const PubSubBusinessKeyEnum = {
 }
 
 // 以 1024 为进位的文件大小单位，前端显示和目录统计共用。
-export const FileSizeUnits = [ 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB' ]
+const FileSizeUnits = [ 'B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB' ]
 
 /**
  * 将字节数格式化为适合列表展示的二进制单位。
@@ -59,9 +56,7 @@ export const SftpConnectionStatus = {
 export const CONNECTION_TIMEOUT_MS = 30_000
 export const PROGRESS_UPDATE_INTERVAL_MS = 100
 
-// LAB 用于浏览器界面的强调色样式。Ant Design 的 FastColor 调色板生成器
-// 目前只接受 RGB、HSL 和十六进制颜色，因此生成派生主题令牌时需要对应的 sRGB 降级色。
-export const THEME_PRIMARY_COLOR = 'lab(68.9646% 33.16 32.3692)'
+// Ant Design 调色板使用兼容的十六进制强调色。
 export const THEME_PRIMARY_COLOR_FALLBACK = '#eb9070'
 // 基于 IDEA 深色新界面的炭灰分层：画布、岛屿面板和浮层保持明确层级。
 export const THEME_BG_PRIMARY = '#1e1f22'
@@ -75,42 +70,93 @@ export const THEME_SUCCESS = '#8fb996'
 export const THEME_WARNING = '#d0a965'
 export const THEME_DANGER = '#d86f6f'
 
-// 主窗口初始/最小尺寸；平台原生标题栏和内容布局都会以此为下限。
-export const WINDOW_DEFAULT_WIDTH = 920
-export const WINDOW_DEFAULT_HEIGHT = 620
-export const WINDOW_MIN_WIDTH = 920
-export const WINDOW_MIN_HEIGHT = 620
+// 摘要只用于展示；业务分类继续读取原始错误码，不能匹配翻译后的文案。
+const ERROR_SUMMARIES = {
+  ConnectionNotFound: '连接已失效，请重新连接服务器',
+  ConnectionGenerationChanged: '连接会话已更新，请重新操作',
+  ConnectionFailed: '无法连接服务器，请检查地址、端口和网络',
+  HandshakeFailed: 'SSH 握手失败，请检查服务器协议配置',
+  AuthFailed: '认证失败，请检查账户和密码',
+  AuthFailedUnknown: '认证失败，请检查账户和密码',
+  UnsupportedAuth: '当前认证方式不受支持',
+  HostKeyVerificationRequired: '请先确认服务器主机指纹',
+  HostKeyMismatch: '服务器指纹发生变化，请核实服务器身份',
+  PermissionDenied: '没有访问权限，请检查账户和目标目录权限',
+  FileOperationFailed: '文件操作失败，请查看错误详情',
+  ReadDirFailed: '无法读取目录，请检查权限或重新刷新',
+  ReadFailed: '读取远程数据失败',
+  SftpFailed: 'SFTP 通道暂不可用，请重试或重新连接',
+  InvalidTargetPath: '目标路径无效，请检查路径',
+  TargetExists: '目标已存在，请确认是否覆盖',
+  TargetNameCollision: '目标名称冲突，请更换名称',
+  UnsupportedFilesystem: '文件系统不支持所需的安全操作',
+  ArchiveUnsupported: '服务器不支持安全归档传输',
+  AtomicRenameUnsupported: '服务器不支持安全覆盖',
+  SourceChanged: '源文件发生变化，请刷新后重试',
+  CommitOutcomeUnknown: '提交结果待核对，请刷新确认后再操作',
+  DeleteVerificationFailed: '目标仍存在，未能确认删除完成',
+  TransferOutcomeUnknown: '操作结果待核对，请刷新确认后再操作',
+  OutcomeUnknown: '操作结果待核对，请刷新确认后再操作',
+  TransferStateUnavailable: '无法获取任务结果，请刷新确认后再操作',
+  TransferCancelled: '操作已取消',
+  TransferStartExpired: '任务启动请求已过期，未执行该请求',
+  TransferRejected: '任务未能启动，请查看错误详情',
+  TaskStartFailed: '后台任务启动失败，请稍后重试',
+  BackgroundBusy: '后台任务已达到并发上限，请稍后重试',
+  DirectorySizeCancelled: '目录大小统计已取消',
+  DirectorySizeLimitReached: '目录大小统计任务已达到上限',
+  PreviewTooLarge: '文件超过预览大小限制，请下载后查看',
+  PreviewCancelled: '文件预览已取消',
+  MonitorUnavailable: '服务器监控暂不可用',
+  TerminalNotFound: '终端会话已结束',
+  TerminalInputTooLong: '终端输入超过大小限制',
+  TerminalFailed: '终端会话发生错误，请查看详情'
+}
 
-/**
- * 将字符串、Tauri 错误对象和普通 Error 统一转换为可展示文本。
- *
- * @param {unknown} error - 原始异常、IPC 错误负载或任意值。
- * @returns {string} 可直接显示给用户的错误文本；无法识别时返回“未知错误”。
- */
-export const normalizeError = (error) => {
-  if (!error) return '未知错误'
-
+/** 只提取错误码和说明，不序列化可能包含凭据的请求或连接对象。 */
+export const getErrorDetails = (error) => {
+  if (!error) return ''
   if (typeof error === 'string') {
     try {
       const parsed = JSON.parse(error)
-      if (parsed && typeof parsed === 'object') return normalizeError(parsed)
+      if (parsed && typeof parsed === 'object') return getErrorDetails(parsed)
     } catch {
-      return error
+      // 普通文本保留为诊断信息。
     }
+    return error
   }
+  if (error.code === 'HostKeyMismatch') {
+    // 仅允许已知的指纹字段通过，绝不展开连接配置或凭据对象。
+    const fingerprints = error.message && typeof error.message === 'object' ? error.message : error
+    return [
+      'HostKeyMismatch',
+      typeof fingerprints.expected === 'string' ? `已保存指纹：${ fingerprints.expected }` : '',
+      typeof fingerprints.actual === 'string' ? `当前指纹：${ fingerprints.actual }` : ''
+    ].filter(Boolean).join('\n')
+  }
+  const message = typeof error.message === 'string' ? error.message
+    : typeof error.message?.message === 'string' ? error.message.message
+      : typeof error.details === 'string' ? error.details : ''
+  const code = typeof error.code === 'string' ? error.code : ''
+  return [ code, message ].filter(Boolean).join('：')
+}
 
-  if (typeof error.message === 'string' && error.message) return error.message
-  if (typeof error.details === 'string' && error.details) return error.details
-  if (typeof error.message === 'object' && error.message?.message) return error.message.message
-  if (typeof error.code === 'string') {
-    const detail = typeof error.message === 'string' ? error.message : ''
-    return detail ? `${ error.code }: ${ detail }` : error.code
-  }
-  if (typeof error.toString === 'function') {
-    const text = error.toString()
-    if (text !== '[object Object]') return text
-  }
-  return '未知错误'
+/**
+ * 将跨边界错误转换为中文摘要；原始诊断通过 getErrorDetails 单独展示。
+ *
+ * @param {unknown} error - 原始异常或 IPC 错误负载。
+ * @returns {string} 不改变现有字符串返回契约的用户提示。
+ */
+export const normalizeError = (error) => {
+  const code = getErrorCode(error)
+  if (ERROR_SUMMARIES[code]) return ERROR_SUMMARIES[code]
+  const detail = getErrorDetails(error)
+  if (!detail) return '未知错误'
+  if (/[\u3400-\u9fff]/.test(detail)) return detail
+  if (/permission denied|access denied/i.test(detail)) return ERROR_SUMMARIES.PermissionDenied
+  if (/timed? ?out|timeout/i.test(detail)) return '操作超时，请检查网络后重试'
+  if (/connection refused|network unreachable/i.test(detail)) return ERROR_SUMMARIES.ConnectionFailed
+  return '操作失败，请查看错误详情'
 }
 
 /**
@@ -138,8 +184,7 @@ export const getErrorCode = (error) => {
  * @returns {boolean} 错误表明认证凭据无效时返回 true。
  */
 export const isCredentialError = (error) => {
-  const message = normalizeError(error)
-  const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()
+  const normalized = getErrorDetails(error).toLowerCase()
   if (normalized.includes('用户名不能为空')) return false
   return normalized.includes('authfailed')
     || normalized.includes('authentication failed')
@@ -156,8 +201,7 @@ export const isCredentialError = (error) => {
  * @returns {string} 不暴露 libssh2 实现细节的用户可读连接错误。
  */
 export const getReadableConnectionError = (error) => {
-  const message = normalizeError(error)
-  const normalized = `${ getErrorCode(error) } ${ message }`.toLowerCase()
+  const normalized = getErrorDetails(error).toLowerCase()
 
   if (normalized.includes('用户名不能为空')) {
     return '用户名不能为空，请检查连接配置'
@@ -201,43 +245,9 @@ export const getReadableConnectionError = (error) => {
   return '连接失败，请检查服务器地址、端口和认证信息'
 }
 
-export const layoutStyle = {
-  display: 'flex',
-  flexDirection: 'column',
-  minHeight: '100dvh',
-  backgroundColor: THEME_BG_PRIMARY
-}
-
 export const msgBoxStyle = {
   background: THEME_BG_SECONDARY,
   color: THEME_TEXT_PRIMARY,
   border: `1px solid ${ THEME_BORDER_COLOR }`,
   fontSize: '14px'
-}
-
-export const headerStyle = {
-  color: THEME_TEXT_PRIMARY,
-  height: 50,
-  lineHeight: '50px',
-  backgroundColor: THEME_BG_SECONDARY,
-  display: 'flex',
-  justifyContent: 'space-between',
-  alignItems: 'center',
-  width: '100%',
-  padding: '0 16px'
-}
-
-export const contentStyle = {
-  flex: 1,
-  minHeight: 0,
-  color: THEME_TEXT_PRIMARY,
-  overflow: 'hidden',
-  backgroundColor: THEME_BG_PRIMARY
-}
-
-export const footerStyle = {
-  textAlign: 'center',
-  color: THEME_TEXT_SECONDARY,
-  height: 42,
-  backgroundColor: THEME_BG_SECONDARY
 }

@@ -152,13 +152,6 @@ export class ReactiveStore {
 export const store = new ReactiveStore()
 
 /**
- * 订阅整个响应式设置快照，供需要多个设置的 React 组件使用。
- *
- * @returns {Object} Valtio 提供的只读响应式状态快照。
- */
-export const useStore = () => useSnapshot(store.state)
-
-/**
  * 订阅单个设置值，减少不相关设置变化造成的组件更新。
  *
  * @param {string} key - 要订阅的设置键。

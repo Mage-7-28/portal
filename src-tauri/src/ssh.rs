@@ -179,6 +179,12 @@ pub enum SshError {
     SourceChanged(String),
     #[error("提交结果无法确认: {0}")]
     CommitOutcomeUnknown(String),
+    /// 删除调用已结束，但目标根路径仍存在（也可能被其他客户端重新创建）。
+    #[error("未能确认删除完成: {0}")]
+    DeleteVerificationFailed(String),
+    /// 变更可能已发生；不能把断线或无法验证当作成功，也不能自动重试。
+    #[error("操作结果待核对: {0}")]
+    TransferOutcomeUnknown(String),
     #[error("服务器不支持安全覆盖")]
     AtomicRenameUnsupported,
     /// 操作尚未取得执行名额，重试不会重复发送用户数据。
@@ -3091,6 +3097,51 @@ fn directory_size_sftp_for(
     })
 }
 
+/// 删除任务的可核验结果；失败时也保留已确认完成的变更数量。
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteTaskResult {
+    operation: &'static str,
+    outcome: &'static str,
+    removed_entries: u64,
+    verified_absent: bool,
+}
+
+impl DeleteTaskResult {
+    fn new() -> Self {
+        Self {
+            operation: "delete",
+            outcome: "incomplete",
+            removed_entries: 0,
+            verified_absent: false,
+        }
+    }
+
+    /// 只接受明确的“不存在”；权限或网络错误不能证明目标已被删除。
+    fn verify_absence(&mut self, absent: Result<bool, String>) -> Result<(), SshError> {
+        match absent {
+            Ok(true) => {
+                self.verified_absent = true;
+                self.outcome = if self.removed_entries == 0 {
+                    "alreadyAbsent"
+                } else {
+                    "deleted"
+                };
+                Ok(())
+            }
+            Ok(false) => Err(SshError::DeleteVerificationFailed(
+                "目标仍存在或已被重新创建，请刷新目录核对".into(),
+            )),
+            Err(reason) => {
+                self.outcome = "unknown";
+                Err(SshError::TransferOutcomeUnknown(format!(
+                    "删除后的目标状态无法读取，请刷新核对；{reason}"
+                )))
+            }
+        }
+    }
+}
+
 /// 生成递归删除进度中展示的远程项目名称。
 fn remote_delete_display_path(path: &Path) -> String {
     path.file_name()
@@ -3252,6 +3303,38 @@ fn delete_progress(
     );
 }
 
+/// 将删除变更返回的错误转换为任务错误，保留已确认的删除数量。
+fn delete_mutation_error(
+    target: &RemoteDeleteTarget,
+    error: &ssh2::Error,
+    delete_result: &mut DeleteTaskResult,
+) -> SshError {
+    let action = if target.is_directory {
+        "删除远程文件夹"
+    } else {
+        "删除远程项目"
+    };
+    if is_connection_loss(error) {
+        delete_result.outcome = "unknown";
+        return SshError::TransferOutcomeUnknown(format!(
+            "{action}期间连接中断，目标状态待核对；{error}"
+        ));
+    }
+    // ssh2 0.9.5 的 rmdir 使用会话错误而非 SFTP 状态，协议错误可能是明确拒绝，
+    // 也可能是在请求发出后收到无效响应；不能据此断言未发生变更或自动重试。
+    if target.is_directory && !matches!(error.code(), ErrorCode::SFTP(code) if code > 0) {
+        delete_result.outcome = "unknown";
+        return SshError::TransferOutcomeUnknown(format!(
+            "{action}“{}”未返回可确认的 SFTP 拒绝状态，结果待刷新核对；{error}",
+            target.path.display()
+        ));
+    }
+    if matches!(error.code(), ErrorCode::SFTP(3)) {
+        return SshError::PermissionDenied(format!("{action}被服务器拒绝；{error}"));
+    }
+    SshError::FileOperationFailed(format!("{action}“{}”失败: {error}", target.path.display()))
+}
+
 /// 执行已生成的远程删除计划，并对并发删除保持幂等。
 fn delete_remote_path(
     state: &SshState,
@@ -3260,6 +3343,7 @@ fn delete_remote_path(
     policy: &RemoteMutationPolicy,
     remote_path: &Path,
     operation_id: Option<&str>,
+    delete_result: &mut DeleteTaskResult,
 ) -> Result<(), SshError> {
     let root_name = remote_delete_display_path(remote_path);
     delete_progress(
@@ -3309,6 +3393,12 @@ fn delete_remote_path(
             }
             Err(error) => {
                 mark_ssh_error_if_connection_lost(state, connection_id, &error);
+                if delete_result.removed_entries > 0 && is_connection_loss(&error) {
+                    delete_result.outcome = "unknown";
+                    return Err(SshError::TransferOutcomeUnknown(format!(
+                        "删除期间连接中断，目标状态待核对；{error}"
+                    )));
+                }
                 return Err(SshError::FileOperationFailed(error.to_string()));
             }
             Ok(_) => {}
@@ -3362,16 +3452,9 @@ fn delete_remote_path(
                 continue;
             }
             mark_ssh_error_if_connection_lost(state, connection_id, &error);
-            let action = if target.is_directory {
-                "删除远程文件夹"
-            } else {
-                "删除远程项目"
-            };
-            return Err(SshError::FileOperationFailed(format!(
-                "{action}“{}”失败: {error}",
-                target.path.display()
-            )));
+            return Err(delete_mutation_error(target, &error, delete_result));
         }
+        delete_result.removed_entries = delete_result.removed_entries.saturating_add(1);
         if let Some(id) = operation_id {
             state.tasks.heartbeat(id);
         }
@@ -3399,24 +3482,44 @@ fn run_delete(
     remote_path: &str,
     operation_id: &str,
 ) -> Result<(), SshError> {
-    let policy = remote_mutation_policy(state, connection_id, session)?;
-    let session = session
-        .lock()
-        .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
-    let sftp = session.sftp().map_err(|error| {
-        mark_ssh_error_if_connection_lost(state, connection_id, &error);
-        SshError::SftpFailed(error.to_string())
-    })?;
-    drop(session);
+    let mut delete_result = DeleteTaskResult::new();
+    let result = (|| {
+        let policy = remote_mutation_policy(state, connection_id, session)?;
+        let session = session
+            .lock()
+            .map_err(|_| SshError::SftpFailed("会话锁已损坏".to_string()))?;
+        let sftp = session.sftp().map_err(|error| {
+            mark_ssh_error_if_connection_lost(state, connection_id, &error);
+            SshError::SftpFailed(error.to_string())
+        })?;
+        drop(session);
 
-    delete_remote_path(
-        state,
-        connection_id,
-        &sftp,
-        &policy,
-        Path::new(remote_path),
-        Some(operation_id),
-    )
+        delete_remote_path(
+            state,
+            connection_id,
+            &sftp,
+            &policy,
+            Path::new(remote_path),
+            Some(operation_id),
+            &mut delete_result,
+        )?;
+        state.tasks.heartbeat(operation_id);
+        // 仅验证根路径，不再完整扫描一次目录树。
+        let absent = match sftp.lstat(Path::new(remote_path)) {
+            Ok(_) => Ok(false),
+            Err(error) if is_sftp_missing_path(&error) => Ok(true),
+            Err(error) => {
+                mark_ssh_error_if_connection_lost(state, connection_id, &error);
+                Err(error.to_string())
+            }
+        };
+        delete_result.verify_absence(absent)
+    })();
+    state.tasks.set_result(
+        operation_id,
+        serde_json::to_value(&delete_result).expect("删除结果可序列化"),
+    );
+    result
 }
 
 /// 确认远程目录存在；根据覆盖策略处理同名项目。
@@ -6280,6 +6383,169 @@ fn uuid_fallback() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deletion_directory_opaque_mutation_errors_preserve_unknown_and_partial_count() {
+        let target = RemoteDeleteTarget {
+            path: PathBuf::from("/workspace/folder"),
+            display_path: "folder".into(),
+            is_directory: true,
+        };
+        // ssh2 0.9.5 的 rmdir 将明确拒绝和短响应都映射为相同的会话协议错误。
+        let errors = [
+            ssh2::Error::new(ErrorCode::Session(-31), "SFTP Protocol Error"),
+            ssh2::Error::new(ErrorCode::Session(-31), "SFTP rmdir packet too short"),
+            ssh2::Error::new(ErrorCode::Session(-21), "Error waiting for FXP STATUS"),
+            ssh2::Error::new(ErrorCode::Session(-37), "operation would block"),
+            ssh2::Error::new(ErrorCode::SFTP(0), "unknown SFTP status"),
+        ];
+        for removed_entries in [0, 2] {
+            for error in &errors {
+                let mut result = DeleteTaskResult::new();
+                result.removed_entries = removed_entries;
+                let mapped = delete_mutation_error(&target, error, &mut result);
+                match mapped {
+                    SshError::TransferOutcomeUnknown(message) => {
+                        assert!(message.contains(&error.to_string()), "{message}");
+                        assert!(message.contains("/workspace/folder"), "{message}");
+                    }
+                    other => panic!("opaque directory error must remain unknown: {other:?}"),
+                }
+                let value = serde_json::to_value(result).unwrap();
+                assert_eq!(value["outcome"], "unknown");
+                assert_eq!(value["removedEntries"], removed_entries);
+                assert_eq!(value["verifiedAbsent"], false);
+            }
+        }
+    }
+
+    #[test]
+    fn deletion_directory_explicit_refusals_remain_incomplete() {
+        let target = RemoteDeleteTarget {
+            path: PathBuf::from("/workspace/folder"),
+            display_path: "folder".into(),
+            is_directory: true,
+        };
+        for (code, permission_denied) in [(3, true), (4, false)] {
+            let error = ssh2::Error::new(ErrorCode::SFTP(code), "server refused");
+            let mut result = DeleteTaskResult::new();
+            result.removed_entries = 3;
+            let mapped = delete_mutation_error(&target, &error, &mut result);
+            let message = match mapped {
+                SshError::PermissionDenied(message) if permission_denied => message,
+                SshError::FileOperationFailed(message) if !permission_denied => message,
+                other => panic!("explicit SFTP refusal was misclassified: {other:?}"),
+            };
+            assert!(message.contains(&error.to_string()), "{message}");
+            let value = serde_json::to_value(result).unwrap();
+            assert_eq!(value["outcome"], "incomplete");
+            assert_eq!(value["removedEntries"], 3);
+            assert_eq!(value["verifiedAbsent"], false);
+        }
+    }
+
+    #[test]
+    fn deletion_directory_connection_loss_remains_unknown() {
+        let target = RemoteDeleteTarget {
+            path: PathBuf::from("/workspace/folder"),
+            display_path: "folder".into(),
+            is_directory: true,
+        };
+        for error in [
+            ssh2::Error::new(ErrorCode::Session(-13), "socket disconnected"),
+            ssh2::Error::new(ErrorCode::SFTP(7), "connection lost"),
+        ] {
+            let mut result = DeleteTaskResult::new();
+            result.removed_entries = 4;
+            let mapped = delete_mutation_error(&target, &error, &mut result);
+            assert!(matches!(mapped, SshError::TransferOutcomeUnknown(_)));
+            assert!(mapped.to_string().contains(&error.to_string()));
+            assert_eq!(result.outcome, "unknown");
+            assert_eq!(result.removed_entries, 4);
+            assert!(!result.verified_absent);
+        }
+    }
+
+    #[test]
+    fn deletion_file_error_classification_is_unchanged() {
+        let target = RemoteDeleteTarget {
+            path: PathBuf::from("/workspace/file"),
+            display_path: "file".into(),
+            is_directory: false,
+        };
+        let mut result = DeleteTaskResult::new();
+        result.removed_entries = 1;
+        let error = ssh2::Error::new(ErrorCode::Session(-31), "SFTP Protocol Error");
+        assert!(matches!(
+            delete_mutation_error(&target, &error, &mut result),
+            SshError::FileOperationFailed(_)
+        ));
+        let error = ssh2::Error::new(ErrorCode::SFTP(3), "permission denied");
+        assert!(matches!(
+            delete_mutation_error(&target, &error, &mut result),
+            SshError::PermissionDenied(_)
+        ));
+        assert_eq!(result.outcome, "incomplete");
+        assert_eq!(result.removed_entries, 1);
+    }
+
+    #[test]
+    fn deletion_requires_confirmed_absence_before_reporting_success() {
+        let mut result = DeleteTaskResult::new();
+        result.removed_entries = 3;
+        result.verify_absence(Ok(true)).unwrap();
+        let value = serde_json::to_value(result).unwrap();
+        assert_eq!(value["operation"], "delete");
+        assert_eq!(value["outcome"], "deleted");
+        assert_eq!(value["removedEntries"], 3);
+        assert_eq!(value["verifiedAbsent"], true);
+    }
+
+    #[test]
+    fn deletion_reports_an_already_absent_target_without_claiming_mutations() {
+        let mut result = DeleteTaskResult::new();
+        result.verify_absence(Ok(true)).unwrap();
+        assert_eq!(result.outcome, "alreadyAbsent");
+        assert_eq!(result.removed_entries, 0);
+        assert!(result.verified_absent);
+    }
+
+    #[test]
+    fn deletion_does_not_report_success_if_the_root_still_exists() {
+        let mut result = DeleteTaskResult::new();
+        result.removed_entries = 2;
+        assert!(matches!(
+            result.verify_absence(Ok(false)),
+            Err(SshError::DeleteVerificationFailed(_))
+        ));
+        assert_eq!(result.outcome, "incomplete");
+        assert_eq!(result.removed_entries, 2);
+        assert!(!result.verified_absent);
+    }
+
+    #[test]
+    fn deletion_keeps_uncertain_verification_distinct_from_absence() {
+        for reason in ["Permission denied", "Connection lost"] {
+            let mut result = DeleteTaskResult::new();
+            result.removed_entries = 1;
+            assert!(matches!(
+                result.verify_absence(Err(reason.into())),
+                Err(SshError::TransferOutcomeUnknown(_))
+            ));
+            assert_eq!(result.outcome, "unknown");
+            assert_eq!(result.removed_entries, 1);
+            assert!(!result.verified_absent);
+        }
+    }
+
+    #[test]
+    fn deletion_unknown_errors_preserve_the_machine_readable_code() {
+        let error = SshError::TransferOutcomeUnknown("删除结果需要核对".into());
+        assert_eq!(
+            serde_json::to_value(error).unwrap()["code"],
+            "TransferOutcomeUnknown"
+        );
+    }
 
     #[test]
     fn preview_early_cancellation_is_scoped_to_the_owning_window() {
