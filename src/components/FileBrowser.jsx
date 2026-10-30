@@ -19,6 +19,7 @@ import { notification } from '../utils/notificationUtils'
 import { openTerminalWindow } from '../utils/terminalWindow.js'
 import { PROGRESS_EVENT_END, createProgressIds } from '../utils/progressState.js'
 import { getUploadDropResultAction, isUploadSessionActive } from '../utils/uploadUtils.js'
+import useKeyboardShortcuts from '../utils/useKeyboardShortcuts.js'
 import { createKeyedOperationLocks, createNativeBatchWorkflow, createOperationLock, getKeyboardFileIndex } from '../utils/transferWorkflow.js'
 
 // 按 macOS 实际拖拽反馈校准 30 个 CSS 像素，只影响纵向命中位置。
@@ -567,6 +568,14 @@ const FileBrowser = ({
     setUploadModalOpen(true)
   }
 
+  /** 打开并绑定当前远程目录的新建文件夹弹窗。 */
+  const handleOpenDirectoryModal = () => {
+    const target = uploadViewRef.current
+    if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
+    directoryTargetRef.current = target
+    setDirectoryModalOpen(true)
+  }
+
   /**
    * 从原生选择器追加文件或文件夹，并在列表中按路径去重。
    *
@@ -919,6 +928,17 @@ const FileBrowser = ({
     />
   ), [ currentPath, currentConnectionId, showHiddenFiles, selectedKeySet, handleItemSelect, handleItemKeyDown, acquireItemOperation, handleItemActivate, handleItemDelete, requestRename ])
 
+  useKeyboardShortcuts({
+    scope: 'file-browser',
+    enabled: Boolean(currentConnectionId),
+    handlers: {
+      upload: handleUpload,
+      newFolder: handleOpenDirectoryModal,
+      refresh: () => handleRefresh(),
+      parentDirectory: handleGoBack
+    }
+  })
+
   return (
     <div className="file-browser">
       <div className="file-workspace-header">
@@ -1006,12 +1026,7 @@ const FileBrowser = ({
               className="mkdir-action-button"
               size="small"
               icon={<AppIcon name="folderAdd" />}
-              onClick={() => {
-                const target = uploadViewRef.current
-                if (!sftpManager.isCurrentConnection(target?.connectionId, target?.connection)) return
-                directoryTargetRef.current = target
-                setDirectoryModalOpen(true)
-              }}
+              onClick={handleOpenDirectoryModal}
               aria-label="新建文件夹"
               title="新建文件夹"
             >

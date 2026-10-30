@@ -405,6 +405,8 @@ pub fn run() {
                     true,
                     None::<&str>,
                 )?;
+                let shortcuts_item =
+                    MenuItem::with_id(app, "shortcuts", "快捷键", true, None::<&str>)?;
                 let show_hidden_files_item = CheckMenuItem::with_id(
                     app,
                     "show-hidden-files",
@@ -438,12 +440,16 @@ pub fn run() {
                 download_path_submenu.append(&show_download_path_item)?;
                 download_path_submenu.append(&download_path_item)?;
 
+                let help_submenu = Submenu::new(app, "帮助", true)?;
+                help_submenu.append(&shortcuts_item)?;
+
                 // 创建主菜单
                 let menu = Menu::new(app)?;
                 menu.append(&file_submenu)?;
                 menu.append(&edit_submenu)?;
                 menu.append(&view_submenu)?;
                 menu.append(&download_path_submenu)?;
+                menu.append(&help_submenu)?;
 
                 // 设置应用菜单
                 app.set_menu(menu)?;
@@ -463,6 +469,7 @@ pub fn run() {
                         "about" => dispatch_to_active("menu-about"),
                         "download-path" => dispatch_to_active("menu-download-path"),
                         "show-download-path" => dispatch_to_active("menu-show-download-path"),
+                        "shortcuts" => dispatch_to_active("menu-shortcuts"),
                         "quit" => {
                             let _ = app.emit("menu-request-exit", ());
                         }

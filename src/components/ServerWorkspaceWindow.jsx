@@ -12,7 +12,8 @@ import { AntdThemeConfig } from '../theme/antdTheme.js'
 import { useStoreValue } from '../utils/storeUtils.js'
 import { normalizeError, StoreKeys } from '../utils/constants.js'
 import { formatServerWorkspaceTitle, SERVER_WORKSPACE_CLOSE_EVENT, SERVER_WORKSPACE_PROFILE_EVENT } from '../utils/serverWorkspace.js'
-import { normalizeTerminalFontSize, normalizeWorkspaceLayout, shouldRevealWorkspace } from '../utils/workspacePreferences.js'
+import { getWorkspaceConnectionHealth, normalizeTerminalFontSize, normalizeWorkspaceLayout, shouldRevealWorkspace } from '../utils/workspacePreferences.js'
+import useKeyboardShortcuts from '../utils/useKeyboardShortcuts.js'
 import ConnectionBootScreen from './ConnectionBootScreen.jsx'
 import FileBrowserPanel from './FileBrowserPanel.jsx'
 import TransferProgressProvider from './TransferProgressProvider.jsx'
@@ -60,6 +61,7 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
   const [ focusMode, setFocusMode ] = useState(false)
   const [ terminalControls, setTerminalControls ] = useState(null)
   const [ sessionAttemptId, setSessionAttemptId ] = useState(0)
+  const [ terminalRetryRequestId, setTerminalRetryRequestId ] = useState(0)
   const storedConnections = useStoreValue(StoreKeys.SSH_CONNECTIONS)
   const showHiddenFiles = useStoreValue(StoreKeys.SHOW_HIDDEN_FILES) === true
   const storedLayouts = useStoreValue(StoreKeys.WORKSPACE_LAYOUTS)
@@ -72,6 +74,8 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
   const connectionProfileRef = useRef(connectionProfile)
   const workspaceMainRef = useRef(null)
   const activeAttemptRef = useRef(0)
+  const terminalRetryRequestRef = useRef(0)
+  const sessionGenerationRef = useRef(null)
   const [ terminalFocusRequest, setTerminalFocusRequest ] = useState(0)
 
   const savedLayout = storedLayouts && typeof storedLayouts === 'object'
@@ -85,6 +89,8 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
 
   if (!currentWindow.current) currentWindow.current = getCurrentWindow()
   connectionProfileRef.current = connectionProfile
+  terminalRetryRequestRef.current = terminalRetryRequestId
+  const workspaceHealth = getWorkspaceConnectionHealth({ files: sessionState, terminal: terminalStatus, monitor: monitorState })
 
   const closeWindow = useCallback(async () => {
     if (closingRef.current) return
@@ -194,6 +200,7 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
     if (attemptId < activeAttemptRef.current) return
     if (state?.phase === 'ssh' && attemptId !== activeAttemptRef.current) {
       activeAttemptRef.current = attemptId
+      sessionGenerationRef.current = null
       setConnectedProfile(null)
       setWorkspaceReady(false)
       setMonitorState({ status: 'connecting', message: '' })
@@ -205,6 +212,7 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
     setSessionState(state)
     if (state.status === 'connected') return
     if (state.status === 'error' || state.status === 'idle') {
+      sessionGenerationRef.current = null
       setConnectedProfile(null)
       setWorkspaceReady(false)
       setMonitorState({ status: 'connecting', message: '' })
@@ -216,6 +224,8 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
   const handleSessionConnected = useCallback((profile, attemptId) => {
     if (attemptId !== activeAttemptRef.current) return
     setSessionAttemptId(attemptId)
+    const generation = sftpManager.getConnectionInfo(connectionId)?.generation
+    sessionGenerationRef.current = generation
     setConnectedProfile({
       id: profile.id,
       name: profile.name,
@@ -223,21 +233,47 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
       username: profile.username,
       port: profile.port
     })
-  }, [])
+  }, [connectionId])
 
   const handleMonitorStateChange = useCallback(state => {
     if (sessionAttemptId === activeAttemptRef.current) setMonitorState(state)
   }, [sessionAttemptId])
   const handleTerminalStatusChange = useCallback(state => {
-    if (sessionAttemptId === activeAttemptRef.current) setTerminalStatus(state)
-  }, [sessionAttemptId])
+    if (sessionAttemptId === activeAttemptRef.current
+      && terminalRetryRequestRef.current === terminalRetryRequestId) setTerminalStatus(state)
+  }, [ sessionAttemptId, terminalRetryRequestId ])
   const handleTerminalControlsReady = useCallback(controls => {
-    if (sessionAttemptId === activeAttemptRef.current) setTerminalControls(controls)
-  }, [sessionAttemptId])
+    if (sessionAttemptId === activeAttemptRef.current
+      && terminalRetryRequestRef.current === terminalRetryRequestId) setTerminalControls(controls)
+  }, [ sessionAttemptId, terminalRetryRequestId ])
   const handleTerminalLoadError = useCallback(error => {
+    if (sessionAttemptId !== activeAttemptRef.current
+      || terminalRetryRequestRef.current !== terminalRetryRequestId) return
     console.error('加载远程终端组件失败：', normalizeError(error))
     setTerminalStatus({ status: 'error', message: '终端模块加载失败' })
+  }, [ sessionAttemptId, terminalRetryRequestId ])
+
+  const toggleFocusMode = useCallback(() => {
+    setFocusMode(mode => !mode)
+    setTerminalFocusRequest(request => request + 1)
   }, [])
+
+  const retryTerminal = useCallback(() => {
+    setTerminalStatus({ status: 'connecting', message: '正在重新连接终端...' })
+    setTerminalControls(null)
+    setTerminalRetryRequestId(request => request + 1)
+  }, [])
+
+  useKeyboardShortcuts({
+    scope: 'workspace',
+    enabled: workspaceReady && Boolean(connectedProfile),
+    handlers: {
+      fontDown: () => terminalControls?.adjustFontSize(-1),
+      fontUp: () => terminalControls?.adjustFontSize(1),
+      resetFontSize: () => terminalControls?.resetFontSize(),
+      focusMode: toggleFocusMode
+    }
+  })
 
   useEffect(() => {
     if (shouldRevealWorkspace(Boolean(connectedProfile), terminalStatus.status, monitorState.status)) setWorkspaceReady(true)
@@ -324,7 +360,9 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
     const listenForConnectionLoss = async () => {
       try {
         const dispose = await listen('ssh-disconnected', event => {
-          if (event.payload?.id !== connectionId) return
+          if (event.payload?.id !== connectionId
+            || !Number.isSafeInteger(event.payload?.generation)
+            || event.payload.generation !== sessionGenerationRef.current) return
           handleSessionStateChange({ status: 'error', message: event.payload?.reason || '连接已断开，请重新连接' })
         })
         if (disposed) dispose()
@@ -349,10 +387,24 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
           <div
             ref={workspaceMainRef}
             className={`server-workspace-main${ workspaceReady ? '' : ' is-initializing' }`}
+            data-shortcut-scope="workspace"
             aria-busy={!workspaceReady && waitingForConnection}
             aria-hidden={!workspaceReady}
             inert={!workspaceReady}
           >
+            <div className="server-workspace-health" data-status={workspaceHealth.status} role="status" aria-live="polite">
+              <span className="server-workspace-health-copy">
+                <span className="server-workspace-health-indicator" aria-hidden="true" />
+                <strong>{workspaceHealth.label}</strong>
+              </span>
+              <span className="server-workspace-health-channels" aria-label="各连接通道状态">
+                {workspaceHealth.channels.map(channel => (
+                  <span className="server-workspace-health-channel" data-state={channel.status} key={channel.id}>
+                    <span aria-hidden="true" />{channel.label}
+                  </span>
+                ))}
+              </span>
+            </div>
             <Splitter
               className="server-workspace-horizontal"
               orientation="horizontal"
@@ -406,6 +458,11 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
                               ? '已连接'
                               : terminalStatus.status === 'connecting' ? '连接中' : '未连接')}
                           </Tag>
+                          {(terminalStatus.status === 'error' || terminalStatus.status === 'closed') && (
+                            <Button size="small" type="primary" ghost onClick={retryTerminal} aria-label="重新连接终端">
+                              重连终端
+                            </Button>
+                          )}
                           <Button size="small" type="text" onClick={() => terminalControls?.openSearch()} disabled={!terminalControls} aria-label="查找终端内容">查找</Button>
                           <Button size="small" type="text" onClick={() => terminalControls?.adjustFontSize(-1)} disabled={!terminalControls || terminalFontSize <= 10} aria-label="缩小终端字体">A−</Button>
                           <span className="terminal-font-size-label">{terminalFontSize}px</span>
@@ -424,10 +481,7 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
                             size="small"
                             type="text"
                             aria-pressed={focusMode}
-                            onClick={() => {
-                              setFocusMode(mode => !mode)
-                              setTerminalFocusRequest(request => request + 1)
-                            }}
+                            onClick={toggleFocusMode}
                           >
                             {focusMode ? '退出专注' : '专注'}
                           </Button>
@@ -436,10 +490,9 @@ const ServerWorkspaceWindow = ({ connectionId, connection }) => {
                       styles={{ body: { minHeight: 0 }}}
                     >
                       {connectedProfile ? (
-                        <TerminalErrorBoundary onError={handleTerminalLoadError}>
+                        <TerminalErrorBoundary key={`${ connectionId }-${ terminalRetryRequestId }`} onError={handleTerminalLoadError}>
                           <Suspense fallback={<div className="server-terminal-placeholder">正在加载终端...</div>}>
                             <LazyTerminalView
-                              key={connectionId}
                               connectionId={connectionId}
                               connection={connectedProfile}
                               active={workspaceReady}

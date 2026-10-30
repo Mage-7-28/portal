@@ -7,8 +7,8 @@
   padding: 24px;
   overflow: auto;
   background:
-    radial-gradient(ellipse at 50% 35%, rgba(105, 178, 190, .09), transparent 45%),
-    linear-gradient(160deg, #202427, #191c1f 72%);
+    radial-gradient(ellipse at 50% 35%, rgba(235, 144, 112, .075), transparent 48%),
+    linear-gradient(160deg, #242326, #1e1f22 72%);
 }
 
 .connection-boot-panel {
@@ -21,9 +21,9 @@
   box-sizing: border-box;
   margin: auto;
   padding: 24px 30px 28px;
-  border: 1px solid rgba(170, 197, 200, .14);
+  border: 1px solid rgba(219, 176, 155, .16);
   border-radius: 12px;
-  background: linear-gradient(150deg, rgba(55, 66, 69, .62), rgba(30, 34, 37, .96) 48%);
+  background: linear-gradient(150deg, rgba(67, 58, 56, .52), rgba(35, 35, 38, .97) 48%);
   box-shadow: 0 24px 70px rgba(0, 0, 0, .27), inset 0 1px rgba(255, 255, 255, .035);
   text-align: center;
 }
@@ -33,118 +33,81 @@
   width: 100%;
   align-items: center;
   gap: 8px;
-  color: #c6d4d5;
+  color: #e0d5d0;
   font: 600 10px/1 ui-sans-serif, system-ui, sans-serif;
   letter-spacing: .16em;
   text-align: left;
 }
 
 .connection-boot-brand img { display: block; object-fit: contain; }
-.connection-boot-brand-caption { margin-left: auto; color: #89999b; font-size: 11px; font-weight: 400; letter-spacing: .04em; }
+.connection-boot-brand-caption { margin-left: auto; color: #aaa09d; font-size: 11px; font-weight: 400; letter-spacing: .04em; }
 
 .connection-boot-scene {
   position: relative;
   display: grid;
-  width: min(240px, 100%);
-  height: 190px;
+  width: min(360px, 100%);
+  aspect-ratio: 36 / 19;
   place-items: center;
-  margin: 8px 0 2px;
-  animation: portal-boot-enter 240ms ease-out both;
+  margin: 8px 0 5px;
 }
 
 .connection-boot-halo {
   position: absolute;
-  inset: 0;
-  background: radial-gradient(ellipse at 50% 51%, rgba(111, 206, 217, .18), rgba(93, 158, 168, .045) 42%, transparent 70%);
+  inset: 4% 6%;
+  background: radial-gradient(ellipse at 54% 50%, rgba(235, 144, 112, .15), rgba(235, 144, 112, .035) 40%, transparent 70%);
 }
 
-.connection-boot-screen[data-state='connecting'] .connection-boot-halo {
-  animation: portal-boot-breathe 4s ease-in-out infinite;
+.connection-boot-art { position: relative; display: block; width: 100%; height: auto; }
+.connection-boot-circuit { fill: #6f5550; stroke: #71524a; stroke-width: 1.5; }
+.connection-boot-circuit path { fill: none; }
+.connection-boot-circuit circle { stroke: none; }
+.connection-boot-socket-shadow { fill: #141416; }
+.connection-boot-socket-body { fill: #353335; stroke: #75625d; stroke-width: 1.5; }
+.connection-boot-socket-detail { stroke: #85736b; stroke-width: 1; opacity: .55; }
+.connection-boot-screw { fill: #171719; stroke: #8b7770; stroke-width: 1; }
+.connection-boot-socket-bezel { fill: #504441; stroke: #a68170; stroke-width: 1.5; }
+.connection-boot-socket-opening { fill: #191819; stroke: #2a2221; stroke-width: 1; }
+.connection-boot-socket-rim { stroke: #c69a83; stroke-width: 1.5; opacity: .7; }
+.connection-boot-socket-light { fill: #80665b; }
+.connection-boot-plug { transform: translateX(-20px); }
+.connection-boot-cable-shadow { stroke: #171719; stroke-width: 16; stroke-linecap: round; }
+.connection-boot-cable { stroke: #665552; stroke-width: 10; stroke-linecap: round; }
+.connection-boot-cable-highlight { stroke: #b09587; stroke-width: 1.5; stroke-linecap: round; opacity: .6; }
+.connection-boot-plug-collar { fill: #504340; stroke: #8a6c60; stroke-width: 1.5; }
+.connection-boot-plug-body { fill: #55443f; stroke: #b38b76; stroke-width: 1.5; }
+.connection-boot-plug-highlight { stroke: #d1aa90; stroke-width: 1; opacity: .55; }
+.connection-boot-plug-grip { stroke: #302a29; stroke-width: 2.5; stroke-linecap: round; }
+.connection-boot-plug-tip { fill: #9b7560; stroke: #d2ab8e; stroke-width: 1.5; }
+.connection-boot-plug-pins { stroke: #f0c39b; stroke-width: 2; stroke-linecap: round; }
+
+.connection-boot-energy {
+  opacity: 0;
+  stroke: #ffc398;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-dasharray: 14 86;
+  stroke-dashoffset: 100;
+  filter: drop-shadow(0 0 4px rgba(255, 155, 105, .85));
 }
 
-.connection-boot-ground {
-  position: absolute;
-  bottom: 16px;
-  width: 190px;
-  height: 24px;
-  background: radial-gradient(ellipse, rgba(104, 194, 204, .16), transparent 70%);
-}
-
-.connection-boot-gateway {
-  position: relative;
-  width: 106px;
-  height: 146px;
-  perspective: 480px;
-  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, .3));
-}
-
-.connection-boot-gateway::before,
-.connection-boot-gateway::after { position: absolute; content: ''; }
-.connection-boot-gateway::before {
-  top: 2px;
-  bottom: 2px;
-  left: -8px;
-  width: 8px;
-  transform: skewY(-25deg);
-  transform-origin: right center;
-  background: linear-gradient(90deg, #26383b, #506d70);
-}
-.connection-boot-gateway::after {
-  top: -5px;
-  right: 0;
-  left: -8px;
-  height: 5px;
-  transform: skewX(-55deg);
-  transform-origin: right bottom;
-  background: linear-gradient(90deg, #3e5558, #6c9092);
-}
-
-.connection-boot-opening {
-  position: absolute;
-  inset: 2px;
-  background: linear-gradient(150deg, #719ca0, #334c50 46%, #1f3439);
-  box-shadow: 0 0 24px rgba(113, 207, 216, .14);
-}
-
-.connection-boot-door-leaf {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  width: calc(50% - 2px);
-  backface-visibility: hidden;
-  background: linear-gradient(150deg, #354347, #252f32 58%, #20282b);
-  transition: transform 180ms ease-out;
-}
-
-.connection-boot-door-leaf.is-left {
-  left: 2px;
-  transform-origin: left center;
-  border-right: 1px solid rgba(142, 218, 222, .36);
-}
-
-.connection-boot-door-leaf.is-right {
-  right: 2px;
-  transform-origin: right center;
-  border-left: 1px solid rgba(10, 21, 24, .6);
-  background: linear-gradient(210deg, #405155, #263235 60%, #20292b);
-}
-
-.connection-boot-frame { position: absolute; z-index: 1; background: linear-gradient(90deg, #506a6c, #8eb8ba 48%, #385256); }
-.connection-boot-frame.is-left,
-.connection-boot-frame.is-right { top: 0; bottom: 0; width: 3px; }
-.connection-boot-frame.is-left { left: 0; animation: portal-boot-frame-left 240ms ease-out both; }
-.connection-boot-frame.is-right { right: 0; animation: portal-boot-frame-right 240ms ease-out both; }
-.connection-boot-frame.is-top { top: 0; right: 0; left: 0; height: 3px; animation: portal-boot-frame-top 240ms ease-out both; }
-.connection-boot-threshold { position: absolute; right: -10px; bottom: -2px; left: -10px; height: 2px; background: linear-gradient(90deg, transparent, rgba(162, 223, 226, .7), transparent); }
-
-.server-workspace-loading.is-leaving .connection-boot-door-leaf.is-left { transform: rotateY(-72deg); }
-.server-workspace-loading.is-leaving .connection-boot-door-leaf.is-right { transform: rotateY(72deg); }
+/* 只有真实连接中才循环插接；等待、失败与空闲保持静止。 */
+.connection-boot-screen[data-state='connecting'] .connection-boot-plug { animation: portal-boot-dock 5.2s ease-in-out infinite; }
+.connection-boot-screen[data-state='connecting'] .connection-boot-halo { animation: portal-boot-glow 5.2s ease-in-out infinite; }
+.connection-boot-screen[data-state='connecting'] .connection-boot-energy.is-input { animation: portal-boot-flow-in 5.2s linear infinite; }
+.connection-boot-screen[data-state='connecting'] .connection-boot-energy.is-output { animation: portal-boot-flow-out 5.2s linear infinite; }
+.connection-boot-screen[data-state='connecting'] .connection-boot-socket-light { animation: portal-boot-light 5.2s ease-in-out infinite; }
+.connection-boot-screen[data-state='waiting'] .connection-boot-plug { transform: translateX(-12px); }
+.connection-boot-screen[data-state='idle'] .connection-boot-scene { opacity: .72; }
+.connection-boot-screen[data-state='error'] .connection-boot-scene { opacity: .72; filter: saturate(.65); }
+.connection-boot-screen[data-state='ready'] .connection-boot-plug { transform: translateX(12px); }
+.connection-boot-screen[data-state='ready'] .connection-boot-energy { opacity: .6; stroke-dasharray: none; }
+.connection-boot-screen[data-state='ready'] .connection-boot-socket-light { fill: #a9d0aa; }
 
 .connection-boot-status { width: 100%; min-width: 0; }
 .connection-boot-copy { min-width: 0; }
-.connection-boot-copy h1 { margin: 0 0 8px; color: #e5ecec; font-size: 20px; font-weight: 600; line-height: 1.4; }
-.connection-boot-copy strong { display: block; overflow: hidden; color: #a6c6c8; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.connection-boot-copy p { min-height: 20px; margin: 10px 0 20px; color: #a9b4b5; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
+.connection-boot-copy h1 { margin: 0 0 8px; color: #ece8e6; font-size: 20px; font-weight: 600; line-height: 1.4; }
+.connection-boot-copy strong { display: block; overflow: hidden; color: #e0ab91; font-size: 13px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.connection-boot-copy p { min-height: 20px; margin: 10px 0 20px; color: #b9b0ad; font-size: 12px; line-height: 1.7; overflow-wrap: anywhere; }
 
 .connection-boot-stages {
   display: grid;
@@ -153,9 +116,9 @@
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  border: 1px solid rgba(162, 190, 192, .12);
+  border: 1px solid rgba(204, 175, 161, .12);
   border-radius: 7px;
-  background: rgba(14, 20, 22, .22);
+  background: rgba(19, 17, 18, .22);
   list-style: none;
 }
 
@@ -165,17 +128,18 @@
   justify-items: center;
   gap: 5px;
   padding: 11px 4px;
-  color: #b1bcbd;
+  color: #c2b8b4;
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
-.connection-boot-stage + .connection-boot-stage { border-left: 1px solid rgba(162, 190, 192, .12); }
-.connection-boot-stage-status { color: #91a0a1; font-size: 11px; }
-.connection-boot-stage-indicator { width: 5px; height: 5px; margin-bottom: 1px; border-radius: 50%; background: #879395; }
-.connection-boot-stage.is-ready .connection-boot-stage-indicator { background: #92c6b3; }
+.connection-boot-stage + .connection-boot-stage { border-left: 1px solid rgba(204, 175, 161, .12); }
+.connection-boot-stage-status { color: #aaa09d; font-size: 11px; }
+.connection-boot-stage-indicator { width: 5px; height: 5px; margin-bottom: 1px; border-radius: 50%; background: #898481; }
+.connection-boot-stage.is-ready .connection-boot-stage-indicator { background: #92c6a0; }
 .connection-boot-stage.is-error .connection-boot-stage-indicator { background: #d88f86; }
 .connection-boot-stage.is-waiting .connection-boot-stage-indicator { background: #d6bb86; }
-.connection-boot-stage.is-connecting .connection-boot-stage-indicator { background: #8fc9cd; }
+.connection-boot-stage.is-connecting .connection-boot-stage-indicator { background: #eb9070; }
 
 .connection-boot-retry {
   display: inline-flex;
@@ -185,44 +149,67 @@
   gap: 8px;
   margin-top: 16px;
   padding: 5px 16px;
-  border: 1px solid rgba(150, 205, 209, .4);
+  border: 1px solid rgba(235, 144, 112, .45);
   border-radius: 6px;
-  background: rgba(120, 187, 193, .08);
-  color: #dce9e9;
+  background: rgba(235, 144, 112, .08);
+  color: #f0dfd7;
   font: inherit;
   font-size: 13px;
   cursor: pointer;
 }
 
-.connection-boot-retry:focus-visible { outline: 2px solid #a0dadd; outline-offset: 3px; }
-.connection-boot-retry:hover { background: rgba(120, 187, 193, .16); }
+.connection-boot-retry:focus-visible { outline: 2px solid #f1ae8e; outline-offset: 3px; }
+.connection-boot-retry:hover { background: rgba(235, 144, 112, .16); }
 
-@keyframes portal-boot-enter { from { opacity: 0; transform: translateY(8px) scale(.97); } to { opacity: 1; transform: none; } }
-@keyframes portal-boot-frame-left { from { opacity: 0; transform: translateX(-8px); } to { opacity: 1; transform: none; } }
-@keyframes portal-boot-frame-right { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
-@keyframes portal-boot-frame-top { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
-@keyframes portal-boot-breathe { 0%, 100% { opacity: .65; } 50% { opacity: 1; } }
+@keyframes portal-boot-dock {
+  0%, 10%, 100% { transform: translateX(-20px); }
+  34%, 70% { transform: translateX(12px); }
+  90% { transform: translateX(-20px); }
+}
+
+@keyframes portal-boot-flow-in {
+  0%, 32% { opacity: 0; stroke-dashoffset: 100; }
+  38%, 55% { opacity: 1; }
+  64%, 100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes portal-boot-flow-out {
+  0%, 45% { opacity: 0; stroke-dashoffset: 100; }
+  51%, 62% { opacity: 1; }
+  70%, 100% { opacity: 0; stroke-dashoffset: 0; }
+}
+
+@keyframes portal-boot-light {
+  0%, 32%, 78%, 100% { fill: #80665b; }
+  48%, 68% { fill: #ffc398; }
+}
+
+@keyframes portal-boot-glow {
+  0%, 20%, 100% { opacity: .65; }
+  45%, 70% { opacity: 1; }
+}
 
 .portal-window-hidden .connection-boot-screen *,
 .portal-window-hidden .connection-boot-screen *::before,
 .portal-window-hidden .connection-boot-screen *::after { animation-play-state: paused !important; }
-.portal-window-hidden .server-workspace-loading,
-.portal-window-hidden .connection-boot-door-leaf { transition: none; }
+.portal-window-hidden .server-workspace-loading { transition: none; }
 
 @media (prefers-reduced-motion: reduce) {
-  .connection-boot-scene,
-  .connection-boot-halo,
+  .connection-boot-screen[data-state='connecting'] .connection-boot-plug,
   .connection-boot-screen[data-state='connecting'] .connection-boot-halo,
-  .connection-boot-scene .connection-boot-frame { animation: none; }
-  .server-workspace-loading,
-  .connection-boot-door-leaf { transition: none; }
+  .connection-boot-screen[data-state='connecting'] .connection-boot-energy.is-input,
+  .connection-boot-screen[data-state='connecting'] .connection-boot-energy.is-output,
+  .connection-boot-screen[data-state='connecting'] .connection-boot-socket-light { animation: none; }
+  .server-workspace-loading { transition: none; }
 }
 
 @media (max-width: 420px), (max-height: 580px) {
   .connection-boot-screen { padding: 16px; }
   .connection-boot-panel { padding: 18px 20px 20px; }
-  .connection-boot-scene { height: 165px; margin: 2px 0; }
-  .connection-boot-gateway { width: 90px; height: 124px; }
-  .connection-boot-ground { bottom: 12px; }
+  .connection-boot-scene { width: min(300px, 100%); margin: 4px 0; }
   .connection-boot-copy p { margin-bottom: 14px; }
+}
+
+@media (max-height: 420px) {
+  .connection-boot-scene { width: min(220px, 100%); }
 }

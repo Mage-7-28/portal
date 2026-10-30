@@ -42,7 +42,8 @@ const ServerMonitorPanel = ({ connectionId, active = true, onInitialStateChange 
   const hasSnapshot = snapshot != null
   const initialStatus = snapshot ? 'ready' : state.error ? 'error' : ''
   const initialMessage = snapshot ? '' : state.error
-  const currentHealth = state.error ? 'error' : state.refreshing ? 'connecting' : snapshot ? 'ready' : 'connecting'
+  // 刷新中的旧快照仍可用；只有无快照或本轮采样失败时才降级总览状态。
+  const currentHealth = state.error ? 'error' : snapshot ? 'ready' : 'connecting'
 
   useEffect(() => {
     if (initialStatus) onInitialStateChange?.({ status: initialStatus, message: initialMessage, currentHealth })

@@ -1807,11 +1807,117 @@ html,
 }
 
 .server-workspace-main {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   padding: var(--workspace-panel-gap);
   overflow: hidden;
+}
+
+.server-workspace-health {
+  display: flex;
+  flex: 0 0 28px;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 9px;
+  border: 1px solid rgb(126 147 151 / 18%);
+  border-radius: 7px;
+  background: linear-gradient(100deg, rgb(43 45 48 / 92%), rgb(36 39 41 / 88%));
+  color: var(--portal-geek-text-muted);
+  font-size: 10px;
+}
+
+.server-workspace-health-copy,
+.server-workspace-health-channels,
+.server-workspace-health-channel {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+}
+
+.server-workspace-health-copy {
+  flex: 1 1 auto;
+  gap: 7px;
+  overflow: hidden;
+}
+
+.server-workspace-health-copy strong {
+  overflow: hidden;
+  color: var(--portal-geek-text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.server-workspace-health-indicator,
+.server-workspace-health-channel > span {
+  width: 6px;
+  height: 6px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #778087;
+}
+
+.server-workspace-health-channels {
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.server-workspace-health-channel {
+  gap: 4px;
+  color: #a6adb4;
+}
+
+.server-workspace-health-channel[data-state='connected'] > span {
+  background: #7eb89a;
+  box-shadow: 0 0 5px rgb(126 184 154 / 38%);
+}
+
+.server-workspace-health-channel[data-state='connecting'] > span {
+  background: #e0b46b;
+  box-shadow: 0 0 5px rgb(224 180 107 / 34%);
+}
+
+.server-workspace-health-channel[data-state='error'] > span {
+  background: #df8173;
+  box-shadow: 0 0 5px rgb(223 129 115 / 40%);
+}
+
+.server-workspace-health[data-status='connected'] .server-workspace-health-indicator {
+  background: #7eb89a;
+  box-shadow: 0 0 7px rgb(126 184 154 / 55%);
+}
+
+.server-workspace-health[data-status='connecting'] .server-workspace-health-indicator {
+  background: #e0b46b;
+  box-shadow: 0 0 7px rgb(224 180 107 / 48%);
+}
+
+.server-workspace-health[data-status='partial'] {
+  border-color: rgb(224 180 107 / 24%);
+}
+
+.server-workspace-health[data-status='partial'] .server-workspace-health-indicator,
+.server-workspace-health[data-status='disconnected'] .server-workspace-health-indicator {
+  background: #df8173;
+  box-shadow: 0 0 7px rgb(223 129 115 / 48%);
+}
+
+@media (max-width: 560px) {
+  .server-workspace-health {
+    gap: 6px;
+    padding-inline: 6px;
+  }
+
+  .server-workspace-health-channels {
+    gap: 6px;
+  }
 }
 
 /* 隐藏但仍参与布局，终端可在遮罩下按实际尺寸完成首次初始化。 */
@@ -1838,6 +1944,11 @@ html,
   height: 100%;
   min-width: 0;
   min-height: 0;
+}
+
+.server-workspace-horizontal {
+  flex: 1 1 auto;
+  height: auto;
 }
 
 /* 仅隐藏分割条的装饰层，保留原有拖动命中范围和布局尺寸。 */

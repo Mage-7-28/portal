@@ -40,3 +40,30 @@ export const shouldRevealWorkspace = (filesReady, terminalStatus, monitorStatus)
   || monitorStatus === 'error'
   || (terminalStatus === 'connected' && monitorStatus === 'ready')
 )
+
+/**
+ * 汇总独立 SSH 通道的健康状态，不把辅助通道故障升级成文件会话断线。
+ *
+ * @param {{files?: Object, terminal?: Object, monitor?: Object}} channels - 三个工作区通道的最新状态。
+ * @returns {{status: 'connected'|'connecting'|'partial'|'disconnected', label: string, channels: Object[]}} 可直接用于状态条的摘要。
+ */
+export const getWorkspaceConnectionHealth = ({ files, terminal, monitor }) => {
+  const fileConnected = files?.status === 'connected'
+  const fileFailed = files?.status === 'error' || files?.status === 'idle'
+  const terminalFailed = terminal?.status === 'error' || terminal?.status === 'closed'
+  const monitorStatus = monitor?.currentHealth || monitor?.status
+  const monitorFailed = monitorStatus === 'error'
+  const channelsStatus = [
+    { id: 'files', label: '文件', status: fileConnected ? 'connected' : fileFailed ? 'error' : 'connecting' },
+    { id: 'terminal', label: '终端', status: terminal?.status === 'connected' ? 'connected' : terminalFailed ? 'error' : 'connecting' },
+    { id: 'monitor', label: '监控', status: monitorStatus === 'ready' ? 'connected' : monitorFailed ? 'error' : 'connecting' }
+  ]
+
+  if (fileFailed) return { status: 'disconnected', label: '文件连接已断开', channels: channelsStatus }
+  if (!fileConnected) return { status: 'connecting', label: '正在建立工作区连接', channels: channelsStatus }
+  if (terminalFailed || monitorFailed) return { status: 'partial', label: '部分功能暂不可用 · 文件传输仍可使用', channels: channelsStatus }
+  if (channelsStatus.every(channel => channel.status === 'connected')) {
+    return { status: 'connected', label: '所有通道运行正常', channels: channelsStatus }
+  }
+  return { status: 'connecting', label: '文件已就绪，正在准备终端与监控', channels: channelsStatus }
+}

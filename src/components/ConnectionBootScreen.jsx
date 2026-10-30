@@ -62,16 +62,41 @@ const ConnectionBootScreen = ({
         </div>
         <div className="connection-boot-scene" aria-hidden="true">
           <span className="connection-boot-halo" />
-          <span className="connection-boot-ground" />
-          <div className="connection-boot-gateway">
-            <span className="connection-boot-opening" />
-            <span className="connection-boot-door-leaf is-left" />
-            <span className="connection-boot-door-leaf is-right" />
-            <span className="connection-boot-frame is-left" />
-            <span className="connection-boot-frame is-right" />
-            <span className="connection-boot-frame is-top" />
-            <span className="connection-boot-threshold" />
-          </div>
+          <svg className="connection-boot-art" viewBox="0 0 360 190" fill="none" focusable="false">
+            <g className="connection-boot-circuit">
+              <path d="M264 73h25l15-15h45M264 117h25l15 15h45M271 95h64" />
+              <circle cx="349" cy="58" r="2.5" />
+              <circle cx="349" cy="132" r="2.5" />
+              <circle cx="335" cy="95" r="2.5" />
+            </g>
+            <path className="connection-boot-energy is-output" d="M264 73h25l15-15h45" pathLength="100" />
+            <path className="connection-boot-energy is-output" d="M264 117h25l15 15h45" pathLength="100" />
+            <path className="connection-boot-energy is-output" d="M271 95h64" pathLength="100" />
+            <g className="connection-boot-plug">
+              <path className="connection-boot-cable-shadow" d="M-35 122C24 122 32 95 73 95h21" />
+              <path className="connection-boot-cable" d="M-35 122C24 122 32 95 73 95h21" />
+              <path className="connection-boot-cable-highlight" d="M-35 120C24 120 32 93 73 93h21" />
+              <path className="connection-boot-energy is-input" d="M-35 122C24 122 32 95 73 95h25" pathLength="100" />
+              <rect className="connection-boot-plug-collar" x="83" y="82" width="17" height="26" rx="5" />
+              <path className="connection-boot-plug-body" d="M99 72h29l13 6h18v34h-18l-13 6H99a7 7 0 0 1-7-7V79a7 7 0 0 1 7-7Z" />
+              <path className="connection-boot-plug-highlight" d="M100 77h27l12 6M100 113h27l12-6" />
+              <path className="connection-boot-plug-grip" d="M105 84v22m7-22v22m7-22v22" />
+              <path className="connection-boot-plug-tip" d="M159 79h27l12 5v22l-12 5h-27Z" />
+              <path className="connection-boot-plug-pins" d="M168 84v22m7-22v22m7-22v22m7-20v18" />
+            </g>
+            <g className="connection-boot-socket">
+              <rect className="connection-boot-socket-shadow" x="208" y="53" width="68" height="86" rx="10" />
+              <rect className="connection-boot-socket-body" x="206" y="51" width="68" height="86" rx="10" />
+              <path className="connection-boot-socket-detail" d="M220 59h41M220 129h41" />
+              <circle className="connection-boot-screw" cx="262" cy="66" r="2" />
+              <circle className="connection-boot-screw" cx="262" cy="122" r="2" />
+              <rect className="connection-boot-socket-bezel" x="191" y="64" width="51" height="62" rx="7" />
+              <rect className="connection-boot-socket-opening" x="198" y="71" width="37" height="48" rx="3" />
+              <path className="connection-boot-socket-detail" d="M220 79h8M220 111h8" />
+              <circle className="connection-boot-socket-light" cx="261" cy="95" r="3" />
+            </g>
+            <path className="connection-boot-socket-rim" d="M198 64a7 7 0 0 0-7 7v48a7 7 0 0 0 7 7" />
+          </svg>
         </div>
         <div className="connection-boot-status" role="status" aria-live="polite" aria-atomic="true">
           <div className="connection-boot-copy">
